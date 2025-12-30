@@ -129,56 +129,6 @@ function setupEventListeners() {
         importDbBtn.addEventListener('click', importFromDatabase);
     }
     
-    // Browse for database file
-    const browseDbBtn = document.getElementById('browseDbBtn');
-    const sourceDbFile = document.getElementById('sourceDbFile');
-    const sourceDbPath = document.getElementById('sourceDbPath');
-    
-    if (browseDbBtn && sourceDbFile && sourceDbPath) {
-        browseDbBtn.addEventListener('click', () => {
-            sourceDbFile.click();
-        });
-        
-        sourceDbFile.addEventListener('change', (e) => {
-            if (e.target.files && e.target.files.length > 0) {
-                const file = e.target.files[0];
-                
-                // Try to get the full path - browsers may restrict this for security
-                // Check various properties that might contain the path
-                let filePath = null;
-                
-                if (file.path) {
-                    // Electron or some environments expose path directly
-                    filePath = file.path;
-                } else if (file.webkitRelativePath) {
-                    // Webkit relative path
-                    filePath = file.webkitRelativePath;
-                } else if (file.name) {
-                    // If we can't get the full path, show the filename
-                    // User can edit the text field to enter the full path
-                    filePath = file.name;
-                }
-                
-                if (filePath) {
-                    sourceDbPath.value = filePath;
-                    // If we only got the filename, inform the user they may need to edit it
-                    if (filePath === file.name && !file.path) {
-                        // Don't prompt automatically, just let them edit the field
-                        // The field is already editable
-                    }
-                }
-            }
-        });
-        
-        // Ensure the text field is editable (it should be by default, but make sure)
-        if (sourceDbPath) {
-            sourceDbPath.readOnly = false;
-            sourceDbPath.addEventListener('input', () => {
-                // Clear the file input when user manually edits the path
-                sourceDbFile.value = '';
-            });
-        }
-    }
     
     // Load backup info on startup
     loadBackupInfo();
@@ -199,6 +149,11 @@ function loadSettings() {
             const settings = JSON.parse(saved);
             currentMissionDir = settings.mission_dir || '';
             currentElementType = settings.elementType || 'type';
+            
+            // Load selected columns if saved
+            if (settings.selectedColumns && Array.isArray(settings.selectedColumns)) {
+                selectedColumns = new Set(settings.selectedColumns);
+            }
         }
     } catch (e) {
         console.error('Error loading settings:', e);
@@ -282,21 +237,15 @@ async function loadElements() {
             
             // Initialize selected columns if empty
             if (selectedColumns.size === 0 && tableColumns.length > 0) {
-                const priorityColumns = ['type', 'name', 'source', 'nominal', 'lifetime', 'restock', 'usage', 'value', 'flags', 'category', 'tag', 'cost', 'min', 'quantmin', 'quantmax'];
-                priorityColumns.forEach(col => {
+                // Default columns: name, source, nominal, usage, value, category, itemclass, itemtags
+                const defaultColumns = ['name', 'source', 'nominal', 'usage', 'value', 'category', '_itemclass_name', '_itemtag_names'];
+                defaultColumns.forEach(col => {
                     if (tableColumns.includes(col)) {
                         selectedColumns.add(col);
                     }
                 });
-                // Always include itemclass and itemtag columns if they exist
-                if (tableColumns.includes('_itemclass_name')) {
-                    selectedColumns.add('_itemclass_name');
-                }
-                if (tableColumns.includes('_itemtag_names')) {
-                    selectedColumns.add('_itemtag_names');
-                }
                 if (selectedColumns.size === 0) {
-                    // If no priority columns, select first 10
+                    // If no default columns, select first 10
                     tableColumns.slice(0, 10).forEach(col => selectedColumns.add(col));
                 }
             }
@@ -646,10 +595,13 @@ function displayTable() {
             // Special handling for itemclass and itemtag columns
             if (col === '_itemclass_name') {
                 td.textContent = value || '';
-                td.className += ' itemclass-cell';
-                if (!isSourceColumn) {
-                    td.className += ' readonly-cell';
-                }
+                td.className += ' itemclass-cell editable-cell';
+                td.dataset.elementKey = elementKey;
+                td.dataset.itemclassId = record._itemclass_id || '';
+                td.title = 'Double-click to edit itemclass';
+                td.addEventListener('dblclick', () => {
+                    openItemclassEditor(elementKey, record._itemclass_id, value);
+                });
             } else if (col === '_itemtag_names') {
                 if (Array.isArray(value)) {
                     td.textContent = value.join(', ');
@@ -1063,7 +1015,88 @@ async function deleteItemtag(itemtagId) {
     }
 }
 
+function openItemclassEditor(elementKey, currentItemclassId, currentItemclassName) {
+    currentEditElement = elementKey;
+    currentEditField = '_itemclass';
+    
+    const modal = document.getElementById('editModal');
+    const label = document.getElementById('editFieldLabel');
+    const input = document.getElementById('editFieldValue');
+    
+    if (modal && label && input) {
+        label.textContent = 'Edit Itemclass:';
+        
+        // Remove any existing select dropdown first
+        const existingSelect = document.getElementById('editItemclassSelect');
+        if (existingSelect) {
+            existingSelect.remove();
+        }
+        
+        // Replace input with dropdown
+        const select = document.createElement('select');
+        select.id = 'editItemclassSelect';
+        select.className = 'edit-input';
+        
+        // Add "No Itemclass" option
+        const noOption = document.createElement('option');
+        noOption.value = '';
+        noOption.textContent = '-- No Itemclass --';
+        if (!currentItemclassId) {
+            noOption.selected = true;
+        }
+        select.appendChild(noOption);
+        
+        // Add all itemclasses, filtering out duplicates by name and ID
+        const seenNames = new Set();
+        const seenIds = new Set();
+        console.log(`Building itemclass dropdown with ${itemclasses.length} itemclasses`);
+        itemclasses.forEach(itemclass => {
+            // Skip if we've already seen this ID
+            if (seenIds.has(itemclass.id)) {
+                console.warn(`Duplicate itemclass ID detected: ${itemclass.id} (Name: ${itemclass.name})`);
+                return;
+            }
+            seenIds.add(itemclass.id);
+            
+            // Skip if we've already seen this name (case-insensitive check)
+            const nameLower = itemclass.name.toLowerCase();
+            if (seenNames.has(nameLower)) {
+                console.warn(`Duplicate itemclass name detected: ${itemclass.name} (ID: ${itemclass.id})`);
+                return;
+            }
+            seenNames.add(nameLower);
+            
+            const option = document.createElement('option');
+            option.value = itemclass.id;
+            option.textContent = itemclass.name;
+            if (itemclass.id === currentItemclassId) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        });
+        console.log(`Dropdown created with ${select.options.length - 1} itemclass options (excluding 'No Itemclass')`);
+        
+        // Replace input with select
+        const form = input.parentElement;
+        input.style.display = 'none';
+        form.insertBefore(select, input);
+        
+        // Store reference to select for save function
+        window.currentItemclassSelect = select;
+        
+        modal.style.display = 'block';
+        select.focus();
+    }
+}
+
 function openEditModal(elementKey, fieldName, currentValue) {
+    // Don't open modal for itemclass - use special editor
+    if (fieldName === '_itemclass_name' || fieldName === '_itemclass') {
+        const record = tableData.find(r => r._element_key === elementKey);
+        openItemclassEditor(elementKey, record?._itemclass_id, record?._itemclass_name);
+        return;
+    }
+    
     currentEditElement = elementKey;
     currentEditField = fieldName;
     
@@ -1072,6 +1105,13 @@ function openEditModal(elementKey, fieldName, currentValue) {
     const input = document.getElementById('editFieldValue');
     
     if (modal && label && input) {
+        // Remove any existing select dropdown
+        const existingSelect = document.getElementById('editItemclassSelect');
+        if (existingSelect) {
+            existingSelect.remove();
+            input.style.display = 'block';
+        }
+        
         label.textContent = `Edit ${fieldName}:`;
         
         if (currentValue === null || currentValue === undefined) {
@@ -1093,12 +1133,56 @@ function closeEditModal() {
     if (modal) {
         modal.style.display = 'none';
     }
+    
+    // Clean up itemclass select if it exists
+    const select = document.getElementById('editItemclassSelect');
+    const input = document.getElementById('editFieldValue');
+    if (select && input) {
+        select.remove();
+        input.style.display = 'block';
+    }
+    window.currentItemclassSelect = null;
+    
     currentEditElement = null;
     currentEditField = null;
 }
 
 async function saveEdit() {
     if (!currentEditElement || !currentEditField) return;
+    
+    // Handle itemclass editing specially
+    if (currentEditField === '_itemclass') {
+        const select = window.currentItemclassSelect || document.getElementById('editItemclassSelect');
+        if (!select) return;
+        
+        const itemclassId = select.value ? parseInt(select.value) : null;
+        
+        try {
+            const response = await fetch(`/api/elements/${encodeURIComponent(currentEditElement)}/itemclass`, {
+                method: itemclassId ? 'PUT' : 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    itemclass_id: itemclassId,
+                    mission_dir: currentMissionDir
+                })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                closeEditModal();
+                loadElements();
+                saveSettings();
+            } else {
+                alert(data.error || 'Failed to save itemclass');
+            }
+        } catch (error) {
+            console.error('Error saving itemclass:', error);
+            alert(`Error saving itemclass: ${error.message}`);
+        }
+        return;
+    }
     
     const input = document.getElementById('editFieldValue');
     if (!input) return;
@@ -1777,7 +1861,8 @@ function saveSettings() {
     try {
         const settings = {
             mission_dir: currentMissionDir,
-            elementType: currentElementType
+            elementType: currentElementType,
+            selectedColumns: Array.from(selectedColumns)
         };
         localStorage.setItem('xmlEditorSettings', JSON.stringify(settings));
     } catch (e) {

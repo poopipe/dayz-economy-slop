@@ -254,6 +254,41 @@ def extract_element_data(element, element_type='type'):
     return results
 
 
+# Fields that should always be single values (not lists)
+SINGLE_VALUE_FIELDS = ['name', 'nominal', 'lifetime', 'restock', 'min', 'quantmin', 'quantmax', 'cost']
+
+
+def normalize_single_value_field(value, field_name):
+    """Normalize a field value - if it's a list, take the first item."""
+    if value is None:
+        return None
+    
+    if isinstance(value, list):
+        if len(value) == 0:
+            return None
+        
+        # If it's a list, take the first element
+        first_item = value[0]
+        
+        # If the first item is a dict with _text, extract that
+        if isinstance(first_item, dict) and '_text' in first_item:
+            return first_item['_text']
+        elif isinstance(first_item, dict):
+            # If it's a dict, try to get a meaningful value
+            if 'name' in first_item:
+                return first_item['name']
+            elif len(first_item) == 1:
+                return list(first_item.values())[0]
+            else:
+                # Multiple attributes - keep as dict for now
+                return first_item
+        else:
+            return first_item
+    
+    # If it's already a single value, return as-is
+    return value
+
+
 def to_db_string(value):
     """Convert a value to a string suitable for database storage."""
     if value is None:
@@ -270,6 +305,7 @@ def to_db_string(value):
     if isinstance(value, dict):
         # Convert dict to JSON string
         return json.dumps(value)
+    return str(value)
     return str(value)
 
 
@@ -381,6 +417,11 @@ def load_xml_to_database(mission_dir, element_type='type'):
             print(f"  Extracted {len(elements)} elements")
             
             for elem in elements:
+                # Normalize single-value fields before storing
+                for field in SINGLE_VALUE_FIELDS:
+                    if field in elem:
+                        elem[field] = normalize_single_value_field(elem[field], field)
+                
                 # Create unique key from name attribute or generate one
                 name_value = elem.get('name')
                 element_key = to_db_string(name_value)
@@ -489,6 +530,12 @@ def get_elements():
         elements = []
         for row in cursor.fetchall():
             data = json.loads(row['data'])
+            
+            # Normalize single-value fields when reading from database (for consistency)
+            for field in SINGLE_VALUE_FIELDS:
+                if field in data:
+                    data[field] = normalize_single_value_field(data[field], field)
+            
             data['_element_key'] = row['element_key']
             data['_source_file'] = row['source_file']
             data['_source_folder'] = row['source_folder']
@@ -542,6 +589,10 @@ def update_field(element_key, field_name):
         
         element_data = json.loads(row['data'])
         old_value = element_data.get(field_name)
+        
+        # Normalize single-value fields if this is one of them
+        if field_name in SINGLE_VALUE_FIELDS:
+            new_value = normalize_single_value_field(new_value, field_name)
         
         # Update the field
         element_data[field_name] = new_value
@@ -628,6 +679,10 @@ def undo_edit(element_key):
                     ''', (element_key, itemtag_id))
         else:
             # Restore field value
+            # Normalize single-value fields if this is one of them
+            if field_name in SINGLE_VALUE_FIELDS:
+                old_value = normalize_single_value_field(old_value, field_name)
+            
             element_data[field_name] = old_value
             cursor.execute('''
                 UPDATE type_elements 
@@ -911,16 +966,20 @@ def manage_element_itemtags(element_key):
 def reconstruct_xml_element(data_dict, element_tag='type'):
     """
     Reconstruct an XML element from a data dictionary (reverse of extract_element_data).
+    For type elements, all fields are child elements (no attributes).
     """
     element = ET.Element(element_tag)
     
-    # Add attributes (excluding internal fields)
-    for key, value in data_dict.items():
-        if key.startswith('_'):
-            continue
-        if isinstance(value, (dict, list)):
-            continue
-        element.set(key, str(value))
+    # For type elements, don't add any attributes - all fields are child elements
+    # Only add attributes if this is NOT a type element (for nested structures)
+    if element_tag != 'type':
+        # Add attributes (excluding internal fields) for non-type elements
+        for key, value in data_dict.items():
+            if key.startswith('_'):
+                continue
+            if isinstance(value, (dict, list)):
+                continue
+            element.set(key, str(value))
     
     # Add child elements
     for key, value in data_dict.items():
@@ -1513,6 +1572,11 @@ def merge_xml_file(mission_dir, xml_file_path, element_type='type'):
         
         for elem in elements:
             try:
+                # Normalize single-value fields before storing
+                for field in SINGLE_VALUE_FIELDS:
+                    if field in elem:
+                        elem[field] = normalize_single_value_field(elem[field], field)
+                
                 # Create unique key from name attribute
                 name_value = elem.get('name')
                 element_key = to_db_string(name_value)
@@ -1759,13 +1823,24 @@ def import_from_database(mission_dir, source_db_path):
                 skipped_count += 1
                 continue
             
+            # Normalize single-value fields in the imported data
+            try:
+                data = json.loads(row['data'])
+                for field in SINGLE_VALUE_FIELDS:
+                    if field in data:
+                        data[field] = normalize_single_value_field(data[field], field)
+                normalized_data = json.dumps(data)
+            except:
+                # If JSON parsing fails, use original data
+                normalized_data = row['data']
+            
             target_cursor.execute('''
                 INSERT INTO type_elements (element_key, name, data, source_file, source_folder, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 element_key,
                 row['name'],
-                row['data'],
+                normalized_data,
                 row['source_file'],
                 row['source_folder'],
                 datetime.now().isoformat()

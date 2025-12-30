@@ -578,6 +578,24 @@ header h1 {
     border-radius: 5px;
 }
 
+.edit-input select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 1em;
+    background: white;
+    cursor: pointer;
+}
+
+.itemclass-cell {
+    cursor: pointer;
+}
+
+.itemclass-cell:hover {
+    background: #e8e8ff;
+}
+
 .modal-actions {
     display: flex;
     gap: 10px;

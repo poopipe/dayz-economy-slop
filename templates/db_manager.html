@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/db_manager.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Database Manager</h1>
+            <p class="status" id="status">Ready</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="missionDir">Mission Directory:</label>
+                <input type="text" id="missionDir" placeholder="Enter mission directory path..." class="mission-dir-input">
+                <button id="loadDbBtn" class="btn btn-primary">Load Database</button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="sidebar">
+                <h3>Tables</h3>
+                <div id="tablesList" class="tables-list">
+                    <p>No database loaded</p>
+                </div>
+            </div>
+            
+            <div class="content-area">
+                <div class="table-controls">
+                    <h3 id="currentTableName">Select a table</h3>
+                    <div class="table-actions">
+                        <button id="refreshTableBtn" class="btn btn-small">Refresh</button>
+                        <button id="findDuplicatesBtn" class="btn btn-small">Find Duplicates</button>
+                        <button id="deduplicateBtn" class="btn btn-small btn-warning">Deduplicate</button>
+                        <button id="deleteAllBtn" class="btn btn-small btn-danger">Delete All</button>
+                    </div>
+                    <div class="pagination-controls">
+                        <button id="prevPageBtn" class="btn btn-small" disabled>Previous</button>
+                        <span id="pageInfo" class="page-info">Page 1</span>
+                        <button id="nextPageBtn" class="btn btn-small">Next</button>
+                        <label for="perPage">Per Page:</label>
+                        <input type="number" id="perPage" min="10" max="1000" value="100" class="per-page-input">
+                    </div>
+                </div>
+                
+                <div class="table-container" id="tableContainer">
+                    <p class="no-data">Select a table to view data</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Row</h2>
+            <div class="edit-form" id="editForm">
+                <!-- Form fields will be generated here -->
+            </div>
+            <div class="modal-actions">
+                <button id="saveRowBtn" class="btn btn-primary">Save</button>
+                <button id="cancelEditBtn" class="btn">Cancel</button>
+                <button id="deleteRowBtn" class="btn btn-danger">Delete Row</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Duplicates Modal -->
+    <div id="duplicatesModal" class="modal">
+        <div class="modal-content large-modal">
+            <span class="close-modal">&times;</span>
+            <h2>Duplicate Entries</h2>
+            <div id="duplicatesList" class="duplicates-list">
+                <!-- Duplicates will be listed here -->
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/db_manager.js') }}"></script>
+</body>
+</html>
+
+
+
