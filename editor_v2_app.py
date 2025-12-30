@@ -968,6 +968,59 @@ def get_elements():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/elements/delete', methods=['POST'])
+def delete_elements():
+    """Delete one or more elements from the database."""
+    try:
+        data = request.json
+        element_keys = data.get('element_keys', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not element_keys:
+            return jsonify({'success': False, 'error': 'No elements specified for deletion'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        deleted_count = 0
+        errors = []
+        
+        for element_key in element_keys:
+            try:
+                # Check if element exists
+                cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+                if not cursor.fetchone():
+                    errors.append(f"Element '{element_key}' not found")
+                    continue
+                
+                # Delete element (CASCADE will handle related tables)
+                cursor.execute('DELETE FROM type_elements WHERE element_key = ?', (element_key,))
+                deleted_count += 1
+            except Exception as e:
+                errors.append(f"Error deleting '{element_key}': {str(e)}")
+        
+        conn.commit()
+        conn.close()
+        
+        if errors and deleted_count == 0:
+            return jsonify({'success': False, 'error': 'Failed to delete elements', 'errors': errors}), 500
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'errors': errors if errors else None
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/itemclasses', methods=['GET', 'POST'])
 def manage_itemclasses():
     """Get all itemclasses or create a new itemclass."""
@@ -1721,7 +1774,7 @@ def load_element_data(cursor, element_key):
     return data
 
 
-def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path):
+def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path=None):
     """Export elements grouped by itemclass."""
     # Get all elements with itemclasses
     cursor.execute('''

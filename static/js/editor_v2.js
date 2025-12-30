@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupEventListeners() {
     document.getElementById('loadDataBtn').addEventListener('click', loadXMLData);
     document.getElementById('exportBtn').addEventListener('click', exportToXML);
+    document.getElementById('deleteBtn').addEventListener('click', deleteSelectedElements);
     document.getElementById('columnVisibilityBtn').addEventListener('click', openColumnVisibilityModal);
     document.getElementById('manageItemclassesBtn').addEventListener('click', openItemclassesModal);
     document.getElementById('manageItemtagsBtn').addEventListener('click', openItemtagsModal);
@@ -72,8 +73,11 @@ function setupEventListeners() {
     document.getElementById('addValueflagBtn').addEventListener('click', addValueflag);
     document.getElementById('closeItemclassesBtn').addEventListener('click', closeItemclassesModal);
     document.getElementById('closeItemtagsBtn').addEventListener('click', closeItemtagsModal);
-    document.getElementById('closeUsageflagsBtn').addEventListener('click', closeUsageflagsModal);
-    document.getElementById('closeValueflagsBtn').addEventListener('click', closeValueflagsModal);
+    const closeUsageflagsBtn = document.getElementById('closeUsageflagsBtn');
+    if (closeUsageflagsBtn) closeUsageflagsBtn.addEventListener('click', closeUsageflagsManagementModal);
+    
+    const closeValueflagsBtn = document.getElementById('closeValueflagsBtn');
+    if (closeValueflagsBtn) closeValueflagsBtn.addEventListener('click', closeValueflagsManagementModal);
     document.getElementById('applyColumnVisibilityBtn').addEventListener('click', applyColumnVisibility);
     document.getElementById('cancelColumnVisibilityBtn').addEventListener('click', closeColumnVisibilityModal);
     document.getElementById('showAllColumnsBtn').addEventListener('click', showAllColumns);
@@ -104,12 +108,12 @@ function setupEventListeners() {
     
     const usageflagsManagementCloseBtn = document.querySelector('#usageflagsManagementModal .close-modal');
     if (usageflagsManagementCloseBtn) {
-        usageflagsManagementCloseBtn.addEventListener('click', closeUsageflagsModal);
+        usageflagsManagementCloseBtn.addEventListener('click', closeUsageflagsManagementModal);
     }
     
     const valueflagsManagementCloseBtn = document.querySelector('#valueflagsManagementModal .close-modal');
     if (valueflagsManagementCloseBtn) {
-        valueflagsManagementCloseBtn.addEventListener('click', closeValueflagsModal);
+        valueflagsManagementCloseBtn.addEventListener('click', closeValueflagsManagementModal);
     }
     
     document.getElementById('itemclassesModal').addEventListener('click', (e) => {
@@ -128,7 +132,7 @@ function setupEventListeners() {
     if (usageflagsManagementModal) {
         usageflagsManagementModal.addEventListener('click', (e) => {
             if (e.target.id === 'usageflagsManagementModal') {
-                closeUsageflagsModal();
+                closeUsageflagsManagementModal();
             }
         });
     }
@@ -137,7 +141,7 @@ function setupEventListeners() {
     if (valueflagsManagementModal) {
         valueflagsManagementModal.addEventListener('click', (e) => {
             if (e.target.id === 'valueflagsManagementModal') {
-                closeValueflagsModal();
+                closeValueflagsManagementModal();
             }
         });
     }
@@ -1925,8 +1929,11 @@ function updateFilterUI() {
     const filterCriteria = document.getElementById('filterCriteria');
     
     if (!column) {
+        // No column selected - show text input by default, clear values
         filterValueInput.style.display = 'block';
         filterValueSelect.style.display = 'none';
+        filterValueInput.value = '';
+        filterValueSelect.selectedIndex = -1;
         filterCriteria.innerHTML = `
             <option value="contains">Contains</option>
             <option value="equals">Equals</option>
@@ -1945,6 +1952,8 @@ function updateFilterUI() {
         // Show dropdown, hide text input
         filterValueInput.style.display = 'none';
         filterValueSelect.style.display = 'block';
+        filterValueInput.value = ''; // Clear text input
+        filterValueSelect.selectedIndex = -1; // Clear dropdown selection
         
         // Update criteria options for defined value columns
         filterCriteria.innerHTML = `
@@ -1958,6 +1967,8 @@ function updateFilterUI() {
         // Show text input, hide dropdown
         filterValueInput.style.display = 'block';
         filterValueSelect.style.display = 'none';
+        filterValueInput.value = ''; // Clear text input
+        filterValueSelect.selectedIndex = -1; // Clear dropdown selection
         
         // Update criteria options for text columns
         filterCriteria.innerHTML = `
@@ -2067,6 +2078,12 @@ function addFilter() {
     // Clear inputs
     filterValueInput.value = '';
     filterValueSelect.selectedIndex = -1;
+    
+    // Reset column selection and refresh UI
+    document.getElementById('filterColumn').value = '';
+    document.getElementById('filterCriteria').value = 'contains';
+    document.getElementById('filterInclude').checked = true;
+    updateFilterUI();
     
     // Update display
     displayActiveFilters();
@@ -2622,7 +2639,7 @@ function openUsageflagsModal() {
     modal.style.display = 'block';
 }
 
-function closeUsageflagsModal() {
+function closeUsageflagsManagementModal() {
     const modal = document.getElementById('usageflagsManagementModal');
     if (modal) {
         modal.style.display = 'none';
@@ -2761,7 +2778,7 @@ function openValueflagsModal() {
     modal.style.display = 'block';
 }
 
-function closeValueflagsModal() {
+function closeValueflagsManagementModal() {
     const modal = document.getElementById('valueflagsManagementModal');
     if (modal) {
         modal.style.display = 'none';
@@ -2887,6 +2904,65 @@ async function deleteValueflag(valueflagId) {
     } catch (error) {
         console.error('Error deleting valueflag:', error);
         alert(`Error deleting valueflag: ${error.message}`);
+    }
+}
+
+async function deleteSelectedElements() {
+    const selectedKeys = getSelectedElementKeys();
+    
+    if (selectedKeys.length === 0) {
+        alert('Please select at least one element to delete');
+        return;
+    }
+    
+    const count = selectedKeys.length;
+    const confirmMessage = count === 1
+        ? `Are you sure you want to delete this element?\n\nThis action cannot be undone.`
+        : `Are you sure you want to delete ${count} elements?\n\nThis action cannot be undone.`;
+    
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+    
+    updateStatus(`Deleting ${count} element(s)...`);
+    
+    try {
+        const response = await fetch('/api/elements/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                element_keys: selectedKeys,
+                mission_dir: currentMissionDir || '',
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            // Clear selection
+            selectedRows.clear();
+            
+            // Reload elements to refresh display
+            await loadElements();
+            
+            const errorMsg = data.errors && data.errors.length > 0 
+                ? ` (${data.errors.length} errors occurred)` 
+                : '';
+            updateStatus(`Successfully deleted ${data.deleted_count} element(s)${errorMsg}`);
+            
+            if (data.errors && data.errors.length > 0) {
+                console.error('Deletion errors:', data.errors);
+                alert(`Some errors occurred during deletion:\n${data.errors.join('\n')}`);
+            }
+        } else {
+            throw new Error(data.error || 'Failed to delete elements');
+        }
+    } catch (error) {
+        console.error('Error deleting elements:', error);
+        alert(`Error deleting elements: ${error.message}`);
+        updateStatus('Error deleting elements');
     }
 }
 
