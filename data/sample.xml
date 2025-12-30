@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item id="1" name="Sample Item">
+        <nominal>100</nominal>
+        <description>This is a sample XML item</description>
+        <metadata>
+            <created>2024-01-01</created>
+            <modified>2024-01-15</modified>
+        </metadata>
+    </item>
+    <item id="2" name="Another Item">
+        <nominal>200</nominal>
+        <description>Another sample item</description>
+        <metadata>
+            <created>2024-01-02</created>
+            <modified>2024-01-16</modified>
+        </metadata>
+    </item>
+</root>
+

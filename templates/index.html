@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML Data Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>XML Data Viewer</h1>
+            <p class="status" id="status">Loading...</p>
+        </header>
+        
+        <div class="controls">
+            <button id="refreshBtn" class="btn">Refresh</button>
+            <label>
+                Auto-refresh:
+                <input type="checkbox" id="autoRefresh" checked>
+            </label>
+            <span class="refresh-interval">
+                Interval: <input type="number" id="refreshInterval" value="2" min="1" max="60"> seconds
+            </span>
+        </div>
+        
+        <div class="file-list" id="fileList">
+            <p>No XML files found. Place XML files in the data/ directory.</p>
+        </div>
+        
+        <div class="xml-viewer" id="xmlViewer">
+            <p>Select a file to view its contents</p>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML Data Editor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/editor.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>XML Data Editor</h1>
+            <p class="status" id="status">Loading...</p>
+            <p class="help-text">Double-click any cell to edit (except source column)</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="elementType">Element Type:</label>
+                <input type="text" id="elementType" value="type" placeholder="type">
+            </div>
+            <button id="loadDataBtn" class="btn btn-primary">Load XML Data</button>
+            <button id="refreshBtn" class="btn">Refresh</button>
+            <div class="export-controls">
+                <button id="exportBtn" class="btn btn-export">Export to XML</button>
+                <label class="export-option-label">
+                    <input type="checkbox" id="exportByItemclass" class="export-checkbox">
+                    Export by Itemclass
+                </label>
+                <div class="export-subfolder-group" id="exportSubfolderGroup" style="display: none;">
+                    <label for="exportSubfolder">Export Subfolder:</label>
+                    <input type="text" id="exportSubfolder" value="exported-types" placeholder="exported-types" class="export-subfolder-input">
+                </div>
+            </div>
+            <span class="file-watcher-status" id="fileWatcherStatus" title="Watching for file changes">📁 Watching files</span>
+        </div>
+        
+        <div class="import-database-controls">
+            <h3>Import from Database</h3>
+            <div class="import-db-input-group">
+                <label for="sourceDbPath">Source Database Path:</label>
+                <input type="text" id="sourceDbPath" placeholder="E:\DayZ_Servers\...\type-editor-db\editor_data.db" class="db-path-input">
+                <input type="file" id="sourceDbFile" accept=".db" style="display: none;">
+                <button id="browseDbBtn" class="btn btn-small">Browse</button>
+                <button id="importDbBtn" class="btn btn-import">Import from Database</button>
+            </div>
+            <p class="help-text-small">Import elements, itemclasses, and itemtags from another database file. Existing elements will be skipped.</p>
+            <div class="import-status" id="importStatus" style="display: none;"></div>
+        </div>
+        
+        <div class="merge-controls">
+            <h3>Merge XML File</h3>
+            <div class="merge-input-group">
+                <label for="mergeXmlFile">Select XML file to merge:</label>
+                <input type="file" id="mergeXmlFile" accept=".xml" class="file-input">
+                <button id="mergeXmlBtn" class="btn btn-merge">Merge XML File</button>
+            </div>
+            <p class="help-text-small">Elements with matching names will be skipped (not overwritten)</p>
+            <div class="merge-status" id="mergeStatus" style="display: none;"></div>
+        </div>
+        
+        <div class="backup-controls">
+            <h3>Backup & Restore</h3>
+            <div class="backup-info" id="backupInfo">
+                <p>No backup available</p>
+            </div>
+            <div class="backup-buttons">
+                <button id="createBackupBtn" class="btn btn-backup">Create Backup</button>
+                <button id="restoreBackupBtn" class="btn btn-restore" disabled>Restore from Backup</button>
+            </div>
+            <p class="help-text-small">A backup is automatically created before merging XML files</p>
+        </div>
+        
+        <div class="folder-selection">
+            <h3>Mission Directory</h3>
+            <div class="mission-dir-input-group">
+                <label for="missionDir">Mission Directory Path:</label>
+                <input type="text" id="missionDir" placeholder="Enter mission directory path..." class="mission-dir-input">
+                <button id="updateMissionDirBtn" class="btn btn-small">Update</button>
+            </div>
+            <p class="help-text-small">This directory should contain cfgeconomycore.xml and a db/types.xml file</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="itemclasses-panel">
+                    <h3>Itemclasses</h3>
+                    <div id="itemclassesList" class="itemclasses-list">
+                        <!-- Itemclasses will be added here -->
+                    </div>
+                    <div class="itemclass-input-group">
+                        <input type="text" id="newItemclassName" placeholder="New itemclass name..." class="itemclass-input">
+                        <button id="addItemclassBtn" class="btn btn-small">Add Itemclass</button>
+                    </div>
+                </div>
+                
+                <div class="itemtags-panel">
+                    <h3>Itemtags</h3>
+                    <div id="itemtagsList" class="itemtags-list">
+                        <!-- Itemtags will be added here -->
+                    </div>
+                    <div class="itemtag-input-group">
+                        <input type="text" id="newItemtagName" placeholder="New itemtag name..." class="itemtag-input">
+                        <button id="addItemtagBtn" class="btn btn-small">Add Itemtag</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="content-area">
+                <div class="data-info" id="dataInfo">
+                    <p>No data loaded</p>
+                </div>
+                
+                <div class="display-limit-control">
+                    <label for="displayLimit">Items per Page:</label>
+                    <input type="number" id="displayLimit" min="1" max="10000" value="100" class="limit-input">
+                    <span class="limit-info" id="limitInfo"></span>
+                    <div class="pagination-controls">
+                        <button id="prevPageBtn" class="btn btn-small" disabled>Previous</button>
+                        <span id="pageInfo" class="page-info">Page 1</span>
+                        <button id="nextPageBtn" class="btn btn-small">Next</button>
+                    </div>
+                </div>
+                
+                <div class="table-controls">
+                    <div class="column-selector">
+                        <h4>Select Columns to Display</h4>
+                        <div class="column-checkboxes" id="columnCheckboxes">
+                            <!-- Column checkboxes will be added here -->
+                        </div>
+                        <div class="column-selector-actions">
+                            <button id="selectAllColumns" class="btn btn-small">Select All</button>
+                            <button id="deselectAllColumns" class="btn btn-small">Deselect All</button>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-controls">
+                        <h4>Filter Data</h4>
+                        
+                        <!-- Itemclass Filter Section -->
+                        <div class="special-filter-section">
+                            <label><strong>Filter by Itemclass:</strong></label>
+                            <div class="special-filter-checkboxes" id="itemclassFilterCheckboxes">
+                                <!-- Itemclass filter checkboxes will be added here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Itemtag Filter Section -->
+                        <div class="special-filter-section">
+                            <label><strong>Filter by Itemtag:</strong></label>
+                            <div class="special-filter-checkboxes" id="itemtagFilterCheckboxes">
+                                <!-- Itemtag filter checkboxes will be added here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Text-based Column Filters -->
+                        <div class="filter-group">
+                            <label for="filterColumn">Filter by Column:</label>
+                            <select id="filterColumn" class="filter-select">
+                                <option value="">-- Select Column --</option>
+                            </select>
+                            <input type="text" id="filterValue" placeholder="Enter filter value..." class="filter-input">
+                            <label class="not-filter-label">
+                                <input type="checkbox" id="filterNot"> NOT
+                            </label>
+                            <button id="addFilterBtn" class="btn btn-small">Add Filter</button>
+                            <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
+                        </div>
+                        <div id="activeFilters" class="active-filters">
+                            <!-- Active filters will be displayed here -->
+                        </div>
+                    </div>
+                    
+                    <div class="bulk-operations">
+                        <h4>Bulk Operations</h4>
+                        <div class="bulk-selection-info" id="bulkSelectionInfo">
+                            <span>0 rows selected</span>
+                        </div>
+                        <div class="bulk-actions">
+                            <label for="bulkItemclass">Set Itemclass:</label>
+                            <select id="bulkItemclass" class="bulk-select">
+                                <option value="">-- No Itemclass --</option>
+                            </select>
+                            <button id="bulkSetItemclassBtn" class="btn btn-small">Apply</button>
+                            
+                            <label for="bulkItemtags">Set Itemtags:</label>
+                            <div class="bulk-itemtags-checkboxes" id="bulkItemtagsCheckboxes">
+                                <!-- Itemtag checkboxes will be added here -->
+                            </div>
+                            <button id="bulkSetItemtagsBtn" class="btn btn-small">Apply</button>
+                            
+                            <button id="bulkClearSelectionBtn" class="btn btn-small">Clear Selection</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="table-container" id="tableContainer">
+                    <div class="table-wrapper">
+                        <table id="dataTable" class="data-table">
+                            <thead id="tableHead"></thead>
+                            <tbody id="tableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Field</h2>
+            <div class="edit-form">
+                <label id="editFieldLabel">Field Name:</label>
+                <input type="text" id="editFieldValue" class="edit-input">
+                <div class="modal-actions">
+                    <button id="saveEditBtn" class="btn btn-primary">Save</button>
+                    <button id="cancelEditBtn" class="btn">Cancel</button>
+                    <button id="undoEditBtn" class="btn btn-undo">Undo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/editor.js') }}"></script>
+</body>
+</html>
+
