@@ -16,6 +16,7 @@ let availableTags = []; // List of all available tags
 let availableItemclasses = []; // List of all available itemclasses
 let availableItemtags = []; // List of all available itemtags
 let filters = {}; // Map of column key -> filter value/values
+let selectedRows = new Set(); // Set of selected element keys for bulk operations
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -264,6 +265,9 @@ function handleFilterChange(element) {
     
     // Save filters to localStorage
     saveFilters();
+    
+    // Reset selection when filters change
+    selectedRows.clear();
     
     // Refresh display
     displayTable();
@@ -700,6 +704,10 @@ function displayTable() {
     // Build table
     let html = '<table class="data-table"><thead><tr>';
     
+    // Add checkbox column header
+    const allSelected = dataToDisplay.length > 0 && dataToDisplay.every(r => selectedRows.has(r._element_key));
+    html += `<th class="checkbox-header"><input type="checkbox" id="selectAllCheckbox" ${allSelected ? 'checked' : ''}></th>`;
+    
     displayColumns.forEach(col => {
         const isSorted = sortColumn === col.key;
         const sortIndicator = isSorted 
@@ -720,6 +728,9 @@ function displayTable() {
     
     html += '</tr><tr class="filter-row">';
     
+    // Add empty cell for checkbox column in filter row
+    html += '<td class="filter-cell"></td>';
+    
     // Add filter row
     displayColumns.forEach(col => {
         html += `<td class="filter-cell">${getFilterControl(col.key)}</td>`;
@@ -728,7 +739,12 @@ function displayTable() {
     html += '</tr></thead><tbody>';
     
     dataToDisplay.forEach((record, rowIndex) => {
-        html += '<tr>';
+        const elementKey = record._element_key || '';
+        const isSelected = selectedRows.has(elementKey);
+        html += `<tr ${isSelected ? 'class="selected-row"' : ''}>`;
+        
+        // Add checkbox cell
+        html += `<td class="checkbox-cell"><input type="checkbox" class="row-checkbox" data-element-key="${escapeHtml(elementKey)}" ${isSelected ? 'checked' : ''}></td>`;
         
         displayColumns.forEach(col => {
             const value = record[col.key];
@@ -834,6 +850,57 @@ function displayTable() {
     html += '</tbody></table>';
     container.innerHTML = html;
     
+    // Add select-all checkbox handler
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', (e) => {
+            const checked = e.target.checked;
+            dataToDisplay.forEach(record => {
+                const elementKey = record._element_key;
+                if (elementKey) {
+                    if (checked) {
+                        selectedRows.add(elementKey);
+                    } else {
+                        selectedRows.delete(elementKey);
+                    }
+                }
+            });
+            // Update individual checkboxes
+            container.querySelectorAll('.row-checkbox').forEach(cb => {
+                cb.checked = checked;
+            });
+            // Update row highlighting
+            container.querySelectorAll('tbody tr').forEach(row => {
+                const checkbox = row.querySelector('.row-checkbox');
+                if (checkbox) {
+                    if (checked) {
+                        row.classList.add('selected-row');
+                    } else {
+                        row.classList.remove('selected-row');
+                    }
+                }
+            });
+        });
+    }
+    
+    // Add row checkbox handlers
+    container.querySelectorAll('.row-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            const elementKey = e.target.getAttribute('data-element-key');
+            if (elementKey) {
+                if (e.target.checked) {
+                    selectedRows.add(elementKey);
+                    e.target.closest('tr').classList.add('selected-row');
+                } else {
+                    selectedRows.delete(elementKey);
+                    e.target.closest('tr').classList.remove('selected-row');
+                }
+                // Update select-all checkbox
+                updateSelectAllCheckbox(container, dataToDisplay);
+            }
+        });
+    });
+    
     // Add click handlers to sortable headers
     const sortableHeaders = container.querySelectorAll('.sortable');
     sortableHeaders.forEach(header => {
@@ -870,7 +937,26 @@ function displayTable() {
     const sortedColumn = displayColumns.find(c => c.key === sortColumn);
     const filterCount = Object.keys(filters).filter(k => filters[k] !== null && filters[k] !== '' && (!Array.isArray(filters[k]) || filters[k].length > 0)).length;
     const filterText = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : '';
-    updateStatus(`Displaying ${dataToDisplay.length} of ${tableData.length} elements${filterText}${sortColumn && sortedColumn ? ` (sorted by ${sortedColumn.label} ${sortDirection})` : ''} - ${displayColumns.length} of ${allAvailableColumns.length} columns`);
+    const selectedCount = selectedRows.size;
+    const selectedText = selectedCount > 0 ? ` - ${selectedCount} selected` : '';
+    updateStatus(`Displaying ${dataToDisplay.length} of ${tableData.length} elements${filterText}${sortColumn && sortedColumn ? ` (sorted by ${sortedColumn.label} ${sortDirection})` : ''} - ${displayColumns.length} of ${allAvailableColumns.length} columns${selectedText}`);
+}
+
+function updateSelectAllCheckbox(container, dataToDisplay) {
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (selectAllCheckbox && dataToDisplay.length > 0) {
+        const allSelected = dataToDisplay.every(r => selectedRows.has(r._element_key));
+        selectAllCheckbox.checked = allSelected;
+    }
+}
+
+function getSelectedElementKeys() {
+    // Get currently visible/filtered element keys that are selected
+    let filteredData = applyFilters(tableData);
+    if (sortColumn) {
+        filteredData = sortData(filteredData, sortColumn, sortDirection);
+    }
+    return filteredData.filter(r => selectedRows.has(r._element_key)).map(r => r._element_key);
 }
 
 function openColumnVisibilityModal() {
@@ -947,14 +1033,43 @@ function openValueflagsEditor(cell) {
         return;
     }
     
-    currentValueflagsElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current valueflags for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentValueflagIds = record?._valueflags?.map(v => v.id) || [];
+    if (isBulkEdit) {
+        currentValueflagsElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentValueflagsElementKey = elementKey;
+    }
+    
+    // Get current valueflags - for bulk edit, show intersection of all selected
+    let currentValueflagIds = [];
+    if (isBulkEdit) {
+        // Find common valueflags across all selected elements
+        const allValueflagIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._valueflags?.map(v => v.id) || [];
+        });
+        if (allValueflagIds.length > 0) {
+            // Start with first element's valueflags
+            currentValueflagIds = allValueflagIds[0];
+            // Keep only those present in all elements
+            for (let i = 1; i < allValueflagIds.length; i++) {
+                currentValueflagIds = currentValueflagIds.filter(id => allValueflagIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentValueflagIds = record?._valueflags?.map(v => v.id) || [];
+    }
     
     const modal = document.getElementById('valueflagsModal');
     const checkboxesContainer = document.getElementById('valueflagsCheckboxes');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit ? `Edit Valueflags (${selectedKeys.length} selected)` : 'Edit Valueflags';
+    }
     
     if (availableValueflags.length === 0) {
         alert('No valueflags available. Please load data first.');
@@ -996,34 +1111,43 @@ async function saveValueflags() {
     const checkboxes = document.querySelectorAll('#valueflagsCheckboxes input[type="checkbox"]:checked');
     const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentValueflagsElementKey);
+    const elementKeys = isBulkEdit ? currentValueflagsElementKey : [currentValueflagsElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentValueflagsElementKey)}/valueflags`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                valueflag_ids: selectedIds,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/valueflags`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    valueflag_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeValueflagsModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Value flags updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update value flags');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some valueflags');
         }
+        
+        closeValueflagsModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Valueflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
-        console.error('Error updating value flags:', error);
-        alert(`Error updating value flags: ${error.message}`);
+        console.error('Error updating valueflags:', error);
+        alert(`Error updating valueflags: ${error.message}`);
     }
 }
 
@@ -1036,14 +1160,40 @@ function openUsageflagsEditor(cell) {
         return;
     }
     
-    currentUsageflagsElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current usageflags for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentUsageflagIds = record?._usageflags?.map(u => u.id) || [];
+    if (isBulkEdit) {
+        currentUsageflagsElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentUsageflagsElementKey = elementKey;
+    }
+    
+    // Get current usageflags - for bulk edit, show intersection of all selected
+    let currentUsageflagIds = [];
+    if (isBulkEdit) {
+        const allUsageflagIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._usageflags?.map(u => u.id) || [];
+        });
+        if (allUsageflagIds.length > 0) {
+            currentUsageflagIds = allUsageflagIds[0];
+            for (let i = 1; i < allUsageflagIds.length; i++) {
+                currentUsageflagIds = currentUsageflagIds.filter(id => allUsageflagIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentUsageflagIds = record?._usageflags?.map(u => u.id) || [];
+    }
     
     const modal = document.getElementById('usageflagsModal');
     const checkboxesContainer = document.getElementById('usageflagsCheckboxes');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit ? `Edit Usageflags (${selectedKeys.length} selected)` : 'Edit Usageflags';
+    }
     
     if (availableUsageflags.length === 0) {
         alert('No usageflags available. Please load data first.');
@@ -1085,33 +1235,43 @@ async function saveUsageflags() {
     const checkboxes = document.querySelectorAll('#usageflagsCheckboxes input[type="checkbox"]:checked');
     const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentUsageflagsElementKey);
+    const elementKeys = isBulkEdit ? currentUsageflagsElementKey : [currentUsageflagsElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentUsageflagsElementKey)}/usageflags`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                usageflag_ids: selectedIds,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/usageflags`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    usageflag_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeUsageflagsModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Usage flags updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update usage flags');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some usageflags');
         }
+        
+        closeUsageflagsModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Usageflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
-        console.error('Error updating usage flags:', error);
-        alert(`Error updating usage flags: ${error.message}`);
+        console.error('Error updating usageflags:', error);
+        alert(`Error updating usageflags: ${error.message}`);
     }
 }
 
@@ -1124,11 +1284,33 @@ function openFlagsEditor(cell) {
         return;
     }
     
-    currentFlagsElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current flags for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentFlagIds = record?._flags?.map(f => f.id) || [];
+    if (isBulkEdit) {
+        currentFlagsElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentFlagsElementKey = elementKey;
+    }
+    
+    // Get current flags - for bulk edit, show intersection of all selected
+    let currentFlagIds = [];
+    if (isBulkEdit) {
+        const allFlagIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._flags?.map(f => f.id) || [];
+        });
+        if (allFlagIds.length > 0) {
+            currentFlagIds = allFlagIds[0];
+            for (let i = 1; i < allFlagIds.length; i++) {
+                currentFlagIds = currentFlagIds.filter(id => allFlagIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentFlagIds = record?._flags?.map(f => f.id) || [];
+    }
     
     const modal = document.getElementById('flagsModal');
     const checkboxesContainer = document.getElementById('flagsCheckboxes');
@@ -1173,30 +1355,40 @@ async function saveFlags() {
     const checkboxes = document.querySelectorAll('#flagsCheckboxes input[type="checkbox"]:checked');
     const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentFlagsElementKey);
+    const elementKeys = isBulkEdit ? currentFlagsElementKey : [currentFlagsElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentFlagsElementKey)}/flags`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                flag_ids: selectedIds,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/flags`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    flag_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeFlagsModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Flags updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update flags');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some flags');
         }
+        
+        closeFlagsModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Flags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
         console.error('Error updating flags:', error);
         alert(`Error updating flags: ${error.message}`);
@@ -1212,14 +1404,40 @@ function openCategoriesEditor(cell) {
         return;
     }
     
-    currentCategoriesElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current categories for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentCategoryIds = record?._categories?.map(c => c.id) || [];
+    if (isBulkEdit) {
+        currentCategoriesElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentCategoriesElementKey = elementKey;
+    }
+    
+    // Get current categories - for bulk edit, show intersection of all selected
+    let currentCategoryIds = [];
+    if (isBulkEdit) {
+        const allCategoryIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._categories?.map(c => c.id) || [];
+        });
+        if (allCategoryIds.length > 0) {
+            currentCategoryIds = allCategoryIds[0];
+            for (let i = 1; i < allCategoryIds.length; i++) {
+                currentCategoryIds = currentCategoryIds.filter(id => allCategoryIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentCategoryIds = record?._categories?.map(c => c.id) || [];
+    }
     
     const modal = document.getElementById('categoriesModal');
     const checkboxesContainer = document.getElementById('categoriesCheckboxes');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit ? `Edit Categories (${selectedKeys.length} selected)` : 'Edit Categories';
+    }
     
     if (availableCategories.length === 0) {
         alert('No categories available. Please load data first.');
@@ -1261,30 +1479,40 @@ async function saveCategories() {
     const checkboxes = document.querySelectorAll('#categoriesCheckboxes input[type="checkbox"]:checked');
     const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentCategoriesElementKey);
+    const elementKeys = isBulkEdit ? currentCategoriesElementKey : [currentCategoriesElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentCategoriesElementKey)}/categories`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                category_ids: selectedIds,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/categories`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    category_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeCategoriesModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Categories updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update categories');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some categories');
         }
+        
+        closeCategoriesModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Categories updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
         console.error('Error updating categories:', error);
         alert(`Error updating categories: ${error.message}`);
@@ -1300,14 +1528,39 @@ function openItemclassEditor(cell) {
         return;
     }
     
-    currentItemclassElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current itemclass for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentItemclassId = record?._itemclass_id || null;
+    if (isBulkEdit) {
+        currentItemclassElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentItemclassElementKey = elementKey;
+    }
+    
+    // Get current itemclass - for bulk edit, show common itemclass if all have the same
+    let currentItemclassId = null;
+    if (isBulkEdit) {
+        const allItemclassIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._itemclass_id || null;
+        });
+        // Check if all have the same itemclass
+        const firstId = allItemclassIds[0];
+        if (allItemclassIds.every(id => id === firstId)) {
+            currentItemclassId = firstId;
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentItemclassId = record?._itemclass_id || null;
+    }
     
     const modal = document.getElementById('itemclassEditorModal');
     const select = document.getElementById('itemclassSelect');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit ? `Edit Itemclass (${selectedKeys.length} selected)` : 'Edit Itemclass';
+    }
     
     if (availableItemclasses.length === 0) {
         alert('No itemclasses available. Please add itemclasses first.');
@@ -1339,30 +1592,40 @@ async function saveItemclass() {
     const select = document.getElementById('itemclassSelect');
     const itemclassId = select.value ? parseInt(select.value) : null;
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentItemclassElementKey);
+    const elementKeys = isBulkEdit ? currentItemclassElementKey : [currentItemclassElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentItemclassElementKey)}/itemclass`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                itemclass_id: itemclassId,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/itemclass`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    itemclass_id: itemclassId,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeItemclassEditorModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Itemclass updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update itemclass');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some itemclasses');
         }
+        
+        closeItemclassEditorModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Itemclass updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
         console.error('Error updating itemclass:', error);
         alert(`Error updating itemclass: ${error.message}`);
@@ -1378,14 +1641,40 @@ function openItemtagsEditor(cell) {
         return;
     }
     
-    currentItemtagsElementKey = elementKey;
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
     
-    // Get current itemtags for this element
-    const record = tableData.find(r => r._element_key === elementKey);
-    const currentItemtagIds = record?._itemtags?.map(it => it.id) || [];
+    if (isBulkEdit) {
+        currentItemtagsElementKey = selectedKeys; // Store array for bulk edit
+    } else {
+        currentItemtagsElementKey = elementKey;
+    }
+    
+    // Get current itemtags - for bulk edit, show intersection of all selected
+    let currentItemtagIds = [];
+    if (isBulkEdit) {
+        const allItemtagIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._itemtags?.map(it => it.id) || [];
+        });
+        if (allItemtagIds.length > 0) {
+            currentItemtagIds = allItemtagIds[0];
+            for (let i = 1; i < allItemtagIds.length; i++) {
+                currentItemtagIds = currentItemtagIds.filter(id => allItemtagIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentItemtagIds = record?._itemtags?.map(it => it.id) || [];
+    }
     
     const modal = document.getElementById('itemtagsEditorModal');
     const checkboxesContainer = document.getElementById('itemtagsEditorCheckboxes');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit ? `Edit Itemtags (${selectedKeys.length} selected)` : 'Edit Itemtags';
+    }
     
     if (availableItemtags.length === 0) {
         alert('No itemtags available. Please add itemtags first.');
@@ -1427,30 +1716,40 @@ async function saveItemtags() {
     const checkboxes = document.querySelectorAll('#itemtagsEditorCheckboxes input[type="checkbox"]:checked');
     const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
     
+    // Check if bulk edit
+    const isBulkEdit = Array.isArray(currentItemtagsElementKey);
+    const elementKeys = isBulkEdit ? currentItemtagsElementKey : [currentItemtagsElementKey];
+    
     try {
-        const response = await fetch(`/api/elements/${encodeURIComponent(currentItemtagsElementKey)}/itemtags`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                itemtag_ids: selectedIds,
-                mission_dir: currentMissionDir || '',
-                db_file_path: currentDbFilePath || ''
+        // Apply to all selected elements
+        const promises = elementKeys.map(elementKey => 
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/itemtags`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    itemtag_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
             })
-        });
+        );
         
-        const data = await response.json();
-        if (data.success) {
-            closeItemtagsEditorModal();
-            
-            // Reload elements to get updated data
-            await loadElements();
-            
-            updateStatus('Itemtags updated successfully');
-        } else {
-            throw new Error(data.error || 'Failed to update itemtags');
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some itemtags');
         }
+        
+        closeItemtagsEditorModal();
+        
+        // Reload elements to get updated data
+        await loadElements();
+        
+        updateStatus(`Itemtags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
         console.error('Error updating itemtags:', error);
         alert(`Error updating itemtags: ${error.message}`);
@@ -1648,6 +1947,11 @@ function makeCellEditable(cell) {
     const fieldName = cell.getAttribute('data-field-name');
     const currentValue = cell.textContent.trim();
     
+    // Check if we should do bulk edit
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
+    const elementKeys = isBulkEdit ? selectedKeys : [elementKey];
+    
     // Create input field
     const input = document.createElement('input');
     input.type = 'text';
@@ -1657,6 +1961,9 @@ function makeCellEditable(cell) {
     input.style.padding = '4px';
     input.style.border = '2px solid #667eea';
     input.style.borderRadius = '3px';
+    if (isBulkEdit) {
+        input.placeholder = `Bulk edit (${elementKeys.length} selected)`;
+    }
     
     // Replace cell content with input
     cell.textContent = '';
@@ -1668,44 +1975,48 @@ function makeCellEditable(cell) {
     const saveEdit = async () => {
         const newValue = input.value.trim();
         
-        if (newValue === currentValue) {
+        if (newValue === currentValue && !isBulkEdit) {
             // No change, just restore
             cell.textContent = currentValue;
             return;
         }
         
         try {
-            const response = await fetch(`/api/elements/${encodeURIComponent(elementKey)}/field/${fieldName}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    value: newValue,
-                    mission_dir: currentMissionDir || '',
-                    db_file_path: currentDbFilePath || ''
+            // Apply to all selected elements
+            const promises = elementKeys.map(key => 
+                fetch(`/api/elements/${encodeURIComponent(key)}/field/${fieldName}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        value: newValue,
+                        mission_dir: currentMissionDir || '',
+                        db_file_path: currentDbFilePath || ''
+                    })
                 })
-            });
+            );
             
-            const data = await response.json();
-            if (data.success) {
-                // Update the cell display
-                cell.textContent = newValue;
-                
-                // Update the data in memory
-                const elementKey = cell.getAttribute('data-element-key');
-                const record = tableData.find(r => r._element_key === elementKey);
+            const responses = await Promise.all(promises);
+            const results = await Promise.all(responses.map(r => r.json()));
+            
+            const failed = results.filter(r => !r.success);
+            if (failed.length > 0) {
+                throw new Error(failed[0].error || 'Failed to update some fields');
+            }
+            
+            // Update the cell display
+            cell.textContent = newValue;
+            
+            // Update the data in memory for all affected elements
+            elementKeys.forEach(key => {
+                const record = tableData.find(r => r._element_key === key);
                 if (record) {
                     record[fieldName] = newValue;
                 }
-                
-                // Update the cell display (already done above, but ensure it's set)
-                cell.textContent = newValue;
-                
-                updateStatus('Field updated successfully');
-            } else {
-                throw new Error(data.error || 'Failed to update field');
-            }
+            });
+            
+            updateStatus(`Field updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
         } catch (error) {
             console.error('Error updating field:', error);
             alert(`Error updating field: ${error.message}`);

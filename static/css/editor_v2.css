@@ -163,6 +163,34 @@ header h1 {
     vertical-align: top;
 }
 
+/* Checkbox column */
+.checkbox-header,
+.checkbox-cell {
+    width: 40px;
+    text-align: center;
+    padding: 8px 4px !important;
+}
+
+.checkbox-header input[type="checkbox"],
+.checkbox-cell input[type="checkbox"] {
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+}
+
+/* Selected row styling */
+.data-table tbody tr.selected-row {
+    background-color: #e3f2fd !important;
+}
+
+.data-table tbody tr.selected-row:hover {
+    background-color: #bbdefb !important;
+}
+
+.data-table tr.selected-row td:first-child {
+    background: #e3f2fd;
+}
+
 .data-table th:nth-child(1),
 .data-table td:nth-child(1) {
     min-width: 200px;
