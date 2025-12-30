@@ -191,6 +191,115 @@ header h1 {
     background: #e3f2fd;
 }
 
+/* Filter Panel */
+.filter-panel {
+    background: #f9f9f9;
+    border-bottom: 1px solid #ddd;
+    padding: 20px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.filter-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #667eea;
+}
+
+.filter-panel-header h3 {
+    margin: 0;
+    color: #667eea;
+}
+
+.filter-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 15px;
+}
+
+.filter-item {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 12px;
+}
+
+.filter-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.filter-label {
+    font-weight: 600;
+    color: #333;
+    font-size: 0.95em;
+}
+
+.invert-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.85em;
+    color: #666;
+    cursor: pointer;
+}
+
+.invert-checkbox {
+    cursor: pointer;
+}
+
+.filter-item-control {
+    width: 100%;
+}
+
+.filter-item-control .filter-select {
+    width: 100%;
+    min-height: 60px;
+    padding: 5px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+.filter-item-control .filter-input {
+    width: 100%;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+.filter-item-control .numeric-filter {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.filter-item-control .filter-op {
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+.content-header {
+    padding: 10px 20px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #ddd;
+}
+
+.no-filters {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+    font-style: italic;
+}
+
 .data-table th:nth-child(1),
 .data-table td:nth-child(1) {
     min-width: 200px;
@@ -585,6 +694,11 @@ header h1 {
     text-align: center;
     color: #666;
     font-style: italic;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.85em;
 }
 
 .btn-danger {

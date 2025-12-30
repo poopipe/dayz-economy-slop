@@ -38,7 +38,22 @@
             </div>
         </div>
         
+        <!-- Filter Panel -->
+        <div id="filterPanel" class="filter-panel" style="display: none;">
+            <div class="filter-panel-header">
+                <h3>Filters</h3>
+                <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
+                <button id="toggleFilterPanelBtn" class="btn btn-small">Hide Filters</button>
+            </div>
+            <div id="filterControls" class="filter-controls">
+                <!-- Filter controls will be generated here -->
+            </div>
+        </div>
+        
         <div class="main-content">
+            <div class="content-header">
+                <button id="showFilterPanelBtn" class="btn">Show Filters</button>
+            </div>
             <div class="table-container" id="tableContainer">
                 <p class="no-data">Load XML data to begin</p>
             </div>
