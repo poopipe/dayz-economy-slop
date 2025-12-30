@@ -24,12 +24,28 @@ def get_db_path(mission_dir):
     return db_dir / 'editor_data.db'
 
 
-def get_db_connection(mission_dir):
-    """Get a database connection with row factory."""
-    db_file = get_db_path(mission_dir)
+def get_db_connection_from_path(db_path_or_mission_dir):
+    """Get a database connection with row factory.
+    Accepts either a direct database file path or a mission directory.
+    """
+    db_path = Path(db_path_or_mission_dir)
+    
+    # If it's a direct path to a .db file, use it
+    if db_path.is_file() and db_path.suffix in ['.db', '.sqlite', '.sqlite3']:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    # Otherwise, treat it as a mission directory
+    db_file = get_db_path(db_path_or_mission_dir)
     conn = sqlite3.connect(str(db_file))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_db_connection(mission_dir):
+    """Get a database connection with row factory (backward compatibility)."""
+    return get_db_connection_from_path(mission_dir)
 
 
 @app.route('/')
@@ -65,8 +81,8 @@ def get_mission_dirs():
 def get_tables():
     """Get list of all tables in the database."""
     try:
-        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
-        conn = get_db_connection(mission_dir)
+        db_path = request.args.get('db_path') or request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        conn = get_db_connection_from_path(db_path)
         cursor = conn.cursor()
         
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -82,12 +98,12 @@ def get_tables():
 def get_table_data(table_name):
     """Get all data from a table."""
     try:
-        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        db_path = request.args.get('db_path') or request.args.get('mission_dir', DEFAULT_MISSION_DIR)
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 100))
         offset = (page - 1) * per_page
         
-        conn = get_db_connection(mission_dir)
+        conn = get_db_connection_from_path(db_path)
         cursor = conn.cursor()
         
         # Get total count
@@ -133,10 +149,10 @@ def get_table_data(table_name):
 def get_duplicates(table_name):
     """Find duplicate entries in a table."""
     try:
-        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        db_path = request.args.get('db_path') or request.args.get('mission_dir', DEFAULT_MISSION_DIR)
         column = request.args.get('column', 'name')
         
-        conn = get_db_connection(mission_dir)
+        conn = get_db_connection_from_path(db_path)
         cursor = conn.cursor()
         
         # Get all columns
@@ -176,9 +192,12 @@ def get_duplicates(table_name):
 def manage_row(table_name, row_id):
     """Get, update, or delete a specific row."""
     try:
-        mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None) or DEFAULT_MISSION_DIR
+        db_path = (request.args.get('db_path') or request.args.get('mission_dir') or 
+                  (request.json.get('db_path') if request.json else None) or
+                  (request.json.get('mission_dir') if request.json else None) or 
+                  DEFAULT_MISSION_DIR)
         
-        conn = get_db_connection(mission_dir)
+        conn = get_db_connection_from_path(db_path)
         cursor = conn.cursor()
         
         if request.method == 'GET':
@@ -320,13 +339,13 @@ def deduplicate_table(table_name):
 def delete_all_rows(table_name):
     """Delete all rows from a table."""
     try:
-        mission_dir = request.json.get('mission_dir', DEFAULT_MISSION_DIR)
+        db_path = request.json.get('db_path') or request.json.get('mission_dir', DEFAULT_MISSION_DIR)
         confirm = request.json.get('confirm', False)
         
         if not confirm:
             return jsonify({'success': False, 'error': 'Confirmation required'}), 400
         
-        conn = get_db_connection(mission_dir)
+        conn = get_db_connection_from_path(db_path)
         cursor = conn.cursor()
         
         cursor.execute(f'DELETE FROM {table_name}')

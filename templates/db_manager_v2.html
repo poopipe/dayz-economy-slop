@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Manager</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/db_manager.css') }}">
+    <title>Database Manager v2</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/db_manager_v2.css') }}">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Database Manager</h1>
+            <h1>Database Manager v2</h1>
             <p class="status" id="status">Ready</p>
         </header>
         
@@ -22,8 +22,8 @@
             <div class="help-text">
                 <p>You can specify either:</p>
                 <ul>
-                    <li>A direct path to a database file (e.g., <code>E:\path\to\editor_data.db</code>)</li>
-                    <li>A mission directory path (e.g., <code>E:\DayZ_Servers\...\empty.nyheim</code>)</li>
+                    <li>A direct path to a v2 database file (e.g., <code>E:\path\to\editor_data_v2.db</code>)</li>
+                    <li>A mission directory path (e.g., <code>E:\DayZ_Servers\...\empty.nyheim</code>) - will use <code>type-editor-db-v2/editor_data_v2.db</code></li>
                 </ul>
             </div>
         </div>
@@ -88,9 +88,7 @@
         </div>
     </div>
     
-    <script src="{{ url_for('static', filename='js/db_manager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/db_manager_v2.js') }}"></script>
 </body>
 </html>
-
-
 

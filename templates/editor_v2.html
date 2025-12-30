@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML Data Editor v2</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/editor_v2.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>XML Data Editor v2</h1>
+            <p class="status" id="status">Ready</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="missionDir">Mission Directory:</label>
+                <input type="text" id="missionDir" placeholder="Enter mission directory path..." class="mission-dir-input">
+                <button id="loadDataBtn" class="btn btn-primary">Load XML Data</button>
+            </div>
+            
+            <div class="control-group">
+                <button id="exportBtn" class="btn btn-success">Export to XML</button>
+                <label>
+                    <input type="checkbox" id="exportByItemclass"> Export by Itemclass
+                </label>
+                <input type="text" id="exportSubfolder" placeholder="Export subfolder..." value="exported-types" class="subfolder-input">
+                <button id="columnVisibilityBtn" class="btn">Column Visibility</button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="table-container" id="tableContainer">
+                <p class="no-data">Load XML data to begin</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Column Visibility Modal -->
+    <div id="columnVisibilityModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Column Visibility</h2>
+            <div class="column-visibility-controls">
+                <div class="visibility-actions">
+                    <button id="showAllColumnsBtn" class="btn btn-small">Show All</button>
+                    <button id="hideAllColumnsBtn" class="btn btn-small">Hide All</button>
+                </div>
+                <div id="columnCheckboxes" class="column-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="applyColumnVisibilityBtn" class="btn btn-primary">Apply</button>
+                <button id="cancelColumnVisibilityBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/editor_v2.js') }}"></script>
+</body>
+</html>
+

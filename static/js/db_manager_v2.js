@@ -1,4 +1,4 @@
-// Database Manager JavaScript
+// Database Manager v2 JavaScript
 
 let currentDbPath = '';
 let currentTable = null;
@@ -6,6 +6,7 @@ let currentPage = 1;
 let perPage = 100;
 let tableColumns = [];
 let currentRowId = null;
+let idColumn = 'id';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -63,7 +64,16 @@ function setupEventListeners() {
     });
     
     // Modal
-    document.querySelector('.close-modal').addEventListener('click', closeEditModal);
+    document.querySelectorAll('.close-modal').forEach(closeBtn => {
+        closeBtn.addEventListener('click', (e) => {
+            if (e.target.closest('#editModal')) {
+                closeEditModal();
+            } else if (e.target.closest('#duplicatesModal')) {
+                closeDuplicatesModal();
+            }
+        });
+    });
+    
     document.getElementById('cancelEditBtn').addEventListener('click', closeEditModal);
     document.getElementById('saveRowBtn').addEventListener('click', saveRow);
     document.getElementById('deleteRowBtn').addEventListener('click', deleteRow);
@@ -87,7 +97,7 @@ function updateStatus(message) {
 }
 
 function loadDbPath() {
-    const saved = localStorage.getItem('dbManagerDbPath');
+    const saved = localStorage.getItem('dbManagerV2DbPath');
     if (saved) {
         currentDbPath = saved;
         document.getElementById('dbPath').value = saved;
@@ -104,7 +114,7 @@ function loadDatabase() {
     }
     
     currentDbPath = dbPath;
-    localStorage.setItem('dbManagerDbPath', dbPath);
+    localStorage.setItem('dbManagerV2DbPath', dbPath);
     updateStatus('Loading database...');
     
     loadTables();
@@ -167,8 +177,10 @@ async function loadTableData(tableName) {
         
         if (data.success) {
             tableColumns = data.columns;
-            displayTableData(data.data, data.columns, data.total, data.page, data.total_pages);
-            updateStatus(`Loaded ${data.total} rows from ${tableName}`);
+            // Determine ID column
+            idColumn = data.columns.includes('id') ? 'id' : data.columns[0];
+            displayTableData(data.rows, data.columns, data.total_count, data.page, data.total_pages);
+            updateStatus(`Loaded ${data.total_count} rows from ${tableName}`);
         } else {
             throw new Error(data.error || 'Failed to load table data');
         }
@@ -189,21 +201,17 @@ function displayTableData(rows, columns, total, page, totalPages) {
     
     let html = '<table class="data-table"><thead><tr>';
     
-    // Add rowid column
-    html += '<th>Row ID</th>';
-    
     columns.forEach(col => {
-        html += `<th>${col}</th>`;
+        html += `<th>${escapeHtml(col)}</th>`;
     });
     
+    html += '<th>Actions</th>';
     html += '</tr></thead><tbody>';
     
-    rows.forEach((row, index) => {
-        // Get rowid - try different methods
-        const rowid = row.rowid || row.id || index;
+    rows.forEach(row => {
+        const rowId = row[idColumn];
         
-        html += `<tr data-rowid="${rowid}">`;
-        html += `<td>${rowid}</td>`;
+        html += `<tr data-rowid="${rowId}">`;
         
         columns.forEach(col => {
             const value = row[col];
@@ -217,9 +225,10 @@ function displayTableData(rows, columns, total, page, totalPages) {
                 displayValue = String(value);
             }
             
-            html += `<td class="editable-cell" data-column="${col}" data-rowid="${rowid}">${escapeHtml(displayValue)}</td>`;
+            html += `<td class="editable-cell" data-column="${col}" data-rowid="${rowId}">${escapeHtml(displayValue)}</td>`;
         });
         
+        html += `<td><button class="btn btn-small" onclick="openEditModal('${rowId}')">Edit</button></td>`;
         html += '</tr>';
     });
     
@@ -229,9 +238,8 @@ function displayTableData(rows, columns, total, page, totalPages) {
     // Add click handlers for editing
     document.querySelectorAll('.editable-cell').forEach(cell => {
         cell.addEventListener('dblclick', () => {
-            const rowid = parseInt(cell.dataset.rowid);
-            const column = cell.dataset.column;
-            openEditModal(rowid, column);
+            const rowid = cell.dataset.rowid;
+            openEditModal(rowid);
         });
     });
     
@@ -247,50 +255,74 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-async function openEditModal(rowid, column = null) {
+async function openEditModal(rowid) {
     currentRowId = rowid;
     
     try {
-        const response = await fetch(
-            `/api/table/${currentTable}/row/${rowid}?db_path=${encodeURIComponent(currentDbPath)}`
-        );
-        const data = await response.json();
-        
-        if (data.success) {
-            const form = document.getElementById('editForm');
-            form.innerHTML = '';
-            
-            tableColumns.forEach(col => {
-                const field = document.createElement('div');
-                field.className = 'form-field';
-                
-                const label = document.createElement('label');
-                label.textContent = col;
-                field.appendChild(label);
-                
-                const value = data.data[col];
-                let input;
-                
-                if (typeof value === 'object' && value !== null) {
-                    input = document.createElement('textarea');
-                    input.value = JSON.stringify(value, null, 2);
-                    input.rows = 5;
-                } else {
-                    input = document.createElement('input');
-                    input.type = 'text';
-                    input.value = value !== null && value !== undefined ? String(value) : '';
-                }
-                
-                input.id = `edit_${col}`;
-                input.dataset.column = col;
-                field.appendChild(input);
-                form.appendChild(field);
-            });
-            
-            document.getElementById('editModal').style.display = 'block';
-        } else {
-            throw new Error(data.error || 'Failed to load row data');
+        // Get current row data from the table
+        const row = document.querySelector(`tr[data-rowid="${rowid}"]`);
+        if (!row) {
+            alert('Row not found');
+            return;
         }
+        
+        const form = document.getElementById('editForm');
+        form.innerHTML = '';
+        
+        const rowData = {};
+        tableColumns.forEach(col => {
+            const cell = row.querySelector(`td[data-column="${col}"]`);
+            if (cell) {
+                let value = cell.textContent.trim();
+                if (value === 'NULL') {
+                    value = null;
+                } else if (value.startsWith('{') || value.startsWith('[')) {
+                    try {
+                        value = JSON.parse(value);
+                    } catch (e) {
+                        // Keep as string
+                    }
+                }
+                rowData[col] = value;
+            }
+        });
+        
+        tableColumns.forEach(col => {
+            const field = document.createElement('div');
+            field.className = 'form-field';
+            
+            const label = document.createElement('label');
+            label.textContent = col;
+            if (col === idColumn) {
+                label.textContent += ' (ID - read only)';
+            }
+            field.appendChild(label);
+            
+            const value = rowData[col];
+            let input;
+            
+            if (col === idColumn) {
+                input = document.createElement('input');
+                input.type = 'text';
+                input.value = value !== null && value !== undefined ? String(value) : '';
+                input.disabled = true;
+            } else if (typeof value === 'object' && value !== null) {
+                input = document.createElement('textarea');
+                input.value = JSON.stringify(value, null, 2);
+                input.rows = 5;
+            } else {
+                input = document.createElement('input');
+                input.type = 'text';
+                input.value = value !== null && value !== undefined ? String(value) : '';
+            }
+            
+            input.id = `edit_${col}`;
+            input.dataset.column = col;
+            field.appendChild(input);
+            form.appendChild(field);
+        });
+        
+        document.getElementById('editModal').style.display = 'block';
     } catch (error) {
         alert(`Error loading row: ${error.message}`);
         console.error('Error loading row:', error);
@@ -309,10 +341,10 @@ function closeDuplicatesModal() {
 async function saveRow() {
     if (!currentRowId || !currentTable) return;
     
-    const updates = {};
+    const rowData = {};
     tableColumns.forEach(col => {
         const input = document.getElementById(`edit_${col}`);
-        if (input) {
+        if (input && !input.disabled) {
             let value = input.value;
             
             // Try to parse as JSON if it looks like JSON
@@ -324,19 +356,21 @@ async function saveRow() {
                 }
             }
             
-            updates[col] = value;
+            rowData[col] = value;
         }
     });
     
     try {
-        const response = await fetch(`/api/table/${currentTable}/row/${currentRowId}`, {
+        const response = await fetch(`/api/table/${currentTable}/row`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 db_path: currentDbPath,
-                updates: updates
+                row_id: currentRowId,
+                id_column: idColumn,
+                row_data: rowData
             })
         });
         
@@ -362,13 +396,15 @@ async function deleteRow() {
     }
     
     try {
-        const response = await fetch(`/api/table/${currentTable}/row/${currentRowId}`, {
+        const response = await fetch(`/api/table/${currentTable}/row`, {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                db_path: currentDbPath
+                db_path: currentDbPath,
+                row_id: currentRowId,
+                id_column: idColumn
             })
         });
         
@@ -392,18 +428,15 @@ async function findDuplicates() {
         return;
     }
     
-    const column = prompt('Enter column name to check for duplicates:', 'name');
-    if (!column) return;
-    
     try {
         updateStatus('Finding duplicates...');
         const response = await fetch(
-            `/api/table/${currentTable}/duplicates?db_path=${encodeURIComponent(currentDbPath)}&column=${encodeURIComponent(column)}`
+            `/api/table/${currentTable}/duplicates?db_path=${encodeURIComponent(currentDbPath)}`
         );
         const data = await response.json();
         
         if (data.success) {
-            displayDuplicates(data.duplicates, column);
+            displayDuplicates(data.duplicates);
             updateStatus(`Found ${data.duplicates.length} duplicate groups`);
         } else {
             throw new Error(data.error || 'Failed to find duplicates');
@@ -414,7 +447,7 @@ async function findDuplicates() {
     }
 }
 
-function displayDuplicates(duplicates, column) {
+function displayDuplicates(duplicates) {
     const list = document.getElementById('duplicatesList');
     list.innerHTML = '';
     
@@ -424,9 +457,14 @@ function displayDuplicates(duplicates, column) {
         duplicates.forEach(dup => {
             const item = document.createElement('div');
             item.className = 'duplicate-item';
+            
+            const keys = Object.keys(dup).filter(k => k !== 'count' && k !== 'ids');
+            const values = keys.map(k => `${k}: ${dup[k]}`).join(', ');
+            const ids = dup.ids ? (typeof dup.ids === 'string' ? dup.ids.split(',') : dup.ids) : [];
+            
             item.innerHTML = `
-                <h4>${escapeHtml(String(dup.value))} <span class="count">(${dup.count} occurrences)</span></h4>
-                <div class="rowids">Row IDs: ${dup.rowids.join(', ')}</div>
+                <h4>${escapeHtml(values)} <span class="count">(${dup.count} occurrences)</span></h4>
+                <div class="rowids">IDs: ${ids.join(', ')}</div>
             `;
             list.appendChild(item);
         });
@@ -441,10 +479,7 @@ async function deduplicateTable() {
         return;
     }
     
-    const column = prompt('Enter column name to deduplicate by:', 'name');
-    if (!column) return;
-    
-    if (!confirm(`This will remove duplicate entries in column "${column}", keeping the first occurrence.\n\nContinue?`)) {
+    if (!confirm(`This will remove duplicate entries, keeping the first occurrence.\n\nContinue?`)) {
         return;
     }
     
@@ -456,17 +491,15 @@ async function deduplicateTable() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                db_path: currentDbPath,
-                column: column,
-                keep_first: true
+                db_path: currentDbPath
             })
         });
         
         const data = await response.json();
         if (data.success) {
-            alert(`Deduplication complete!\n\nDeleted ${data.deleted_count} duplicate entries.`);
+            alert(`Deduplication complete!\n\nDeleted ${data.deleted} duplicate entries.`);
             loadTableData(currentTable);
-            updateStatus(`Deduplicated: ${data.deleted_count} entries removed`);
+            updateStatus(`Deduplicated: ${data.deleted} entries removed`);
         } else {
             throw new Error(data.error || 'Failed to deduplicate');
         }
@@ -482,7 +515,7 @@ async function deleteAllRows() {
         return;
     }
     
-    if (!confirm(`WARNING: This will delete ALL rows from table "${currentTable}"!\n\nThis action cannot be undone!\n\nType "DELETE ALL" to confirm:`)) {
+    if (!confirm(`WARNING: This will delete ALL rows from table "${currentTable}"!\n\nThis action cannot be undone!`)) {
         return;
     }
     
@@ -500,16 +533,15 @@ async function deleteAllRows() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                db_path: currentDbPath,
-                confirm: true
+                db_path: currentDbPath
             })
         });
         
         const data = await response.json();
         if (data.success) {
-            alert(`Deleted ${data.deleted_count} rows from table "${currentTable}"`);
+            alert(`Deleted ${data.deleted} rows from table "${currentTable}"`);
             loadTableData(currentTable);
-            updateStatus(`Deleted ${data.deleted_count} rows`);
+            updateStatus(`Deleted ${data.deleted} rows`);
         } else {
             throw new Error(data.error || 'Failed to delete rows');
         }
@@ -518,6 +550,4 @@ async function deleteAllRows() {
         console.error('Error deleting rows:', error);
     }
 }
-
-
 

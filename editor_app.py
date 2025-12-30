@@ -129,6 +129,42 @@ def init_database(mission_dir=None):
         )
     ''')
     
+    # Table for valueflags (synced with cfglimitsdefinition.xml)
+    # Note: "values" is a SQL reserved keyword, so we use "valueflags" instead
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS valueflags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Note: element_values table is deprecated - values are now stored in type_element_fields
+    # Keep table creation for backward compatibility during migration
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS element_values (
+            element_key TEXT NOT NULL,
+            value_id INTEGER NOT NULL,
+            PRIMARY KEY (element_key, value_id),
+            FOREIGN KEY (element_key) REFERENCES type_elements(element_key),
+            FOREIGN KEY (value_id) REFERENCES valueflags(id)
+        )
+    ''')
+    
+    # Table for normalized type element fields
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS type_element_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            element_key TEXT NOT NULL,
+            field_name TEXT NOT NULL,
+            field_value TEXT,
+            field_order INTEGER,
+            attributes_json TEXT,
+            FOREIGN KEY (element_key) REFERENCES type_elements(element_key),
+            UNIQUE(element_key, field_name, field_order)
+        )
+    ''')
+    
     # Migrate old groups table to itemclasses if it exists
     cursor.execute('''
         SELECT name FROM sqlite_master 
@@ -154,6 +190,25 @@ def init_database(mission_dir=None):
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_itemclass_id ON element_itemclasses(itemclass_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_itemtag_id ON element_itemtags(itemtag_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_itemtag_element ON element_itemtags(element_key)')
+    # Note: element_values indexes kept for backward compatibility during migration
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_value_id ON element_values(value_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_value_element ON element_values(element_key)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_valueflags_name ON valueflags(name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_element_field_key ON type_element_fields(element_key)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_element_field_name ON type_element_fields(field_name)')
+    
+    # Check if normalized table is empty but type_elements has data
+    # If so, this might be an old database that needs migration
+    cursor.execute('SELECT COUNT(*) as count FROM type_elements')
+    element_count = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) as count FROM type_element_fields')
+    field_count = cursor.fetchone()[0]
+    
+    # If we have elements but no normalized fields, suggest running migration
+    # (We don't auto-migrate here to avoid performance issues on every init)
+    if element_count > 0 and field_count == 0:
+        print(f"WARNING: Database has {element_count} elements but no normalized fields.")
+        print("Consider running: python populate_type_element_fields.py <mission_directory>")
     
     conn.commit()
     conn.close()
@@ -306,7 +361,166 @@ def to_db_string(value):
         # Convert dict to JSON string
         return json.dumps(value)
     return str(value)
-    return str(value)
+
+
+def save_element_fields_to_normalized(cursor, element_key, data_dict):
+    """Save element fields to normalized type_element_fields table."""
+    # Delete existing fields for this element
+    cursor.execute('DELETE FROM type_element_fields WHERE element_key = ?', (element_key,))
+    
+    # Process each field
+    for field_name, field_value in data_dict.items():
+        # Skip internal fields (they're metadata, not actual element fields)
+        if field_name.startswith('_'):
+            continue
+        
+        # Handle different field types
+        if field_value is None:
+            continue
+        elif isinstance(field_value, list):
+            # Array field - store each item with its order
+            for order, item in enumerate(field_value):
+                if isinstance(item, dict):
+                    # Object in array (e.g., usage, category, value with name attribute)
+                    text_value = item.get('_text') or item.get('name') or None
+                    # Store all attributes except _text in attributes_json
+                    attrs = {k: v for k, v in item.items() if k != '_text'}
+                    attrs_json = json.dumps(attrs) if attrs else None
+                    cursor.execute('''
+                        INSERT INTO type_element_fields 
+                        (element_key, field_name, field_value, field_order, attributes_json)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (element_key, field_name, text_value, order, attrs_json))
+                elif isinstance(item, str):
+                    cursor.execute('''
+                        INSERT INTO type_element_fields 
+                        (element_key, field_name, field_value, field_order, attributes_json)
+                        VALUES (?, ?, ?, ?, NULL)
+                    ''', (element_key, field_name, item, order))
+                else:
+                    cursor.execute('''
+                        INSERT INTO type_element_fields 
+                        (element_key, field_name, field_value, field_order, attributes_json)
+                        VALUES (?, ?, ?, ?, NULL)
+                    ''', (element_key, field_name, str(item), order))
+        elif isinstance(field_value, dict):
+            # Object field (e.g., usage, category with name attribute)
+            text_value = field_value.get('_text') or field_value.get('name') or None
+            attrs = {k: v for k, v in field_value.items() if k != '_text'}
+            attrs_json = json.dumps(attrs) if attrs else None
+            cursor.execute('''
+                INSERT INTO type_element_fields 
+                (element_key, field_name, field_value, field_order, attributes_json)
+                VALUES (?, ?, ?, NULL, ?)
+            ''', (element_key, field_name, text_value, attrs_json))
+        else:
+            # Simple value (string, number, etc.)
+            cursor.execute('''
+                INSERT INTO type_element_fields 
+                (element_key, field_name, field_value, field_order, attributes_json)
+                VALUES (?, ?, ?, NULL, NULL)
+            ''', (element_key, field_name, str(field_value),))
+
+
+def load_element_fields_from_normalized(cursor, element_key):
+    """Load element fields from normalized type_element_fields table and reconstruct data dict."""
+    cursor.execute('''
+        SELECT field_name, field_value, field_order, attributes_json
+        FROM type_element_fields
+        WHERE element_key = ?
+        ORDER BY field_name, field_order
+    ''', (element_key,))
+    
+    data_dict = {}
+    for row in cursor.fetchall():
+        field_name = row['field_name']
+        field_value = row['field_value']
+        field_order = row['field_order']
+        attributes_json = row['attributes_json']
+        
+        # Handle array vs single value
+        if field_order is not None:
+            # Array field
+            if field_name not in data_dict:
+                data_dict[field_name] = []
+            if attributes_json:
+                # Object in array with attributes
+                attrs = json.loads(attributes_json)
+                if field_value:
+                    attrs['_text'] = field_value
+                data_dict[field_name].append(attrs)
+            else:
+                # Simple value in array
+                data_dict[field_name].append(field_value)
+        else:
+            # Single value
+            if attributes_json:
+                # Object with attributes
+                attrs = json.loads(attributes_json)
+                if field_value:
+                    attrs['_text'] = field_value
+                data_dict[field_name] = attrs
+            else:
+                # Simple value
+                data_dict[field_name] = field_value
+    
+    # If 'value' field exists, also populate _values and _value_names for compatibility
+    if 'value' in data_dict:
+        value_list = data_dict['value']
+        if isinstance(value_list, list):
+            # Convert to _values format (array of objects with id and name)
+            # We'll need to look up value IDs from valueflags table
+            _values = []
+            _value_names = []
+            for val in value_list:
+                if isinstance(val, dict):
+                    val_name = val.get('name')
+                    if val_name:
+                        _value_names.append(val_name)
+                        # Try to get ID from valueflags table
+                        cursor.execute('SELECT id FROM valueflags WHERE name = ?', (val_name,))
+                        val_row = cursor.fetchone()
+                        if val_row:
+                            _values.append({'id': val_row['id'], 'name': val_name})
+                        else:
+                            _values.append({'id': None, 'name': val_name})
+            if _values:
+                data_dict['_values'] = _values
+                data_dict['_value_names'] = _value_names
+    
+    return data_dict
+
+
+def ensure_normalized_fields_populated(cursor, element_key, data_dict=None):
+    """
+    Ensure normalized fields exist for an element. If not, populate from JSON data.
+    This is a helper to handle cases where normalized fields might be missing.
+    """
+    # Check if normalized fields exist
+    cursor.execute('SELECT COUNT(*) FROM type_element_fields WHERE element_key = ?', (element_key,))
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        # No normalized fields, try to populate from JSON data
+        if data_dict is None:
+            # Try to get from type_elements.data
+            cursor.execute('SELECT data FROM type_elements WHERE element_key = ?', (element_key,))
+            row = cursor.fetchone()
+            if row:
+                try:
+                    data_dict = json.loads(row['data'])
+                    # Normalize single-value fields
+                    for field in SINGLE_VALUE_FIELDS:
+                        if field in data_dict:
+                            data_dict[field] = normalize_single_value_field(data_dict[field], field)
+                except:
+                    return False
+        
+        if data_dict:
+            save_element_fields_to_normalized(cursor, element_key, data_dict)
+            return True
+    
+    return count > 0
 
 
 def load_xml_to_database(mission_dir, element_type='type'):
@@ -433,7 +647,7 @@ def load_xml_to_database(mission_dir, element_type='type'):
                 # Normalize name for database storage (convert lists/dicts to strings)
                 name_for_db = to_db_string(name_value)
                 
-                # Store element data as JSON
+                # Store element data as JSON (for backward compatibility)
                 data_json = json.dumps(elem)
                 
                 # Insert or update (same name = same element, updates existing)
@@ -450,6 +664,9 @@ def load_xml_to_database(mission_dir, element_type='type'):
                     source_folder,
                     datetime.now().isoformat()
                 ))
+                
+                # Also save to normalized fields table
+                save_element_fields_to_normalized(cursor, element_key, elem)
                 element_count += 1
             
             file_count += 1
@@ -529,12 +746,56 @@ def get_elements():
         
         elements = []
         for row in cursor.fetchall():
-            data = json.loads(row['data'])
+            element_key = row['element_key']
             
-            # Normalize single-value fields when reading from database (for consistency)
-            for field in SINGLE_VALUE_FIELDS:
-                if field in data:
-                    data[field] = normalize_single_value_field(data[field], field)
+            # Try to load from normalized fields first, fallback to JSON data
+            normalized_data = load_element_fields_from_normalized(cursor, element_key)
+            if normalized_data:
+                data = normalized_data
+            else:
+                # Fallback to JSON data (for backward compatibility)
+                data = json.loads(row['data'])
+                # Normalize single-value fields when reading from database (for consistency)
+                for field in SINGLE_VALUE_FIELDS:
+                    if field in data:
+                        data[field] = normalize_single_value_field(data[field], field)
+                
+                # Extract values from JSON blob if present (similar to load_element_fields_from_normalized)
+                if 'value' in data:
+                    value_list = data['value']
+                    if isinstance(value_list, list):
+                        _values = []
+                        _value_names = []
+                        for val in value_list:
+                            if isinstance(val, dict):
+                                val_name = val.get('name')
+                                if val_name:
+                                    _value_names.append(val_name)
+                                    # Try to get ID from valueflags table
+                                    cursor.execute('SELECT id FROM valueflags WHERE name = ?', (val_name,))
+                                    val_row = cursor.fetchone()
+                                    if val_row:
+                                        _values.append({'id': val_row['id'], 'name': val_name})
+                                    else:
+                                        _values.append({'id': None, 'name': val_name})
+                            elif isinstance(val, str):
+                                # Handle string values
+                                _value_names.append(val)
+                                cursor.execute('SELECT id FROM valueflags WHERE name = ?', (val,))
+                                val_row = cursor.fetchone()
+                                if val_row:
+                                    _values.append({'id': val_row['id'], 'name': val})
+                                else:
+                                    _values.append({'id': None, 'name': val})
+                        if _values:
+                            data['_values'] = _values
+                            data['_value_names'] = _value_names
+                
+                # Try to populate normalized fields for future use (non-blocking)
+                try:
+                    ensure_normalized_fields_populated(cursor, element_key, data)
+                except:
+                    pass  # Don't fail if normalization fails
             
             data['_element_key'] = row['element_key']
             data['_source_file'] = row['source_file']
@@ -556,6 +817,9 @@ def get_elements():
             itemtags = [{'id': tag_row['id'], 'name': tag_row['name']} for tag_row in cursor.fetchall()]
             data['_itemtags'] = itemtags
             data['_itemtag_names'] = [tag['name'] for tag in itemtags]
+            
+            # Values are already populated by load_element_fields_from_normalized() from type_element_fields
+            # Or extracted from JSON blob if falling back
             
             elements.append(data)
         
@@ -587,7 +851,11 @@ def update_field(element_key, field_name):
             conn.close()
             return jsonify({'error': 'Element not found'}), 404
         
-        element_data = json.loads(row['data'])
+        # Try to load from normalized fields first, fallback to JSON
+        element_data = load_element_fields_from_normalized(cursor, element_key)
+        if not element_data:
+            element_data = json.loads(row['data'])
+        
         old_value = element_data.get(field_name)
         
         # Normalize single-value fields if this is one of them
@@ -597,12 +865,15 @@ def update_field(element_key, field_name):
         # Update the field
         element_data[field_name] = new_value
         
-        # Save updated data
+        # Save updated data to both JSON (backward compatibility) and normalized fields
         cursor.execute('''
             UPDATE type_elements 
             SET data = ?, updated_at = ?
             WHERE element_key = ?
         ''', (json.dumps(element_data), datetime.now().isoformat(), element_key))
+        
+        # Update normalized fields
+        save_element_fields_to_normalized(cursor, element_key, element_data)
         
         # Record in edit history for undo support
         cursor.execute('''
@@ -657,7 +928,10 @@ def undo_edit(element_key):
             conn.close()
             return jsonify({'error': 'Element not found'}), 404
         
-        element_data = json.loads(elem_row['data'])
+        # Try to load from normalized fields first, fallback to JSON
+        element_data = load_element_fields_from_normalized(cursor, element_key)
+        if not element_data:
+            element_data = json.loads(elem_row['data'])
         
         # Handle special fields
         if field_name == '_itemclass_id':
@@ -689,6 +963,9 @@ def undo_edit(element_key):
                 SET data = ?, updated_at = ?
                 WHERE element_key = ?
             ''', (json.dumps(element_data), datetime.now().isoformat(), element_key))
+            
+            # Update normalized fields
+            save_element_fields_to_normalized(cursor, element_key, element_data)
         
         # Remove the undone edit from history
         cursor.execute('''
@@ -1103,7 +1380,34 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
     for row in cursor.fetchall():
         source_folder = row['source_folder']
         source_file = row['source_file']
-        data = json.loads(row['data'])
+        element_key = row['element_key']
+        
+        # Try to load from normalized fields first, fallback to JSON
+        data = load_element_fields_from_normalized(cursor, element_key)
+        if not data:
+            # Fallback to JSON data (for backward compatibility)
+            data = json.loads(row['data'])
+            # Normalize single-value fields when reading from database (for consistency)
+            for field in SINGLE_VALUE_FIELDS:
+                if field in data:
+                    data[field] = normalize_single_value_field(data[field], field)
+        
+        # Get values from normalized fields (already in data if loaded from normalized)
+        # If not present, try to get from element_values for backward compatibility
+        if 'value' not in data or not data.get('value'):
+            cursor.execute('''
+                SELECT v.name
+                FROM valueflags v
+                JOIN element_values ev ON v.id = ev.value_id
+                WHERE ev.element_key = ?
+            ''', (element_key,))
+            value_names = [val_row['name'] for val_row in cursor.fetchall()]
+            
+            # Add values to data in the correct format for XML export
+            if value_names:
+                # Format as list of dicts with 'name' attribute: [{'name': 'Tier3'}, {'name': 'Tier4'}]
+                data['value'] = [{'name': name} for name in value_names]
+        
         files_data[(source_folder, source_file)].append(data)
     
     conn.close()
@@ -1189,9 +1493,30 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
     unassigned_elements = []
     
     for row in cursor.fetchall():
-        data = json.loads(row['data'])
+        element_key = row['element_key']
         itemclass_id = row['itemclass_id']
         itemclass_name = row['itemclass_name']
+        
+        # Try to load from normalized fields first, fallback to JSON
+        data = load_element_fields_from_normalized(cursor, element_key)
+        if not data:
+            data = json.loads(row['data'])
+        
+        # Get values from normalized fields (already in data if loaded from normalized)
+        # If not present, try to get from element_values for backward compatibility
+        if 'value' not in data or not data.get('value'):
+            cursor.execute('''
+                SELECT v.name
+                FROM valueflags v
+                JOIN element_values ev ON v.id = ev.value_id
+                WHERE ev.element_key = ?
+            ''', (element_key,))
+            value_names = [val_row['name'] for val_row in cursor.fetchall()]
+            
+            # Add values to data in the correct format for XML export
+            if value_names:
+                # Format as list of dicts with 'name' attribute: [{'name': 'Tier3'}, {'name': 'Tier4'}]
+                data['value'] = [{'name': name} for name in value_names]
         
         if itemclass_id and itemclass_name:
             # Sanitize itemclass name for filename (remove invalid characters)
@@ -1610,6 +1935,9 @@ def merge_xml_file(mission_dir, xml_file_path, element_type='type'):
                     datetime.now().isoformat()
                 ))
                 
+                # Also save to normalized fields
+                save_element_fields_to_normalized(cursor, element_key, elem)
+                
                 # Check if insert was successful (not ignored)
                 if cursor.rowcount > 0:
                     added_count += 1
@@ -1845,6 +2173,14 @@ def import_from_database(mission_dir, source_db_path):
                 row['source_folder'],
                 datetime.now().isoformat()
             ))
+            
+            # Also save to normalized fields
+            try:
+                import_data = json.loads(normalized_data)
+                save_element_fields_to_normalized(target_cursor, element_key, import_data)
+            except:
+                pass  # If parsing fails, skip normalized fields
+            
             existing_keys.add(element_key)
             imported_count += 1
         
@@ -1978,6 +2314,454 @@ def stream_events():
             except GeneratorExit:
                 break
     return Response(event_stream(), mimetype='text/event-stream')
+
+
+def get_cfglimitsdefinition_path(mission_dir):
+    """Get the path to cfglimitsdefinition.xml for a given mission directory."""
+    mission_path = Path(mission_dir)
+    return mission_path / 'cfglimitsdefinition.xml'
+
+
+def read_valueflags(mission_dir):
+    """
+    Read valueflags from cfglimitsdefinition.xml.
+    Returns a list of value names.
+    """
+    xml_file = get_cfglimitsdefinition_path(mission_dir)
+    
+    if not xml_file.exists():
+        return []
+    
+    try:
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+        
+        # Find valueflags section
+        valueflags_elem = root.find('valueflags')
+        if valueflags_elem is None:
+            return []
+        
+        # Extract all value names
+        values = []
+        for value_elem in valueflags_elem.findall('value'):
+            name_attr = value_elem.get('name')
+            if name_attr:
+                values.append(name_attr)
+        
+        return sorted(values)
+    except Exception as e:
+        print(f"Error reading cfglimitsdefinition.xml: {e}")
+        return []
+
+
+def add_valueflag(mission_dir, value_name):
+    """
+    Add a new valueflag to cfglimitsdefinition.xml.
+    Returns success status and error message if any.
+    """
+    xml_file = get_cfglimitsdefinition_path(mission_dir)
+    value_name = value_name.strip()
+    
+    if not value_name:
+        return {'success': False, 'error': 'Value name is required'}
+    
+    try:
+        # Create file if it doesn't exist
+        if not xml_file.exists():
+            # Create a basic XML structure
+            root = ET.Element('cfglimitsdefinition')
+            valueflags_elem = ET.SubElement(root, 'valueflags')
+            tree = ET.ElementTree(root)
+        else:
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
+        
+        # Find or create valueflags section
+        valueflags_elem = root.find('valueflags')
+        if valueflags_elem is None:
+            valueflags_elem = ET.SubElement(root, 'valueflags')
+        
+        # Check if value already exists
+        for value_elem in valueflags_elem.findall('value'):
+            if value_elem.get('name') == value_name:
+                return {'success': False, 'error': f'Value "{value_name}" already exists'}
+        
+        # Add new value
+        new_value = ET.SubElement(valueflags_elem, 'value')
+        new_value.set('name', value_name)
+        
+        # Write back to file with proper formatting
+        tree = ET.ElementTree(root)
+        try:
+            ET.indent(tree, space='    ')
+        except AttributeError:
+            pass
+        
+        # Write to file with XML declaration
+        with open(xml_file, 'wb') as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
+            tree.write(f, encoding='utf-8', xml_declaration=False)
+        
+        return {'success': True}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def sync_values_from_xml(mission_dir):
+    """Sync values from cfglimitsdefinition.xml to database."""
+    xml_values = read_valueflags(mission_dir)
+    conn = get_db_connection(mission_dir)
+    cursor = conn.cursor()
+    
+    # Get existing values from database
+    cursor.execute('SELECT name FROM valueflags')
+    db_values = {row['name'] for row in cursor.fetchall()}
+    
+    # Add values from XML that don't exist in database
+    for value_name in xml_values:
+        if value_name not in db_values:
+            try:
+                cursor.execute('INSERT INTO valueflags (name) VALUES (?)', (value_name,))
+            except sqlite3.IntegrityError:
+                pass  # Already exists
+    
+    conn.commit()
+    conn.close()
+
+
+@app.route('/api/values', methods=['GET', 'POST'])
+def manage_values():
+    """Get all values or create a new value."""
+    try:
+        mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None) or current_mission_dir
+        
+        # Ensure database is initialized for this mission directory
+        init_database(mission_dir)
+        
+        # Sync values from XML first (ignore errors if XML doesn't exist)
+        try:
+            sync_values_from_xml(mission_dir)
+        except Exception as e:
+            # If XML sync fails, continue anyway (XML might not exist yet)
+            print(f"Warning: Could not sync values from XML: {e}")
+        
+        conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            if not data:
+                conn.close()
+                return jsonify({'error': 'No data provided'}), 400
+            
+            value_name = data.get('name', '').strip()
+            
+            if not value_name:
+                conn.close()
+                return jsonify({'error': 'Value name is required'}), 400
+            
+            try:
+                # Add to database
+                cursor.execute('INSERT INTO valueflags (name) VALUES (?)', (value_name,))
+                conn.commit()
+                value_id = cursor.lastrowid
+                
+                # Also add to XML file
+                result = add_valueflag(mission_dir, value_name)
+                if not result.get('success'):
+                    # Rollback database change if XML update fails
+                    cursor.execute('DELETE FROM valueflags WHERE id = ?', (value_id,))
+                    conn.commit()
+                    conn.close()
+                    return jsonify({'error': result.get('error', 'Failed to add value to XML')}), 400
+                
+                conn.close()
+                return jsonify({'success': True, 'id': value_id, 'name': value_name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Value name already exists'}), 400
+            except Exception as e:
+                conn.close()
+                return jsonify({'error': f'Database error: {str(e)}'}), 500
+        else:
+            cursor.execute('SELECT id, name FROM valueflags ORDER BY name')
+            values = [{'id': row['id'], 'name': row['name']} for row in cursor.fetchall()]
+            conn.close()
+            return jsonify({'values': values})
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/values/<int:value_id>', methods=['PUT', 'DELETE'])
+def manage_value(value_id):
+    """Update or delete a value."""
+    mission_dir = request.json.get('mission_dir', current_mission_dir) if request.json else current_mission_dir
+    
+    # Ensure database is initialized for this mission directory
+    init_database(mission_dir)
+    
+    conn = get_db_connection(mission_dir)
+    cursor = conn.cursor()
+    
+    if request.method == 'PUT':
+        data = request.json
+        new_name = data.get('name')
+        
+        if not new_name:
+            conn.close()
+            return jsonify({'error': 'Value name is required'}), 400
+        
+        # Get old name for XML update
+        cursor.execute('SELECT name FROM valueflags WHERE id = ?', (value_id,))
+        old_row = cursor.fetchone()
+        if not old_row:
+            conn.close()
+            return jsonify({'error': 'Value not found'}), 404
+        
+        old_name = old_row['name']
+        
+        try:
+            cursor.execute('UPDATE valueflags SET name = ? WHERE id = ?', (new_name, value_id))
+            conn.commit()
+            conn.close()
+            
+            # Update XML file (remove old, add new)
+            xml_file = get_cfglimitsdefinition_path(mission_dir)
+            if xml_file.exists():
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                valueflags_elem = root.find('valueflags')
+                if valueflags_elem is not None:
+                    for value_elem in valueflags_elem.findall('value'):
+                        if value_elem.get('name') == old_name:
+                            value_elem.set('name', new_name)
+                            tree = ET.ElementTree(root)
+                            try:
+                                ET.indent(tree, space='    ')
+                            except AttributeError:
+                                pass
+                            with open(xml_file, 'wb') as f:
+                                f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
+                                tree.write(f, encoding='utf-8', xml_declaration=False)
+                            break
+            
+            return jsonify({'success': True, 'name': new_name})
+        except sqlite3.IntegrityError:
+            conn.close()
+            return jsonify({'error': 'Value name already exists'}), 400
+    else:
+        # DELETE - Remove all element assignments
+        # Remove value from all elements that have it in type_element_fields
+        # Get all elements with this value
+        cursor.execute('''
+            SELECT DISTINCT element_key 
+            FROM type_element_fields 
+            WHERE field_name = 'value' 
+            AND attributes_json LIKE ?
+        ''', (f'%"name":"{value_name}"%',))
+        
+        for row in cursor.fetchall():
+            element_key = row['element_key']
+            # Load current data
+            normalized_data = load_element_fields_from_normalized(cursor, element_key)
+            if 'value' in normalized_data and isinstance(normalized_data['value'], list):
+                # Remove the value
+                normalized_data['value'] = [v for v in normalized_data['value'] 
+                                           if not (isinstance(v, dict) and v.get('name') == value_name)]
+                if not normalized_data['value']:
+                    normalized_data.pop('value', None)
+                # Save back
+                save_element_fields_to_normalized(cursor, element_key, normalized_data)
+                # Update JSON blob
+                cursor.execute('''
+                    UPDATE type_elements 
+                    SET data = ?, updated_at = ?
+                    WHERE element_key = ?
+                ''', (json.dumps(normalized_data), datetime.now().isoformat(), element_key))
+        
+        # Also clean up from element_values for backward compatibility
+        cursor.execute('DELETE FROM element_values WHERE value_id = ?', (value_id,))
+        
+        # Get value name for XML removal
+        cursor.execute('SELECT name FROM valueflags WHERE id = ?', (value_id,))
+        value_row = cursor.fetchone()
+        value_name = value_row['name'] if value_row else None
+        
+        # Delete value
+        cursor.execute('DELETE FROM valueflags WHERE id = ?', (value_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        # Remove from XML file
+        if value_name:
+            xml_file = get_cfglimitsdefinition_path(mission_dir)
+            if xml_file.exists():
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                valueflags_elem = root.find('valueflags')
+                if valueflags_elem is not None:
+                    for value_elem in valueflags_elem.findall('value'):
+                        if value_elem.get('name') == value_name:
+                            valueflags_elem.remove(value_elem)
+                            tree = ET.ElementTree(root)
+                            try:
+                                ET.indent(tree, space='    ')
+                            except AttributeError:
+                                pass
+                            with open(xml_file, 'wb') as f:
+                                f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
+                                tree.write(f, encoding='utf-8', xml_declaration=False)
+                            break
+        
+        return jsonify({'success': True})
+
+
+@app.route('/api/elements/<element_key>/values', methods=['PUT'])
+def manage_element_values(element_key):
+    """Update element values - simplified version."""
+    try:
+        # URL decode the element_key
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        mission_dir = request.json.get('mission_dir', current_mission_dir)
+        
+        # Ensure database is initialized
+        init_database(mission_dir)
+        
+        conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': f'Element {element_key} not found'}), 404
+        
+        # Get current element data to preserve other fields
+        normalized_data = load_element_fields_from_normalized(cursor, element_key)
+        if not normalized_data:
+            cursor.execute('SELECT data FROM type_elements WHERE element_key = ?', (element_key,))
+            row = cursor.fetchone()
+            if row:
+                try:
+                    normalized_data = json.loads(row['data'])
+                except json.JSONDecodeError:
+                    conn.close()
+                    return jsonify({'error': 'Invalid JSON data in element'}), 500
+            else:
+                normalized_data = {}
+        
+        # Get old value names for edit history
+        old_value_names = []
+        if 'value' in normalized_data and isinstance(normalized_data['value'], list):
+            old_value_names = [v.get('name') if isinstance(v, dict) else str(v) for v in normalized_data['value']]
+        
+        # Get new value IDs from request
+        data = request.json
+        new_value_ids = data.get('value_ids', [])
+        
+        if not isinstance(new_value_ids, list):
+            conn.close()
+            return jsonify({'error': 'value_ids must be a list'}), 400
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for vid in new_value_ids:
+            if vid is not None and vid not in seen:
+                try:
+                    valid_ids.append(int(vid))
+                    seen.add(vid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Get value names from IDs (maintain order)
+        new_value_names = []
+        if valid_ids:
+            # Create a mapping of id -> name to preserve order
+            placeholders = ','.join(['?'] * len(valid_ids))
+            cursor.execute(f'SELECT id, name FROM valueflags WHERE id IN ({placeholders})', valid_ids)
+            id_to_name = {row['id']: row['name'] for row in cursor.fetchall()}
+            # Preserve the order from valid_ids
+            new_value_names = [id_to_name[vid] for vid in valid_ids if vid in id_to_name]
+        
+        # Update the 'value' field - remove duplicates by name
+        if new_value_names:
+            # Remove duplicates while preserving order
+            seen_names = set()
+            unique_value_names = []
+            for name in new_value_names:
+                if name not in seen_names:
+                    unique_value_names.append(name)
+                    seen_names.add(name)
+            normalized_data['value'] = [{'name': name} for name in unique_value_names]
+        else:
+            normalized_data.pop('value', None)
+        
+        # Save to normalized fields (this will delete and recreate all fields)
+        save_element_fields_to_normalized(cursor, element_key, normalized_data)
+        
+        # Also update JSON blob for backward compatibility
+        cursor.execute('''
+            UPDATE type_elements 
+            SET data = ?, updated_at = ?
+            WHERE element_key = ?
+        ''', (json.dumps(normalized_data), datetime.now().isoformat(), element_key))
+        
+        # Record in edit history for undo support
+        cursor.execute('''
+            INSERT INTO edit_history (element_key, field_name, old_value, new_value)
+            VALUES (?, ?, ?, ?)
+        ''', (
+            element_key,
+            'value',
+            json.dumps([{'name': n} for n in old_value_names]) if old_value_names else None,
+            json.dumps([{'name': n} for n in new_value_names]) if new_value_names else None
+        ))
+        
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        if 'conn' in locals():
+            try:
+                conn.rollback()
+                conn.close()
+            except:
+                pass
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/valueflags', methods=['GET', 'POST'])
+def manage_valueflags():
+    """Get all valueflags or add a new valueflag (legacy endpoint for compatibility)."""
+    mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None) or current_mission_dir
+    
+    if request.method == 'POST':
+        data = request.json
+        value_name = data.get('name', '').strip()
+        
+        if not value_name:
+            return jsonify({'error': 'Value name is required'}), 400
+        
+        result = add_valueflag(mission_dir, value_name)
+        if result.get('success'):
+            # Also sync to database
+            sync_values_from_xml(mission_dir)
+            return jsonify({'success': True, 'name': value_name})
+        else:
+            return jsonify({'error': result.get('error', 'Failed to add value')}), 400
+    else:
+        values = read_valueflags(mission_dir)
+        return jsonify({'valueflags': values})
 
 
 if __name__ == '__main__':

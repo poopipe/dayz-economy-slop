@@ -14,8 +14,11 @@ let selectedItemclassFilters = new Set();
 let excludedItemclassFilters = new Set();
 let selectedItemtagFilters = new Set();
 let excludedItemtagFilters = new Set();
+let selectedValueFilters = new Set();
+let excludedValueFilters = new Set();
 let itemclasses = [];
 let itemtags = [];
+let values = [];
 let currentEditElement = null;
 let currentEditField = null;
 let selectedRows = new Set();
@@ -28,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     loadItemclasses();
     loadItemtags();
+    loadValues();
     loadElements();
     startFileWatcher();
 });
@@ -154,6 +158,26 @@ function loadSettings() {
             if (settings.selectedColumns && Array.isArray(settings.selectedColumns)) {
                 selectedColumns = new Set(settings.selectedColumns);
             }
+            
+            // Load filter states
+            if (settings.selectedItemclassFilters && Array.isArray(settings.selectedItemclassFilters)) {
+                selectedItemclassFilters = new Set(settings.selectedItemclassFilters);
+            }
+            if (settings.excludedItemclassFilters && Array.isArray(settings.excludedItemclassFilters)) {
+                excludedItemclassFilters = new Set(settings.excludedItemclassFilters);
+            }
+            if (settings.selectedItemtagFilters && Array.isArray(settings.selectedItemtagFilters)) {
+                selectedItemtagFilters = new Set(settings.selectedItemtagFilters);
+            }
+            if (settings.excludedItemtagFilters && Array.isArray(settings.excludedItemtagFilters)) {
+                excludedItemtagFilters = new Set(settings.excludedItemtagFilters);
+            }
+            if (settings.selectedValueFilters && Array.isArray(settings.selectedValueFilters)) {
+                selectedValueFilters = new Set(settings.selectedValueFilters);
+            }
+            if (settings.excludedValueFilters && Array.isArray(settings.excludedValueFilters)) {
+                excludedValueFilters = new Set(settings.excludedValueFilters);
+            }
         }
     } catch (e) {
         console.error('Error loading settings:', e);
@@ -230,7 +254,7 @@ async function loadElements() {
                 tableColumns = Array.from(allColumns).sort();
                 
                 // Add internal columns
-                tableColumns.push('_element_key', '_source_file', '_source_folder', '_itemclass_id', '_itemclass_name', '_itemtags', '_itemtag_names');
+                tableColumns.push('_element_key', '_source_file', '_source_folder', '_itemclass_id', '_itemclass_name', '_itemtags', '_itemtag_names', '_values', '_value_names');
             } else {
                 tableColumns = [];
             }
@@ -342,10 +366,76 @@ async function loadItemtags() {
         itemtags = data.itemtags || [];
         displayItemtags();
         displayItemtagFilters();
+        displayValueFilters();
         updateBulkOperationControls();
     } catch (error) {
         console.error('Error loading itemtags:', error);
     }
+}
+
+async function loadValues() {
+    try {
+        const url = `/api/values${currentMissionDir ? '?mission_dir=' + encodeURIComponent(currentMissionDir) : ''}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        values = data.values || [];
+        displayValues();
+        displayValueFilters();
+    } catch (error) {
+        console.error('Error loading values:', error);
+        values = [];
+    }
+}
+
+function displayValues() {
+    const valuesListEl = document.getElementById('valuesList');
+    if (!valuesListEl) return;
+    valuesListEl.innerHTML = '';
+    
+    if (values.length === 0) {
+        valuesListEl.innerHTML = '<p class="no-values">No values created</p>';
+        return;
+    }
+    
+    values.forEach(value => {
+        const valueItem = document.createElement('div');
+        valueItem.className = 'value-item';
+        valueItem.innerHTML = `
+            <span class="value-name">${value.name}</span>
+            <button class="btn-delete-value" data-value-id="${value.id}" title="Delete value">×</button>
+        `;
+        valuesListEl.appendChild(valueItem);
+    });
+    
+    // Add delete handlers
+    valuesListEl.querySelectorAll('.btn-delete-value').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const valueId = parseInt(btn.getAttribute('data-value-id'));
+            if (confirm(`Delete value "${values.find(v => v.id === valueId)?.name}"?`)) {
+                try {
+                    const response = await fetch(`/api/values/${valueId}`, {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            mission_dir: currentMissionDir
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.success) {
+                        await loadValues();
+                    } else {
+                        alert(data.error || 'Failed to delete value');
+                    }
+                } catch (error) {
+                    console.error('Error deleting value:', error);
+                    alert(`Error deleting value: ${error.message}`);
+                }
+            }
+        });
+    });
 }
 
 function displayItemtags() {
@@ -414,7 +504,7 @@ function displayColumnSelector() {
     filterSelectEl.innerHTML = '<option value="">-- Select Column --</option>';
     
     const priorityColumns = ['type', 'name', 'source', 'nominal', 'lifetime', 'restock', 'usage', 'value', 'flags', 'category', 'tag', 'cost', 'min', 'quantmin', 'quantmax'];
-    const internalPriorityColumns = ['_itemclass_name', '_itemtag_names'];
+    const internalPriorityColumns = ['_itemclass_name', '_itemtag_names', '_value_names'];
     const otherColumns = tableColumns.filter(col => !priorityColumns.includes(col) && !col.startsWith('_'));
     const otherInternalColumns = tableColumns.filter(col => col.startsWith('_') && !internalPriorityColumns.includes(col));
     const orderedColumns = [
@@ -488,7 +578,7 @@ function displayTable() {
     
     // Get selected columns in priority order
     const priorityColumns = ['type', 'name', 'source', 'nominal', 'lifetime', 'restock', 'usage', 'value', 'flags', 'category', 'tag', 'cost', 'min', 'quantmin', 'quantmax'];
-    const internalPriorityColumns = ['_itemclass_name', '_itemtag_names'];
+    const internalPriorityColumns = ['_itemclass_name', '_itemtag_names', '_value_names'];
     const selectedColsArray = Array.from(selectedColumns);
     const prioritySelected = priorityColumns.filter(col => selectedColsArray.includes(col));
     const internalPrioritySelected = internalPriorityColumns.filter(col => selectedColsArray.includes(col));
@@ -614,6 +704,50 @@ function displayTable() {
                 if (!isSourceColumn) {
                     td.className += ' readonly-cell';
                 }
+            } else if (col === '_value_names') {
+                if (Array.isArray(value)) {
+                    td.textContent = value.join(', ');
+                } else if (value) {
+                    td.textContent = String(value);
+                } else {
+                    td.textContent = '';
+                }
+                td.className += ' value-cell';
+                if (!isSourceColumn) {
+                    td.className += ' readonly-cell';
+                }
+            } else if (col === 'value') {
+                // Display value names - prefer _value_names, fallback to extracting from _values
+                let displayText = '';
+                const valueNames = record._value_names;
+                if (valueNames && Array.isArray(valueNames) && valueNames.length > 0) {
+                    displayText = valueNames.join(', ');
+                } else if (record._values && Array.isArray(record._values) && record._values.length > 0) {
+                    // Extract names from _values array (objects with id and name)
+                    displayText = record._values.map(v => v.name || String(v)).join(', ');
+                } else if (value) {
+                    // Try to extract names from value field if it's an object or array of objects
+                    if (Array.isArray(value)) {
+                        const names = value.map(v => {
+                            if (typeof v === 'object' && v !== null) {
+                                return v.name || v._text || String(v);
+                            }
+                            return String(v);
+                        });
+                        displayText = names.join(', ');
+                    } else if (typeof value === 'object' && value !== null) {
+                        // Single object - try to get name attribute
+                        displayText = value.name || value._text || String(value);
+                    } else {
+                        displayText = String(value);
+                    }
+                }
+                td.textContent = displayText;
+                td.className += ' editable-cell';
+                td.addEventListener('dblclick', () => {
+                    openEditModal(elementKey, col, value);
+                });
+                td.title = 'Double-click to edit';
             } else if (col === 'category' || col === 'usage') {
                 // Extract only the 'name' attribute value
                 if (value === undefined || value === null) {
@@ -708,7 +842,8 @@ function getFilteredAndSortedData() {
     
     // Apply filters
     if (activeFilters.length > 0 || selectedItemclassFilters.size > 0 || excludedItemclassFilters.size > 0 || 
-        selectedItemtagFilters.size > 0 || excludedItemtagFilters.size > 0) {
+        selectedItemtagFilters.size > 0 || excludedItemtagFilters.size > 0 ||
+        selectedValueFilters.size > 0 || excludedValueFilters.size > 0) {
         filtered = filtered.filter(item => {
             // Itemclass filters
             if (selectedItemclassFilters.size > 0) {
@@ -735,6 +870,22 @@ function getFilteredAndSortedData() {
             if (excludedItemtagFilters.size > 0) {
                 const itemtagIds = (item._itemtags || []).map(t => t.id);
                 const hasAny = Array.from(excludedItemtagFilters).some(id => itemtagIds.includes(id));
+                if (hasAny) {
+                    return false;
+                }
+            }
+            
+            // Value filters
+            if (selectedValueFilters.size > 0) {
+                const valueIds = (item._values || []).map(v => v.id);
+                const hasAny = Array.from(selectedValueFilters).some(id => valueIds.includes(id));
+                if (!hasAny) {
+                    return false;
+                }
+            }
+            if (excludedValueFilters.size > 0) {
+                const valueIds = (item._values || []).map(v => v.id);
+                const hasAny = Array.from(excludedValueFilters).some(id => valueIds.includes(id));
                 if (hasAny) {
                     return false;
                 }
@@ -899,6 +1050,70 @@ function displayItemtagFilters() {
     });
 }
 
+function displayValueFilters() {
+    const container = document.getElementById('valueFilterCheckboxes');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    values.forEach(value => {
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '5px';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = value.id;
+        checkbox.checked = selectedValueFilters.has(value.id);
+        checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+                selectedValueFilters.add(value.id);
+                excludedValueFilters.delete(value.id);
+            } else {
+                selectedValueFilters.delete(value.id);
+            }
+            saveSettings();
+            displayTable();
+        });
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(value.name));
+        container.appendChild(label);
+    });
+}
+
+function displayValueFilters() {
+    const container = document.getElementById('valueFilterCheckboxes');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    values.forEach(value => {
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '5px';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = value.id;
+        checkbox.checked = selectedValueFilters.has(value.id);
+        checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+                selectedValueFilters.add(value.id);
+                excludedValueFilters.delete(value.id);
+            } else {
+                selectedValueFilters.delete(value.id);
+            }
+            saveSettings();
+            displayTable();
+        });
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(value.name));
+        container.appendChild(label);
+    });
+}
+
 function updateMissionDir() {
     const input = document.getElementById('missionDir');
     if (input) {
@@ -908,8 +1123,10 @@ function updateMissionDir() {
             tableData = [];
             tableColumns = [];
             displayTable();
-            loadItemclasses();
-            loadItemtags();
+        loadItemclasses();
+        loadItemtags();
+        loadValueflags();
+        displayValueFilters();
             loadElements();
             loadBackupInfo();
         }
@@ -1089,6 +1306,135 @@ function openItemclassEditor(elementKey, currentItemclassId, currentItemclassNam
     }
 }
 
+function openValueEditor(elementKey, currentValue) {
+    currentEditElement = elementKey;
+    currentEditField = '_values';
+    
+    const modal = document.getElementById('editModal');
+    const label = document.getElementById('editFieldLabel');
+    const input = document.getElementById('editFieldValue');
+    
+    if (modal && label && input) {
+        label.textContent = 'Edit Values:';
+        
+        // Remove any existing select dropdowns or checkboxes
+        const existingItemclassSelect = document.getElementById('editItemclassSelect');
+        const existingValueSelect = document.getElementById('editValueSelect');
+        const existingValueCheckboxes = document.getElementById('editValueCheckboxes');
+        if (existingItemclassSelect) {
+            existingItemclassSelect.remove();
+        }
+        if (existingValueSelect) {
+            existingValueSelect.remove();
+        }
+        if (existingValueCheckboxes) {
+            existingValueCheckboxes.remove();
+        }
+        
+        // Get current value IDs from the record
+        const record = tableData.find(r => r._element_key === elementKey);
+        let currentValueIds = [];
+        
+        // Try multiple ways to get current values
+        if (record) {
+            // First try _values array (with IDs)
+            if (record._values && Array.isArray(record._values)) {
+                currentValueIds = record._values
+                    .map(v => {
+                        if (typeof v === 'object' && v !== null) {
+                            return v.id;
+                        }
+                        return null;
+                    })
+                    .filter(id => id !== null && id !== undefined);
+            }
+            // Fallback to _value_names and look up IDs
+            if (currentValueIds.length === 0 && record._value_names && Array.isArray(record._value_names)) {
+                currentValueIds = record._value_names
+                    .map(name => {
+                        const val = values.find(v => v.name === name);
+                        return val ? val.id : null;
+                    })
+                    .filter(id => id !== null && id !== undefined);
+            }
+            // Fallback to value field
+            if (currentValueIds.length === 0 && record.value) {
+                if (Array.isArray(record.value)) {
+                    currentValueIds = record.value
+                        .map(v => {
+                            if (typeof v === 'object' && v !== null && v.name) {
+                                const val = values.find(vf => vf.name === v.name);
+                                return val ? val.id : null;
+                            } else if (typeof v === 'string') {
+                                const val = values.find(vf => vf.name === v);
+                                return val ? val.id : null;
+                            }
+                            return null;
+                        })
+                        .filter(id => id !== null && id !== undefined);
+                }
+            }
+        }
+        
+        console.log('Current value IDs:', currentValueIds);
+        console.log('Available values:', values);
+        
+        // Create container for checkboxes
+        const container = document.createElement('div');
+        container.id = 'editValueCheckboxes';
+        container.className = 'value-checkboxes';
+        container.style.maxHeight = '300px';
+        container.style.overflowY = 'auto';
+        container.style.border = '1px solid #ccc';
+        container.style.padding = '10px';
+        container.style.marginTop = '10px';
+        container.style.borderRadius = '4px';
+        
+        // Add checkboxes for each value
+        if (values.length === 0) {
+            const noValuesMsg = document.createElement('p');
+            noValuesMsg.textContent = 'No values available. Add values in the sidebar first.';
+            noValuesMsg.style.color = '#666';
+            noValuesMsg.style.fontStyle = 'italic';
+            container.appendChild(noValuesMsg);
+        } else {
+            values.forEach(value => {
+                const labelEl = document.createElement('label');
+                labelEl.style.display = 'flex';
+                labelEl.style.alignItems = 'center';
+                labelEl.style.gap = '8px';
+                labelEl.style.marginBottom = '8px';
+                labelEl.style.cursor = 'pointer';
+                labelEl.style.padding = '4px';
+                labelEl.style.borderRadius = '3px';
+                labelEl.addEventListener('mouseenter', () => {
+                    labelEl.style.backgroundColor = '#f0f0f0';
+                });
+                labelEl.addEventListener('mouseleave', () => {
+                    labelEl.style.backgroundColor = 'transparent';
+                });
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = value.id;
+                checkbox.checked = currentValueIds.includes(value.id);
+                checkbox.id = `value-checkbox-${value.id}`;
+                
+                labelEl.appendChild(checkbox);
+                labelEl.appendChild(document.createTextNode(value.name));
+                container.appendChild(labelEl);
+            });
+        }
+        
+        // Replace input with checkboxes container
+        const form = input.parentElement;
+        input.style.display = 'none';
+        form.insertBefore(container, input);
+        
+        modal.style.display = 'block';
+    }
+}
+
 function openEditModal(elementKey, fieldName, currentValue) {
     // Don't open modal for itemclass - use special editor
     if (fieldName === '_itemclass_name' || fieldName === '_itemclass') {
@@ -1105,11 +1451,21 @@ function openEditModal(elementKey, fieldName, currentValue) {
     const input = document.getElementById('editFieldValue');
     
     if (modal && label && input) {
-        // Remove any existing select dropdown
-        const existingSelect = document.getElementById('editItemclassSelect');
-        if (existingSelect) {
-            existingSelect.remove();
-            input.style.display = 'block';
+        // Remove any existing select dropdowns
+        const existingItemclassSelect = document.getElementById('editItemclassSelect');
+        const existingValueSelect = document.getElementById('editValueSelect');
+        if (existingItemclassSelect) {
+            existingItemclassSelect.remove();
+        }
+        if (existingValueSelect) {
+            existingValueSelect.remove();
+        }
+        input.style.display = 'block';
+        
+        // Special handling for value field - show checkboxes for multiple selection
+        if (fieldName === 'value' || fieldName === '_value_names' || fieldName === '_values') {
+            openValueEditor(elementKey, currentValue);
+            return;
         }
         
         label.textContent = `Edit ${fieldName}:`;
@@ -1134,14 +1490,25 @@ function closeEditModal() {
         modal.style.display = 'none';
     }
     
-    // Clean up itemclass select if it exists
-    const select = document.getElementById('editItemclassSelect');
+    // Clean up itemclass select and value checkboxes if they exist
+    const itemclassSelect = document.getElementById('editItemclassSelect');
+    const valueSelect = document.getElementById('editValueSelect');
+    const valueCheckboxes = document.getElementById('editValueCheckboxes');
     const input = document.getElementById('editFieldValue');
-    if (select && input) {
-        select.remove();
+    if (itemclassSelect && input) {
+        itemclassSelect.remove();
+        input.style.display = 'block';
+    }
+    if (valueSelect && input) {
+        valueSelect.remove();
+        input.style.display = 'block';
+    }
+    if (valueCheckboxes && input) {
+        valueCheckboxes.remove();
         input.style.display = 'block';
     }
     window.currentItemclassSelect = null;
+    window.currentValueSelect = null;
     
     currentEditElement = null;
     currentEditField = null;
@@ -1182,6 +1549,50 @@ async function saveEdit() {
             alert(`Error saving itemclass: ${error.message}`);
         }
         return;
+    }
+    
+    // Handle value field editing with checkboxes
+    if (currentEditField === '_values') {
+        const checkboxesContainer = document.getElementById('editValueCheckboxes');
+        if (checkboxesContainer) {
+            const checkboxes = checkboxesContainer.querySelectorAll('input[type="checkbox"]');
+            const selectedValueIds = Array.from(checkboxes)
+                .filter(cb => cb.checked)
+                .map(cb => {
+                    const val = parseInt(cb.value);
+                    return isNaN(val) ? null : val;
+                })
+                .filter(id => id !== null);
+            
+            console.log('Saving values:', selectedValueIds);
+            
+            try {
+                const response = await fetch(`/api/elements/${encodeURIComponent(currentEditElement)}/values`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        value_ids: selectedValueIds,
+                        mission_dir: currentMissionDir
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    closeEditModal();
+                    loadElements();
+                    saveSettings();
+                    updateStatus('Values updated successfully');
+                } else {
+                    alert(data.error || 'Failed to save values');
+                }
+            } catch (error) {
+                console.error('Error saving values:', error);
+                alert(`Error saving values: ${error.message}`);
+            }
+            return;
+        }
     }
     
     const input = document.getElementById('editFieldValue');
@@ -1636,6 +2047,12 @@ document.addEventListener('DOMContentLoaded', () => {
         addItemtagBtn.addEventListener('click', addItemtag);
     }
     
+    // Add value
+    const addValueBtn = document.getElementById('addValueBtn');
+    if (addValueBtn) {
+        addValueBtn.addEventListener('click', addValue);
+    }
+    
     // Pagination
     const prevPageBtn = document.getElementById('prevPageBtn');
     const nextPageBtn = document.getElementById('nextPageBtn');
@@ -1768,6 +2185,54 @@ async function addItemtag() {
     }
 }
 
+async function addValue() {
+    const input = document.getElementById('newValueName');
+    if (!input) return;
+    
+    const name = input.value.trim();
+    if (!name) {
+        alert('Please enter a value name');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/values', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                mission_dir: currentMissionDir
+            })
+        });
+        
+        // Check if response is OK and is JSON
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server error response:', errorText);
+            try {
+                const errorData = JSON.parse(errorText);
+                alert(errorData.error || 'Failed to save value');
+            } catch (e) {
+                alert(`Server error: ${response.status} ${response.statusText}`);
+            }
+            return;
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+            input.value = '';
+            await loadValues();
+        } else {
+            alert(data.error || 'Failed to save value');
+        }
+    } catch (error) {
+        console.error('Error saving value:', error);
+        alert(`Error saving value: ${error.message}`);
+    }
+}
+
 async function bulkSetItemclass() {
     const select = document.getElementById('bulkItemclass');
     if (!select) return;
@@ -1862,7 +2327,13 @@ function saveSettings() {
         const settings = {
             mission_dir: currentMissionDir,
             elementType: currentElementType,
-            selectedColumns: Array.from(selectedColumns)
+            selectedColumns: Array.from(selectedColumns),
+            selectedItemclassFilters: Array.from(selectedItemclassFilters),
+            excludedItemclassFilters: Array.from(excludedItemclassFilters),
+            selectedItemtagFilters: Array.from(selectedItemtagFilters),
+            excludedItemtagFilters: Array.from(excludedItemtagFilters),
+            selectedValueFilters: Array.from(selectedValueFilters),
+            excludedValueFilters: Array.from(excludedValueFilters)
         };
         localStorage.setItem('xmlEditorSettings', JSON.stringify(settings));
     } catch (e) {
