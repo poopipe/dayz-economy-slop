@@ -1152,6 +1152,192 @@ def delete_itemtag(itemtag_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/usageflags', methods=['GET', 'POST'])
+def manage_usageflags():
+    """Get all usageflags or create a new usageflag."""
+    try:
+        if request.method == 'POST':
+            mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None)
+            db_file_path = request.args.get('db_file_path') or (request.json.get('db_file_path') if request.json else None)
+        else:
+            mission_dir = request.args.get('mission_dir')
+            db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='usageflags'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            name = data.get('name', '').strip()
+            
+            if not name:
+                conn.close()
+                return jsonify({'error': 'Usageflag name is required'}), 400
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO usageflags (name)
+                    VALUES (?)
+                ''', (name,))
+                conn.commit()
+                usageflag_id = cursor.lastrowid
+                conn.close()
+                return jsonify({'success': True, 'id': usageflag_id, 'name': name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Usageflag name already exists'}), 400
+        else:
+            cursor.execute('SELECT id, name FROM usageflags ORDER BY name')
+            usageflags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            conn.close()
+            return jsonify({'success': True, 'usageflags': usageflags})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/usageflags/<int:usageflag_id>', methods=['DELETE'])
+def delete_usageflag(usageflag_id):
+    """Delete a usageflag."""
+    try:
+        # DELETE requests use query parameters, not JSON body
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if usageflag exists
+        cursor.execute('SELECT id FROM usageflags WHERE id = ?', (usageflag_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Usageflag not found'}), 404
+        
+        # Delete the usageflag (CASCADE will handle element_usageflags)
+        cursor.execute('DELETE FROM usageflags WHERE id = ?', (usageflag_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/valueflags', methods=['GET', 'POST'])
+def manage_valueflags():
+    """Get all valueflags or create a new valueflag."""
+    try:
+        if request.method == 'POST':
+            mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None)
+            db_file_path = request.args.get('db_file_path') or (request.json.get('db_file_path') if request.json else None)
+        else:
+            mission_dir = request.args.get('mission_dir')
+            db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='valueflags'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            name = data.get('name', '').strip()
+            
+            if not name:
+                conn.close()
+                return jsonify({'error': 'Valueflag name is required'}), 400
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO valueflags (name)
+                    VALUES (?)
+                ''', (name,))
+                conn.commit()
+                valueflag_id = cursor.lastrowid
+                conn.close()
+                return jsonify({'success': True, 'id': valueflag_id, 'name': name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Valueflag name already exists'}), 400
+        else:
+            cursor.execute('SELECT id, name FROM valueflags ORDER BY name')
+            valueflags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            conn.close()
+            return jsonify({'success': True, 'valueflags': valueflags})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/valueflags/<int:valueflag_id>', methods=['DELETE'])
+def delete_valueflag(valueflag_id):
+    """Delete a valueflag."""
+    try:
+        # DELETE requests use query parameters, not JSON body
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if valueflag exists
+        cursor.execute('SELECT id FROM valueflags WHERE id = ?', (valueflag_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Valueflag not found'}), 404
+        
+        # Delete the valueflag (CASCADE will handle element_valueflags)
+        cursor.execute('DELETE FROM valueflags WHERE id = ?', (valueflag_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/reference-data')
 def get_reference_data():
     """Get all reference data (categories, tags, usageflags, valueflags, itemclasses, itemtags)."""
@@ -1266,12 +1452,89 @@ def reconstruct_child_element(tag, value):
         return None
 
 
-def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfolder='exported-types'):
+def update_cfglimitsdefinition_xml(mission_dir, db_file_path=None):
+    """
+    Update cfglimitsdefinition.xml with usageflags and valueflags from the database.
+    """
+    try:
+        mission_path = Path(mission_dir)
+        xml_file = mission_path / 'cfglimitsdefinition.xml'
+        
+        # Get database connection
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Get all usageflags and valueflags from database
+        cursor.execute('SELECT name FROM usageflags ORDER BY name')
+        usageflags = [row['name'] for row in cursor.fetchall()]
+        
+        cursor.execute('SELECT name FROM valueflags ORDER BY name')
+        valueflags = [row['name'] for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        # Create or update XML file
+        if xml_file.exists():
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
+        else:
+            root = ET.Element('cfglimitsdefinition')
+            tree = ET.ElementTree(root)
+        
+        # Update usageflags section
+        usageflags_elem = root.find('usageflags')
+        if usageflags_elem is None:
+            usageflags_elem = ET.SubElement(root, 'usageflags')
+        else:
+            # Clear existing usage elements
+            usageflags_elem.clear()
+        
+        for usage_name in usageflags:
+            usage_elem = ET.SubElement(usageflags_elem, 'usage')
+            usage_elem.set('name', usage_name)
+        
+        # Update valueflags section
+        valueflags_elem = root.find('valueflags')
+        if valueflags_elem is None:
+            valueflags_elem = ET.SubElement(root, 'valueflags')
+        else:
+            # Clear existing value elements
+            valueflags_elem.clear()
+        
+        for value_name in valueflags:
+            value_elem = ET.SubElement(valueflags_elem, 'value')
+            value_elem.set('name', value_name)
+        
+        # Write back to file with proper formatting
+        try:
+            ET.indent(tree, space='    ')
+        except AttributeError:
+            pass
+        
+        # Write to file with XML declaration
+        with open(xml_file, 'wb') as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
+            tree.write(f, encoding='utf-8', xml_declaration=False)
+        
+        return {'success': True}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfolder='exported-types', db_file_path=None):
     """
     Export database contents back to XML files.
     Supports both normal export and export by itemclass.
     """
-    conn = get_db_connection(mission_dir)
+    if db_file_path:
+        conn = get_db_connection(db_file_path=db_file_path)
+    else:
+        conn = get_db_connection(mission_dir)
     cursor = conn.cursor()
     
     mission_path = Path(mission_dir)
@@ -1279,8 +1542,16 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         conn.close()
         return {'success': False, 'error': 'Mission directory does not exist'}
     
+    # Update cfglimitsdefinition.xml with usageflags and valueflags
+    update_result = update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+    if not update_result.get('success'):
+        conn.close()
+        return {'success': False, 'error': f"Failed to update cfglimitsdefinition.xml: {update_result.get('error')}"}
+    
     if export_by_itemclass:
-        return export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path)
+        result = export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path)
+        conn.close()
+        return result
     
     # Normal export - group by source file
     cursor.execute('''
@@ -1309,6 +1580,7 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
             data = load_element_data(cursor, element_key)
             files_data[(source_folder, source_file)].append(data)
     
+    # Close connection after normal export
     conn.close()
     
     # Export each file
@@ -2148,8 +2420,9 @@ def export_to_xml():
         mission_dir = data.get('mission_dir', current_mission_dir)
         export_by_itemclass = data.get('export_by_itemclass', False)
         export_subfolder = data.get('export_subfolder', 'exported-types')
+        db_file_path = data.get('db_file_path')
         
-        result = export_database_to_xml(mission_dir, export_by_itemclass, export_subfolder)
+        result = export_database_to_xml(mission_dir, export_by_itemclass, export_subfolder, db_file_path)
         
         return jsonify(result)
     except Exception as e:

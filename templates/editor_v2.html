@@ -35,25 +35,50 @@
                 <button id="columnVisibilityBtn" class="btn">Column Visibility</button>
                 <button id="manageItemclassesBtn" class="btn">Manage Itemclasses</button>
                 <button id="manageItemtagsBtn" class="btn">Manage Itemtags</button>
+                <button id="manageUsageflagsBtn" class="btn">Manage Usageflags</button>
+                <button id="manageValueflagsBtn" class="btn">Manage Valueflags</button>
             </div>
         </div>
         
-        <!-- Filter Panel -->
-        <div id="filterPanel" class="filter-panel" style="display: none;">
-            <div class="filter-panel-header">
-                <h3>Filters</h3>
-                <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
-                <button id="toggleFilterPanelBtn" class="btn btn-small">Hide Filters</button>
+        <!-- Filter Section -->
+        <div class="filter-section">
+            <h3>Filters</h3>
+            <div class="filter-builder">
+                <div class="filter-input-group">
+                    <label for="filterColumn">Column:</label>
+                    <select id="filterColumn" class="filter-select">
+                        <option value="">-- Select Column --</option>
+                    </select>
+                    
+                    <label for="filterCriteria">Criteria:</label>
+                    <select id="filterCriteria" class="filter-select">
+                        <option value="contains">Contains</option>
+                        <option value="equals">Equals</option>
+                        <option value="startsWith">Starts With</option>
+                        <option value="endsWith">Ends With</option>
+                    </select>
+                    
+                    <label for="filterValue">Value:</label>
+                    <input type="text" id="filterValue" class="filter-input" placeholder="Enter filter value...">
+                    <select id="filterValueSelect" class="filter-select filter-value-select" multiple style="display: none;">
+                        <!-- Options will be populated dynamically -->
+                    </select>
+                    
+                    <label class="filter-include-label">
+                        <input type="checkbox" id="filterInclude" checked>
+                        Include
+                    </label>
+                    
+                    <button id="addFilterBtn" class="btn btn-small">Add Filter</button>
+                    <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
+                </div>
             </div>
-            <div id="filterControls" class="filter-controls">
-                <!-- Filter controls will be generated here -->
+            <div id="activeFiltersList" class="active-filters-list">
+                <!-- Active filters will be displayed here -->
             </div>
         </div>
         
         <div class="main-content">
-            <div class="content-header">
-                <button id="showFilterPanelBtn" class="btn">Show Filters</button>
-            </div>
             <div class="table-container" id="tableContainer">
                 <p class="no-data">Load XML data to begin</p>
             </div>
@@ -212,6 +237,58 @@
             </div>
             <div class="modal-actions">
                 <button id="closeItemtagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Usageflags Management Modal -->
+    <div id="usageflagsManagementModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Usageflags</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Usageflag</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newUsageflagName" placeholder="Enter usageflag name..." class="name-input">
+                        <button id="addUsageflagBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Usageflags</h3>
+                    <div id="usageflagsList" class="items-list">
+                        <!-- Usageflags will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeUsageflagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Valueflags Management Modal -->
+    <div id="valueflagsManagementModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Valueflags</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Valueflag</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newValueflagName" placeholder="Enter valueflag name..." class="name-input">
+                        <button id="addValueflagBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Valueflags</h3>
+                    <div id="valueflagsList" class="items-list">
+                        <!-- Valueflags will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeValueflagsBtn" class="btn">Close</button>
             </div>
         </div>
     </div>

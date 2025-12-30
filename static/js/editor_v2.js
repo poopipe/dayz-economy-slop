@@ -15,9 +15,8 @@ let availableCategories = []; // List of all available categories
 let availableTags = []; // List of all available tags
 let availableItemclasses = []; // List of all available itemclasses
 let availableItemtags = []; // List of all available itemtags
-let filters = {}; // Map of column key -> {values: [...], invert: boolean, op: '=', value: '...'} 
+let activeFilters = []; // Array of filter objects: {column, criteria, value, include}
 let selectedRows = new Set(); // Set of selected element keys for bulk operations
-let filterPanelVisible = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -30,11 +29,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Auto-load database if path is remembered
     if (currentDbFilePath) {
         loadDatabase();
-    } else {
-        // Build filter panel if filters exist
-        if (Object.keys(filters).length > 0) {
-            showFilterPanel();
-        }
     }
 });
 
@@ -44,36 +38,42 @@ function setupEventListeners() {
     document.getElementById('columnVisibilityBtn').addEventListener('click', openColumnVisibilityModal);
     document.getElementById('manageItemclassesBtn').addEventListener('click', openItemclassesModal);
     document.getElementById('manageItemtagsBtn').addEventListener('click', openItemtagsModal);
+    document.getElementById('manageUsageflagsBtn').addEventListener('click', openUsageflagsModal);
+    document.getElementById('manageValueflagsBtn').addEventListener('click', openValueflagsModal);
     document.getElementById('loadDatabaseBtn').addEventListener('click', loadDatabase);
     document.getElementById('backupDatabaseBtn').addEventListener('click', backupDatabase);
     
-    const showFilterBtn = document.getElementById('showFilterPanelBtn');
-    if (showFilterBtn) {
-        showFilterBtn.addEventListener('click', showFilterPanel);
-    } else {
-        console.error('Show filter button not found');
+    const addFilterBtn = document.getElementById('addFilterBtn');
+    if (addFilterBtn) {
+        addFilterBtn.addEventListener('click', addFilter);
     }
     
-    const toggleFilterBtn = document.getElementById('toggleFilterPanelBtn');
-    if (toggleFilterBtn) {
-        toggleFilterBtn.addEventListener('click', toggleFilterPanel);
+    const clearAllFiltersBtn = document.getElementById('clearAllFiltersBtn');
+    if (clearAllFiltersBtn) {
+        clearAllFiltersBtn.addEventListener('click', clearAllFilters);
     }
     
-    const clearFiltersBtn = document.getElementById('clearAllFiltersBtn');
-    if (clearFiltersBtn) {
-        clearFiltersBtn.addEventListener('click', clearAllFilters);
+    const filterColumnSelect = document.getElementById('filterColumn');
+    if (filterColumnSelect) {
+        filterColumnSelect.addEventListener('change', updateFilterUI);
     }
     
     const dbFilePathInput = document.getElementById('dbFilePath');
-    dbFilePathInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            loadDatabase();
-        }
-    });
+    if (dbFilePathInput) {
+        dbFilePathInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadDatabase();
+            }
+        });
+    }
     document.getElementById('addItemclassBtn').addEventListener('click', addItemclass);
     document.getElementById('addItemtagBtn').addEventListener('click', addItemtag);
+    document.getElementById('addUsageflagBtn').addEventListener('click', addUsageflag);
+    document.getElementById('addValueflagBtn').addEventListener('click', addValueflag);
     document.getElementById('closeItemclassesBtn').addEventListener('click', closeItemclassesModal);
     document.getElementById('closeItemtagsBtn').addEventListener('click', closeItemtagsModal);
+    document.getElementById('closeUsageflagsBtn').addEventListener('click', closeUsageflagsModal);
+    document.getElementById('closeValueflagsBtn').addEventListener('click', closeValueflagsModal);
     document.getElementById('applyColumnVisibilityBtn').addEventListener('click', applyColumnVisibility);
     document.getElementById('cancelColumnVisibilityBtn').addEventListener('click', closeColumnVisibilityModal);
     document.getElementById('showAllColumnsBtn').addEventListener('click', showAllColumns);
@@ -102,6 +102,16 @@ function setupEventListeners() {
         itemtagsCloseBtn.addEventListener('click', closeItemtagsModal);
     }
     
+    const usageflagsManagementCloseBtn = document.querySelector('#usageflagsManagementModal .close-modal');
+    if (usageflagsManagementCloseBtn) {
+        usageflagsManagementCloseBtn.addEventListener('click', closeUsageflagsModal);
+    }
+    
+    const valueflagsManagementCloseBtn = document.querySelector('#valueflagsManagementModal .close-modal');
+    if (valueflagsManagementCloseBtn) {
+        valueflagsManagementCloseBtn.addEventListener('click', closeValueflagsModal);
+    }
+    
     document.getElementById('itemclassesModal').addEventListener('click', (e) => {
         if (e.target.id === 'itemclassesModal') {
             closeItemclassesModal();
@@ -114,6 +124,24 @@ function setupEventListeners() {
         }
     });
     
+    const usageflagsManagementModal = document.getElementById('usageflagsManagementModal');
+    if (usageflagsManagementModal) {
+        usageflagsManagementModal.addEventListener('click', (e) => {
+            if (e.target.id === 'usageflagsManagementModal') {
+                closeUsageflagsModal();
+            }
+        });
+    }
+    
+    const valueflagsManagementModal = document.getElementById('valueflagsManagementModal');
+    if (valueflagsManagementModal) {
+        valueflagsManagementModal.addEventListener('click', (e) => {
+            if (e.target.id === 'valueflagsManagementModal') {
+                closeValueflagsModal();
+            }
+        });
+    }
+    
     // Enter key handlers for adding items
     document.getElementById('newItemclassName').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
@@ -121,11 +149,32 @@ function setupEventListeners() {
         }
     });
     
-    document.getElementById('newItemtagName').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            addItemtag();
-        }
-    });
+    const newItemtagName = document.getElementById('newItemtagName');
+    if (newItemtagName) {
+        newItemtagName.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                addItemtag();
+            }
+        });
+    }
+    
+    const newUsageflagName = document.getElementById('newUsageflagName');
+    if (newUsageflagName) {
+        newUsageflagName.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                addUsageflag();
+            }
+        });
+    }
+    
+    const newValueflagName = document.getElementById('newValueflagName');
+    if (newValueflagName) {
+        newValueflagName.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                addValueflag();
+            }
+        });
+    }
     
     const missionDirInput = document.getElementById('missionDir');
     missionDirInput.addEventListener('keypress', (e) => {
@@ -235,70 +284,13 @@ function setupEventListeners() {
 }
 
 function handleFilterChange(element) {
-    const columnKey = element.getAttribute('data-column');
-    if (!columnKey) return;
-    
-    const columnType = getColumnType(columnKey);
-    
-    if (element.classList.contains('filter-select')) {
-        // Multi-select dropdown
-        const selectedOptions = Array.from(element.selectedOptions)
-            .map(opt => opt.value)
-            .filter(val => val !== ''); // Remove "All" option
-        
-        if (selectedOptions.length === 0) {
-            delete filters[columnKey];
-        } else {
-            filters[columnKey] = selectedOptions.map(id => parseInt(id));
-        }
-    } else if (element.classList.contains('filter-op')) {
-        // Numeric filter operator changed
-        const input = element.parentElement.querySelector('.numeric-filter-input');
-        const currentFilter = filters[columnKey] || {};
-        filters[columnKey] = {
-            op: element.value,
-            value: input ? input.value : (currentFilter.value || '')
-        };
-        if (!filters[columnKey].value) {
-            delete filters[columnKey];
-        }
-    } else if (element.classList.contains('numeric-filter-input')) {
-        // Numeric filter value changed
-        const opSelect = element.parentElement.querySelector('.filter-op');
-        const op = opSelect ? opSelect.value : '=';
-        const value = element.value;
-        
-        if (value === '') {
-            delete filters[columnKey];
-        } else {
-            filters[columnKey] = {
-                op: op,
-                value: value
-            };
-        }
-    } else {
-        // Text filter
-        const value = element.value.trim();
-        if (value === '') {
-            delete filters[columnKey];
-        } else {
-            filters[columnKey] = value;
-        }
-    }
-    
-    // Save filters to localStorage
-    saveFilters();
-    
-    // Reset selection when filters change
-    selectedRows.clear();
-    
-    // Refresh display
-    displayTable();
+    // Filter change logic removed - will be rebuilt
+    console.log('Filter change - logic removed');
 }
 
 function saveFilters() {
     try {
-        localStorage.setItem('editorV2Filters', JSON.stringify(filters));
+        localStorage.setItem('editorV2Filters', JSON.stringify(activeFilters));
     } catch (e) {
         console.error('Error saving filters:', e);
     }
@@ -309,25 +301,18 @@ function loadFilters() {
         const saved = localStorage.getItem('editorV2Filters');
         if (saved) {
             const loaded = JSON.parse(saved);
-            // Migrate old filter format to new format if needed
-            filters = {};
-            for (const [key, value] of Object.entries(loaded)) {
-                if (typeof value === 'object' && !Array.isArray(value) && (value.invert !== undefined || value.values !== undefined || value.value !== undefined)) {
-                    // Already in new format
-                    filters[key] = value;
-                } else if (Array.isArray(value)) {
-                    // Old array format - convert to new format
-                    filters[key] = { values: value, invert: false };
-                } else {
-                    // Old string/number format - convert to new format
-                    filters[key] = { value: value, invert: false };
-                }
+            if (Array.isArray(loaded)) {
+                activeFilters = loaded;
+            } else {
+                // Migrate from old format if needed
+                activeFilters = [];
             }
         }
     } catch (e) {
         console.error('Error loading filters:', e);
-        filters = {};
+        activeFilters = [];
     }
+    displayActiveFilters();
 }
 
 function updateStatus(message) {
@@ -398,6 +383,8 @@ async function loadDatabase() {
             // Load elements and reference data
             await loadReferenceData();
             await loadElements();
+            populateFilterColumns();
+            updateFilterUI();
             
             updateStatus('Database loaded successfully');
         } else {
@@ -537,10 +524,7 @@ async function loadElements() {
             }
             
             displayTable();
-            // Build filter panel after data is loaded
-            if (filterPanelVisible) {
-                buildFilterPanel();
-            }
+            populateFilterColumns();
         } else {
             throw new Error(data.error || 'Failed to load elements');
         }
@@ -966,7 +950,7 @@ function displayTable() {
     });
     
     const sortedColumn = displayColumns.find(c => c.key === sortColumn);
-    const filterCount = Object.keys(filters).filter(k => filters[k] !== null && filters[k] !== '' && (!Array.isArray(filters[k]) || filters[k].length > 0)).length;
+    const filterCount = activeFilters.length;
     const filterText = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : '';
     const selectedCount = selectedRows.size;
     const selectedText = selectedCount > 0 ? ` - ${selectedCount} selected` : '';
@@ -1843,317 +1827,361 @@ function getOptionsForColumnType(columnType) {
 }
 
 
-function buildFilterPanel() {
-    const filterControls = document.getElementById('filterControls');
-    if (!filterControls) return;
-    
-    filterControls.innerHTML = '';
-    
-    if (allAvailableColumns.length === 0) {
-        filterControls.innerHTML = '<p class="no-filters">Load data to see available filters</p>';
-        return;
-    }
-    
-    allAvailableColumns.forEach(col => {
-        const filterItem = document.createElement('div');
-        filterItem.className = 'filter-item';
-        filterItem.setAttribute('data-column', col.key);
-        
-        const columnType = getColumnType(col.key);
-        const currentFilter = filters[col.key] || null;
-        const filterId = `filter_${col.key.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        const invertId = `invert_${col.key.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        
-        // Get current filter values and invert flag
-        let filterValues = null;
-        let invert = false;
-        if (currentFilter) {
-            if (typeof currentFilter === 'object' && !Array.isArray(currentFilter)) {
-                filterValues = currentFilter.values !== undefined ? currentFilter.values : currentFilter.value || null;
-                invert = currentFilter.invert || false;
-            } else if (Array.isArray(currentFilter)) {
-                filterValues = currentFilter;
-                invert = false;
-            } else {
-                filterValues = currentFilter;
-                invert = false;
-            }
-        }
-        
-        filterItem.innerHTML = `
-            <div class="filter-item-header">
-                <label class="filter-label">${escapeHtml(col.label)}</label>
-                <label class="invert-label">
-                    <input type="checkbox" id="${invertId}" class="invert-checkbox" data-column="${col.key}" ${invert ? 'checked' : ''}>
-                    Invert
-                </label>
-            </div>
-            <div class="filter-item-control">
-                ${getFilterControlHTML(col.key, columnType, filterId, filterValues, currentFilter)}
-            </div>
-        `;
-        
-        filterControls.appendChild(filterItem);
-    });
-    
-    // Add event listeners
-    setupFilterEventListeners();
-}
-
-function getFilterControlHTML(columnKey, columnType, filterId, filterValues, currentFilter) {
-    if (columnType === 'valueflags' || columnType === 'usageflags' || columnType === 'flags' || 
-        columnType === 'categories' || columnType === 'tags' || columnType === 'itemclasses' || columnType === 'itemtags') {
-        // Multi-select dropdown for fixed lists
-        const options = getOptionsForColumnType(columnType);
-        const selectedIds = Array.isArray(filterValues) ? filterValues : [];
-        
-        let html = `<select id="${filterId}" class="filter-select" multiple data-column="${columnKey}" style="width: 100%; min-height: 60px;">`;
-        options.forEach(option => {
-            const selected = selectedIds.includes(option.id) ? 'selected' : '';
-            html += `<option value="${option.id}" ${selected}>${escapeHtml(option.name)}</option>`;
-        });
-        html += '</select>';
-        return html;
-    } else if (columnType === 'numeric') {
-        // Numeric input with comparison operator
-        const filterValue = typeof currentFilter === 'object' && currentFilter.value !== undefined ? currentFilter.value : (filterValues || '');
-        const filterOp = typeof currentFilter === 'object' && currentFilter.op ? currentFilter.op : '=';
-        
-        let html = `<div class="numeric-filter">`;
-        html += `<select class="filter-op" data-column="${columnKey}" style="width: 60px; margin-right: 5px;">`;
-        html += `<option value="=" ${filterOp === '=' ? 'selected' : ''}>=</option>`;
-        html += `<option value=">" ${filterOp === '>' ? 'selected' : ''}>&gt;</option>`;
-        html += `<option value="<" ${filterOp === '<' ? 'selected' : ''}>&lt;</option>`;
-        html += `<option value=">=" ${filterOp === '>=' ? 'selected' : ''}>&gt;=</option>`;
-        html += `<option value="<=" ${filterOp === '<=' ? 'selected' : ''}>&lt;=</option>`;
-        html += `</select>`;
-        html += `<input type="number" id="${filterId}" class="filter-input numeric-filter-input" data-column="${columnKey}" value="${escapeHtml(filterValue)}" placeholder="Value" style="width: calc(100% - 70px);">`;
-        html += `</div>`;
-        return html;
-    } else {
-        // Text input
-        const filterValue = typeof filterValues === 'string' ? filterValues : '';
-        return `<input type="text" id="${filterId}" class="filter-input" data-column="${columnKey}" value="${escapeHtml(filterValue)}" placeholder="Filter...">`;
-    }
-}
-
-function setupFilterEventListeners() {
-    // Multi-select dropdowns
-    document.querySelectorAll('.filter-select').forEach(select => {
-        select.addEventListener('change', () => {
-            handleFilterChange(select);
-        });
-    });
-    
-    // Numeric filter operators
-    document.querySelectorAll('.filter-op').forEach(op => {
-        op.addEventListener('change', () => {
-            handleFilterChange(op);
-        });
-    });
-    
-    // Text and numeric inputs
-    document.querySelectorAll('.filter-input').forEach(input => {
-        if (input.classList.contains('numeric-filter-input')) {
-            input.addEventListener('input', () => {
-                handleFilterChange(input);
-            });
-        } else {
-            // Debounce text inputs
-            input.addEventListener('input', () => {
-                clearTimeout(input.filterTimeout);
-                input.filterTimeout = setTimeout(() => {
-                    handleFilterChange(input);
-                }, 300);
-            });
-        }
-    });
-    
-    // Invert checkboxes
-    document.querySelectorAll('.invert-checkbox').forEach(checkbox => {
-        checkbox.addEventListener('change', () => {
-            handleFilterInvertChange(checkbox);
-        });
-    });
-}
-
-function handleFilterInvertChange(checkbox) {
-    const columnKey = checkbox.getAttribute('data-column');
-    const invert = checkbox.checked;
-    
-    if (filters[columnKey]) {
-        if (typeof filters[columnKey] === 'object' && !Array.isArray(filters[columnKey])) {
-            filters[columnKey].invert = invert;
-        } else {
-            // Convert to object format
-            const oldValue = filters[columnKey];
-            filters[columnKey] = {
-                values: Array.isArray(oldValue) ? oldValue : oldValue,
-                invert: invert
-            };
-        }
-    } else {
-        // Create new filter with invert
-        filters[columnKey] = { values: null, invert: invert };
-    }
-    
-    saveFilters();
-    selectedRows.clear();
-    displayTable();
-}
-
-function showFilterPanel() {
-    const panel = document.getElementById('filterPanel');
-    if (!panel) {
-        console.error('Filter panel element not found');
-        return;
-    }
-    
-    panel.style.display = 'block';
-    const showBtn = document.getElementById('showFilterPanelBtn');
-    if (showBtn) {
-        showBtn.style.display = 'none';
-    }
-    buildFilterPanel();
-    filterPanelVisible = true;
-}
-
-function toggleFilterPanel() {
-    const panel = document.getElementById('filterPanel');
-    const showBtn = document.getElementById('showFilterPanelBtn');
-    if (panel && showBtn) {
-        if (filterPanelVisible) {
-            panel.style.display = 'none';
-            showBtn.style.display = 'block';
-            filterPanelVisible = false;
-        } else {
-            panel.style.display = 'block';
-            showBtn.style.display = 'none';
-            filterPanelVisible = true;
-            buildFilterPanel();
-        }
-    }
-}
-
-function clearAllFilters() {
-    filters = {};
-    saveFilters();
-    selectedRows.clear();
-    buildFilterPanel();
-    displayTable();
-}
 
 function applyFilters(data) {
-    if (Object.keys(filters).length === 0) {
+    if (activeFilters.length === 0) {
         return data;
     }
     
     return data.filter(record => {
-        return Object.keys(filters).every(columnKey => {
-            const filter = filters[columnKey];
-            
-            // Skip empty filters
-            if (filter === null || filter === undefined || filter === '') {
-                return true;
-            }
-            
-            // Extract filter values and invert flag
-            let filterValues = null;
-            let invert = false;
-            
-            if (typeof filter === 'object' && !Array.isArray(filter)) {
-                filterValues = filter.values !== undefined ? filter.values : filter.value;
-                invert = filter.invert || false;
-            } else if (Array.isArray(filter)) {
-                filterValues = filter;
-                invert = false;
-            } else {
-                filterValues = filter;
-                invert = false;
-            }
-            
-            // Skip if no filter values
-            if (filterValues === null || filterValues === undefined || filterValues === '') {
-                if (Array.isArray(filterValues) && filterValues.length === 0 && !invert) {
-                    return true;
-                }
-            }
-            
+        return activeFilters.every(filter => {
+            const columnValue = record[filter.column];
             let matches = false;
-            const columnType = getColumnType(columnKey);
             
-            // Handle array filters (multi-select)
-            if (Array.isArray(filterValues)) {
-                if (filterValues.length === 0) {
-                    matches = invert; // Empty array with invert means "match everything"
-                    return invert ? !matches : matches;
-                }
-                
-                if (columnType === 'valueflags' || columnKey === '_valueflags' || columnKey === '_valueflag_names') {
-                    const recordIds = (record._valueflags || []).map(v => v.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else if (columnType === 'usageflags' || columnKey === '_usageflags' || columnKey === '_usageflag_names') {
-                    const recordIds = (record._usageflags || []).map(u => u.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else if (columnType === 'flags' || columnKey === '_flags' || columnKey === '_flag_names') {
-                    const recordIds = (record._flags || []).map(f => f.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else if (columnType === 'categories' || columnKey === '_categories' || columnKey === '_category_names') {
-                    const recordIds = (record._categories || []).map(c => c.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else if (columnType === 'tags' || columnKey === '_tags' || columnKey === '_tag_names') {
-                    const recordIds = (record._tags || []).map(t => t.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else if (columnType === 'itemclasses' || columnKey === '_itemclass_id' || columnKey === '_itemclass_name') {
-                    matches = filterValues.includes(record._itemclass_id);
-                } else if (columnType === 'itemtags' || columnKey === '_itemtags' || columnKey === '_itemtag_names') {
-                    const recordIds = (record._itemtags || []).map(it => it.id);
-                    matches = filterValues.some(id => recordIds.includes(id));
-                } else {
-                    matches = true;
-                }
-            } else if (columnType === 'numeric' && typeof filter === 'object') {
-                // Handle numeric filters
-                const recordValue = parseFloat(record[columnKey]);
-                const filterValue = parseFloat(filter.value);
-                const op = filter.op || '=';
-                
-                if (isNaN(recordValue) || isNaN(filterValue)) {
-                    matches = false;
-                } else {
-                    switch (op) {
-                        case '=':
-                            matches = recordValue === filterValue;
-                            break;
-                        case '>':
-                            matches = recordValue > filterValue;
-                            break;
-                        case '<':
-                            matches = recordValue < filterValue;
-                            break;
-                        case '>=':
-                            matches = recordValue >= filterValue;
-                            break;
-                        case '<=':
-                            matches = recordValue <= filterValue;
-                            break;
-                        default:
-                            matches = true;
-                    }
-                }
-                invert = filter.invert || false;
+            const columnType = getColumnType(filter.column);
+            const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
+                                    columnType === 'valueflags' || columnType === 'usageflags' || 
+                                    columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
+            
+            if (hasDefinedValues && Array.isArray(filter.value)) {
+                // Handle defined value columns (itemclass, itemtags, etc.)
+                matches = applyDefinedValueFilter(record, filter.column, filter.value, filter.criteria, columnType);
             } else {
-                // Handle text filters
-                const recordValue = String(record[columnKey] || '').toLowerCase();
-                const filterValue = String(filterValues || '').toLowerCase();
-                matches = recordValue.includes(filterValue);
-                invert = typeof filter === 'object' ? (filter.invert || false) : false;
+                // Handle text/numeric columns
+                if (columnValue === undefined || columnValue === null) {
+                    matches = false;
+                } else if (Array.isArray(columnValue)) {
+                    // For arrays, check if any element matches
+                    const searchValue = String(filter.value).toLowerCase();
+                    matches = columnValue.some(item => {
+                        const itemStr = String(item).toLowerCase();
+                        return applyCriteria(itemStr, searchValue, filter.criteria);
+                    });
+                } else {
+                    // For single values
+                    const recordValue = String(columnValue).toLowerCase();
+                    const filterValue = String(filter.value).toLowerCase();
+                    matches = applyCriteria(recordValue, filterValue, filter.criteria);
+                }
             }
             
-            // Apply inversion
-            return invert ? !matches : matches;
+            // Apply include/exclude logic
+            return filter.include ? matches : !matches;
         });
     });
+}
+
+function applyDefinedValueFilter(record, column, filterValueIds, criteria, columnType) {
+    // Get the IDs from the record for this column
+    let recordIds = [];
+    
+    if (columnType === 'itemclasses') {
+        recordIds = record._itemclass_id ? [record._itemclass_id] : [];
+    } else if (columnType === 'itemtags') {
+        recordIds = (record._itemtags || []).map(it => it.id);
+    } else if (columnType === 'valueflags') {
+        recordIds = (record._valueflags || []).map(v => v.id);
+    } else if (columnType === 'usageflags') {
+        recordIds = (record._usageflags || []).map(u => u.id);
+    } else if (columnType === 'flags') {
+        recordIds = (record._flags || []).map(f => f.id);
+    } else if (columnType === 'categories') {
+        recordIds = (record._categories || []).map(c => c.id);
+    } else if (columnType === 'tags') {
+        recordIds = (record._tags || []).map(t => t.id);
+    }
+    
+    // Check if any of the filter IDs match any of the record IDs
+    const hasMatch = filterValueIds.some(filterId => recordIds.includes(filterId));
+    
+    if (criteria === 'isOneOf') {
+        return hasMatch;
+    } else if (criteria === 'isNotOneOf') {
+        return !hasMatch;
+    }
+    
+    return hasMatch;
+}
+
+function applyCriteria(recordValue, filterValue, criteria) {
+    switch (criteria) {
+        case 'contains':
+            return recordValue.includes(filterValue);
+        case 'equals':
+            return recordValue === filterValue;
+        case 'startsWith':
+            return recordValue.startsWith(filterValue);
+        case 'endsWith':
+            return recordValue.endsWith(filterValue);
+        default:
+            return recordValue.includes(filterValue);
+    }
+}
+
+function updateFilterUI() {
+    const column = document.getElementById('filterColumn').value;
+    const filterValueInput = document.getElementById('filterValue');
+    const filterValueSelect = document.getElementById('filterValueSelect');
+    const filterCriteria = document.getElementById('filterCriteria');
+    
+    if (!column) {
+        filterValueInput.style.display = 'block';
+        filterValueSelect.style.display = 'none';
+        filterCriteria.innerHTML = `
+            <option value="contains">Contains</option>
+            <option value="equals">Equals</option>
+            <option value="startsWith">Starts With</option>
+            <option value="endsWith">Ends With</option>
+        `;
+        return;
+    }
+    
+    const columnType = getColumnType(column);
+    const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
+                            columnType === 'valueflags' || columnType === 'usageflags' || 
+                            columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
+    
+    if (hasDefinedValues) {
+        // Show dropdown, hide text input
+        filterValueInput.style.display = 'none';
+        filterValueSelect.style.display = 'block';
+        
+        // Update criteria options for defined value columns
+        filterCriteria.innerHTML = `
+            <option value="isOneOf">Is One Of</option>
+            <option value="isNotOneOf">Is Not One Of</option>
+        `;
+        
+        // Populate dropdown with available values
+        populateFilterValueDropdown(column, columnType);
+    } else {
+        // Show text input, hide dropdown
+        filterValueInput.style.display = 'block';
+        filterValueSelect.style.display = 'none';
+        
+        // Update criteria options for text columns
+        filterCriteria.innerHTML = `
+            <option value="contains">Contains</option>
+            <option value="equals">Equals</option>
+            <option value="startsWith">Starts With</option>
+            <option value="endsWith">Ends With</option>
+        `;
+    }
+}
+
+function populateFilterValueDropdown(column, columnType) {
+    const select = document.getElementById('filterValueSelect');
+    if (!select) return;
+    
+    select.innerHTML = '';
+    
+    let options = [];
+    switch (columnType) {
+        case 'itemclasses':
+            options = availableItemclasses;
+            break;
+        case 'itemtags':
+            options = availableItemtags;
+            break;
+        case 'valueflags':
+            options = availableValueflags;
+            break;
+        case 'usageflags':
+            options = availableUsageflags;
+            break;
+        case 'flags':
+            options = availableFlags;
+            break;
+        case 'categories':
+            options = availableCategories;
+            break;
+        case 'tags':
+            options = availableTags;
+            break;
+    }
+    
+    options.forEach(option => {
+        const opt = document.createElement('option');
+        opt.value = option.id;
+        opt.textContent = option.name;
+        select.appendChild(opt);
+    });
+}
+
+function addFilter() {
+    const column = document.getElementById('filterColumn').value;
+    const criteria = document.getElementById('filterCriteria').value;
+    const filterValueInput = document.getElementById('filterValue');
+    const filterValueSelect = document.getElementById('filterValueSelect');
+    const include = document.getElementById('filterInclude').checked;
+    
+    if (!column) {
+        alert('Please select a column');
+        return;
+    }
+    
+    // Get value(s) based on whether it's a text input or dropdown
+    let value = null;
+    const columnType = getColumnType(column);
+    const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
+                            columnType === 'valueflags' || columnType === 'usageflags' || 
+                            columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
+    
+    if (hasDefinedValues) {
+        const selectedOptions = Array.from(filterValueSelect.selectedOptions).map(opt => parseInt(opt.value));
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one value');
+            return;
+        }
+        value = selectedOptions; // Store as array of IDs
+    } else {
+        value = filterValueInput.value.trim();
+        if (!value) {
+            alert('Please enter a filter value');
+            return;
+        }
+    }
+    
+    // Check if filter already exists
+    const exists = activeFilters.some(f => {
+        if (f.column !== column || f.criteria !== criteria || f.include !== include) {
+            return false;
+        }
+        // For arrays, check if they have the same values
+        if (Array.isArray(f.value) && Array.isArray(value)) {
+            return f.value.length === value.length && 
+                   f.value.every(id => value.includes(id)) && 
+                   value.every(id => f.value.includes(id));
+        }
+        return f.value === value;
+    });
+    
+    if (exists) {
+        alert('This filter already exists');
+        return;
+    }
+    
+    // Add filter
+    activeFilters.push({ column, criteria, value, include });
+    
+    // Clear inputs
+    filterValueInput.value = '';
+    filterValueSelect.selectedIndex = -1;
+    
+    // Update display
+    displayActiveFilters();
+    saveFilters();
+    selectedRows.clear();
+    displayTable();
+}
+
+function removeFilter(index) {
+    activeFilters.splice(index, 1);
+    displayActiveFilters();
+    saveFilters();
+    selectedRows.clear();
+    displayTable();
+}
+
+function clearAllFilters() {
+    activeFilters = [];
+    displayActiveFilters();
+    saveFilters();
+    selectedRows.clear();
+    displayTable();
+}
+
+function displayActiveFilters() {
+    const container = document.getElementById('activeFiltersList');
+    if (!container) return;
+    
+    if (activeFilters.length === 0) {
+        container.innerHTML = '<p class="no-filters-message">No active filters</p>';
+        return;
+    }
+    
+    container.innerHTML = '';
+    activeFilters.forEach((filter, index) => {
+        const filterItem = document.createElement('div');
+        filterItem.className = 'active-filter-item';
+        
+        const columnLabel = getColumnLabel(filter.column);
+        const includeText = filter.include ? 'Include' : 'Exclude';
+        const criteriaText = filter.criteria.charAt(0).toUpperCase() + filter.criteria.slice(1).replace(/([A-Z])/g, ' $1');
+        
+        // Format the value display
+        let valueDisplay = '';
+        if (Array.isArray(filter.value)) {
+            // For defined value columns, show the names
+            const columnType = getColumnType(filter.column);
+            let options = [];
+            switch (columnType) {
+                case 'itemclasses':
+                    options = availableItemclasses;
+                    break;
+                case 'itemtags':
+                    options = availableItemtags;
+                    break;
+                case 'valueflags':
+                    options = availableValueflags;
+                    break;
+                case 'usageflags':
+                    options = availableUsageflags;
+                    break;
+                case 'flags':
+                    options = availableFlags;
+                    break;
+                case 'categories':
+                    options = availableCategories;
+                    break;
+                case 'tags':
+                    options = availableTags;
+                    break;
+            }
+            const names = filter.value.map(id => {
+                const option = options.find(o => o.id === id);
+                return option ? option.name : `ID:${id}`;
+            });
+            valueDisplay = names.join(', ');
+        } else {
+            valueDisplay = filter.value;
+        }
+        
+        filterItem.innerHTML = `
+            <span class="filter-text">
+                <strong>${escapeHtml(columnLabel)}</strong> 
+                ${includeText} 
+                <strong>${escapeHtml(criteriaText)}</strong> 
+                "${escapeHtml(valueDisplay)}"
+            </span>
+            <button class="btn-remove-filter" onclick="removeFilter(${index})" title="Remove filter">×</button>
+        `;
+        
+        container.appendChild(filterItem);
+    });
+}
+
+function populateFilterColumns() {
+    const select = document.getElementById('filterColumn');
+    if (!select) return;
+    
+    select.innerHTML = '<option value="">-- Select Column --</option>';
+    
+    if (allAvailableColumns.length > 0) {
+        allAvailableColumns.forEach(col => {
+            const option = document.createElement('option');
+            option.value = col.key;
+            option.textContent = col.label;
+            select.appendChild(option);
+        });
+    } else if (tableColumns.length > 0) {
+        tableColumns.forEach(col => {
+            const option = document.createElement('option');
+            option.value = col;
+            option.textContent = getColumnLabel(col);
+            select.appendChild(option);
+        });
+    }
 }
 
 function makeCellEditable(cell) {
@@ -2581,6 +2609,284 @@ async function deleteItemtag(itemtagId) {
     } catch (error) {
         console.error('Error deleting itemtag:', error);
         alert(`Error deleting itemtag: ${error.message}`);
+    }
+}
+
+function openUsageflagsModal() {
+    const modal = document.getElementById('usageflagsManagementModal');
+    if (!modal) {
+        console.error('usageflagsManagementModal not found');
+        return;
+    }
+    loadUsageflags();
+    modal.style.display = 'block';
+}
+
+function closeUsageflagsModal() {
+    const modal = document.getElementById('usageflagsManagementModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function loadUsageflags() {
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/usageflags?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/usageflags?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.success) {
+            availableUsageflags = data.usageflags || [];
+            displayUsageflags();
+        } else {
+            throw new Error(data.error || 'Failed to load usageflags');
+        }
+    } catch (error) {
+        console.error('Error loading usageflags:', error);
+        alert(`Error loading usageflags: ${error.message}`);
+    }
+}
+
+function displayUsageflags() {
+    const listContainer = document.getElementById('usageflagsList');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '';
+    
+    if (availableUsageflags.length === 0) {
+        listContainer.innerHTML = '<p class="no-items">No usageflags defined</p>';
+        return;
+    }
+    
+    availableUsageflags.forEach(usageflag => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'item-row';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'item-name';
+        nameSpan.textContent = usageflag.name;
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-small btn-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteUsageflag(usageflag.id));
+        
+        itemDiv.appendChild(nameSpan);
+        itemDiv.appendChild(deleteBtn);
+        listContainer.appendChild(itemDiv);
+    });
+}
+
+async function addUsageflag() {
+    const nameInput = document.getElementById('newUsageflagName');
+    if (!nameInput) return;
+    
+    const name = nameInput.value.trim();
+    
+    if (!name) {
+        alert('Please enter a usageflag name');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/usageflags', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                mission_dir: currentMissionDir || '',
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            nameInput.value = '';
+            await loadUsageflags();
+            await loadReferenceData(); // Refresh reference data
+            updateStatus('Usageflag added successfully');
+        } else {
+            throw new Error(data.error || 'Failed to add usageflag');
+        }
+    } catch (error) {
+        console.error('Error adding usageflag:', error);
+        alert(`Error adding usageflag: ${error.message}`);
+    }
+}
+
+async function deleteUsageflag(usageflagId) {
+    if (!confirm('Are you sure you want to delete this usageflag? This will remove it from all elements that use it.')) {
+        return;
+    }
+    
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/usageflags/${usageflagId}?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/usageflags/${usageflagId}?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            await loadUsageflags();
+            await loadReferenceData(); // Refresh reference data
+            await loadElements(); // Refresh elements to reflect changes
+            updateStatus('Usageflag deleted successfully');
+        } else {
+            throw new Error(data.error || 'Failed to delete usageflag');
+        }
+    } catch (error) {
+        console.error('Error deleting usageflag:', error);
+        alert(`Error deleting usageflag: ${error.message}`);
+    }
+}
+
+function openValueflagsModal() {
+    const modal = document.getElementById('valueflagsManagementModal');
+    if (!modal) {
+        console.error('valueflagsManagementModal not found');
+        return;
+    }
+    loadValueflags();
+    modal.style.display = 'block';
+}
+
+function closeValueflagsModal() {
+    const modal = document.getElementById('valueflagsManagementModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function loadValueflags() {
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/valueflags?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/valueflags?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.success) {
+            availableValueflags = data.valueflags || [];
+            displayValueflags();
+        } else {
+            throw new Error(data.error || 'Failed to load valueflags');
+        }
+    } catch (error) {
+        console.error('Error loading valueflags:', error);
+        alert(`Error loading valueflags: ${error.message}`);
+    }
+}
+
+function displayValueflags() {
+    const listContainer = document.getElementById('valueflagsList');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '';
+    
+    if (availableValueflags.length === 0) {
+        listContainer.innerHTML = '<p class="no-items">No valueflags defined</p>';
+        return;
+    }
+    
+    availableValueflags.forEach(valueflag => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'item-row';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'item-name';
+        nameSpan.textContent = valueflag.name;
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-small btn-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteValueflag(valueflag.id));
+        
+        itemDiv.appendChild(nameSpan);
+        itemDiv.appendChild(deleteBtn);
+        listContainer.appendChild(itemDiv);
+    });
+}
+
+async function addValueflag() {
+    const nameInput = document.getElementById('newValueflagName');
+    if (!nameInput) return;
+    
+    const name = nameInput.value.trim();
+    
+    if (!name) {
+        alert('Please enter a valueflag name');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/valueflags', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                mission_dir: currentMissionDir || '',
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            nameInput.value = '';
+            await loadValueflags();
+            await loadReferenceData(); // Refresh reference data
+            updateStatus('Valueflag added successfully');
+        } else {
+            throw new Error(data.error || 'Failed to add valueflag');
+        }
+    } catch (error) {
+        console.error('Error adding valueflag:', error);
+        alert(`Error adding valueflag: ${error.message}`);
+    }
+}
+
+async function deleteValueflag(valueflagId) {
+    if (!confirm('Are you sure you want to delete this valueflag? This will remove it from all elements that use it.')) {
+        return;
+    }
+    
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/valueflags/${valueflagId}?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/valueflags/${valueflagId}?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            await loadValueflags();
+            await loadReferenceData(); // Refresh reference data
+            await loadElements(); // Refresh elements to reflect changes
+            updateStatus('Valueflag deleted successfully');
+        } else {
+            throw new Error(data.error || 'Failed to delete valueflag');
+        }
+    } catch (error) {
+        console.error('Error deleting valueflag:', error);
+        alert(`Error deleting valueflag: ${error.message}`);
     }
 }
 
