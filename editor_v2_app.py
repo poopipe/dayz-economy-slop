@@ -28,8 +28,23 @@ def get_db_path(mission_dir):
     return db_dir / 'editor_data_v2.db'
 
 
-def get_db_connection(mission_dir=None):
-    """Get a database connection with row factory."""
+def get_db_connection(mission_dir=None, db_file_path=None):
+    """Get a database connection with row factory.
+    
+    Args:
+        mission_dir: Mission directory path (uses default if None)
+        db_file_path: Direct path to database file (takes precedence over mission_dir)
+    """
+    if db_file_path:
+        # Use direct database file path
+        db_file = Path(db_file_path)
+        if not db_file.exists():
+            raise FileNotFoundError(f"Database file not found: {db_file_path}")
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    # Use mission directory
     if mission_dir is None:
         mission_dir = current_mission_dir
     db_file = get_db_path(mission_dir)
@@ -129,11 +144,17 @@ def init_database(mission_dir=None):
         mission_dir = current_mission_dir
     
     db_file = get_db_path(mission_dir)
+    return init_database_for_file(db_file, mission_dir)
+
+
+def init_database_for_file(db_file_path, mission_dir=None):
+    """Initialize the normalized database schema for a specific database file."""
+    db_file = Path(db_file_path)
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
     
-    # Parse cfglimitsdefinition.xml to get reference data
-    ref_data = parse_cfglimitsdefinition(mission_dir)
+    # Parse cfglimitsdefinition.xml to get reference data (if mission_dir provided)
+    ref_data = parse_cfglimitsdefinition(mission_dir) if mission_dir else {'categories': [], 'tags': [], 'usageflags': [], 'valueflags': []}
     
     # Table: categories
     cursor.execute('''
@@ -696,13 +717,105 @@ def load_data():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/load-database', methods=['POST'])
+def load_database():
+    """Load data from a database file."""
+    try:
+        data = request.json
+        db_file_path = data.get('db_file_path', '').strip()
+        
+        if not db_file_path:
+            return jsonify({'success': False, 'error': 'Database file path is required'}), 400
+        
+        db_file = Path(db_file_path)
+        if not db_file.exists():
+            return jsonify({'success': False, 'error': 'Database file not found'}), 404
+        
+        # Verify it's a valid database by trying to connect
+        try:
+            conn = get_db_connection(db_file_path=db_file_path)
+            cursor = conn.cursor()
+            # Check if it has the expected tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='type_elements'")
+            if not cursor.fetchone():
+                # Database exists but doesn't have the schema - initialize it
+                conn.close()
+                # Initialize the schema without populating reference data (no mission_dir)
+                init_database_for_file(db_file_path, mission_dir=None)
+            else:
+                conn.close()
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Invalid database file: {str(e)}'}), 400
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backup-database', methods=['POST'])
+def backup_database():
+    """Create a backup of the current database."""
+    try:
+        import shutil
+        from datetime import datetime
+        
+        data = request.json
+        db_file_path = data.get('db_file_path', '').strip()
+        
+        if not db_file_path:
+            return jsonify({'success': False, 'error': 'Database file path is required'}), 400
+        
+        db_file = Path(db_file_path)
+        if not db_file.exists():
+            return jsonify({'success': False, 'error': 'Database file not found'}), 404
+        
+        # Create backup filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_dir = db_file.parent / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_file = backup_dir / f"{db_file.stem}_backup_{timestamp}{db_file.suffix}"
+        
+        # Copy database file
+        shutil.copy2(db_file, backup_file)
+        
+        return jsonify({
+            'success': True,
+            'backup_path': str(backup_file)
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/elements')
 def get_elements():
     """Get all type elements from database."""
     try:
-        mission_dir = request.args.get('mission_dir', current_mission_dir)
-        conn = get_db_connection(mission_dir)
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
         cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='type_elements'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
         
         # Get all elements
         cursor.execute('''
@@ -855,12 +968,202 @@ def get_elements():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/itemclasses', methods=['GET', 'POST'])
+def manage_itemclasses():
+    """Get all itemclasses or create a new itemclass."""
+    try:
+        if request.method == 'POST':
+            mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None)
+            db_file_path = request.args.get('db_file_path') or (request.json.get('db_file_path') if request.json else None)
+        else:
+            mission_dir = request.args.get('mission_dir')
+            db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='itemclasses'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            name = data.get('name', '').strip()
+            
+            if not name:
+                conn.close()
+                return jsonify({'error': 'Itemclass name is required'}), 400
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO itemclasses (name)
+                    VALUES (?)
+                ''', (name,))
+                conn.commit()
+                itemclass_id = cursor.lastrowid
+                conn.close()
+                return jsonify({'success': True, 'id': itemclass_id, 'name': name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Itemclass name already exists'}), 400
+        else:
+            cursor.execute('SELECT id, name FROM itemclasses ORDER BY name')
+            itemclasses = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            conn.close()
+            return jsonify({'success': True, 'itemclasses': itemclasses})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/itemclasses/<int:itemclass_id>', methods=['DELETE'])
+def delete_itemclass(itemclass_id):
+    """Delete an itemclass."""
+    try:
+        # DELETE requests use query parameters, not JSON body
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if itemclass exists
+        cursor.execute('SELECT id FROM itemclasses WHERE id = ?', (itemclass_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Itemclass not found'}), 404
+        
+        # Delete the itemclass (CASCADE will handle element_itemclasses)
+        cursor.execute('DELETE FROM itemclasses WHERE id = ?', (itemclass_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itemtags', methods=['GET', 'POST'])
+def manage_itemtags():
+    """Get all itemtags or create a new itemtag."""
+    try:
+        if request.method == 'POST':
+            mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None)
+            db_file_path = request.args.get('db_file_path') or (request.json.get('db_file_path') if request.json else None)
+        else:
+            mission_dir = request.args.get('mission_dir')
+            db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='itemtags'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            name = data.get('name', '').strip()
+            
+            if not name:
+                conn.close()
+                return jsonify({'error': 'Itemtag name is required'}), 400
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO itemtags (name)
+                    VALUES (?)
+                ''', (name,))
+                conn.commit()
+                itemtag_id = cursor.lastrowid
+                conn.close()
+                return jsonify({'success': True, 'id': itemtag_id, 'name': name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Itemtag name already exists'}), 400
+        else:
+            cursor.execute('SELECT id, name FROM itemtags ORDER BY name')
+            itemtags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            conn.close()
+            return jsonify({'success': True, 'itemtags': itemtags})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itemtags/<int:itemtag_id>', methods=['DELETE'])
+def delete_itemtag(itemtag_id):
+    """Delete an itemtag."""
+    try:
+        # DELETE requests use query parameters, not JSON body
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if itemtag exists
+        cursor.execute('SELECT id FROM itemtags WHERE id = ?', (itemtag_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Itemtag not found'}), 404
+        
+        # Delete the itemtag (CASCADE will handle element_itemtags)
+        cursor.execute('DELETE FROM itemtags WHERE id = ?', (itemtag_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/reference-data')
 def get_reference_data():
     """Get all reference data (categories, tags, usageflags, valueflags, itemclasses, itemtags)."""
     try:
-        mission_dir = request.args.get('mission_dir', current_mission_dir)
-        conn = get_db_connection(mission_dir)
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
         cursor = conn.cursor()
         
         # Get all reference tables
@@ -882,6 +1185,9 @@ def get_reference_data():
         cursor.execute('SELECT id, name, description FROM itemtags ORDER BY name')
         itemtags = [{'id': r['id'], 'name': r['name'], 'description': r['description']} for r in cursor.fetchall()]
         
+        cursor.execute('SELECT id, name FROM flags ORDER BY name')
+        flags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+        
         conn.close()
         
         return jsonify({
@@ -891,7 +1197,8 @@ def get_reference_data():
             'usageflags': usageflags,
             'valueflags': valueflags,
             'itemclasses': itemclasses,
-            'itemtags': itemtags
+            'itemtags': itemtags,
+            'flags': flags
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -901,9 +1208,7 @@ def reconstruct_xml_element(data_dict, element_tag='type'):
     """Reconstruct an XML element from normalized data."""
     elem = ET.Element(element_tag)
     
-    # Add name attribute if present
-    if 'name' in data_dict:
-        elem.set('name', str(data_dict['name']))
+    # Type elements should have no attributes - name goes as child element
     
     # Process fields (skip internal fields)
     for field_name, field_value in data_dict.items():
@@ -913,14 +1218,19 @@ def reconstruct_xml_element(data_dict, element_tag='type'):
         if field_value is None:
             continue
         elif field_name == 'flags' and isinstance(field_value, dict):
-            # Flags are stored as a dict with attributes
+            # Flags are stored as a dict with attributes - include ALL flags with their values
             flags_elem = ET.Element('flags')
             for flag_name, flag_value in field_value.items():
-                if str(flag_value) == '1' or flag_value == 1:
-                    flags_elem.set(flag_name, '1')
-            # Only add flags element if it has at least one attribute
+                # Set all flags with their values (0 or 1)
+                flags_elem.set(flag_name, str(flag_value))
+            # Always add flags element if it has any flags
             if len(flags_elem.attrib) > 0:
                 elem.append(flags_elem)
+        elif field_name == 'name':
+            # Name should be a child element, not an attribute
+            child = ET.Element('name')
+            child.text = str(field_value)
+            elem.append(child)
         elif isinstance(field_value, list):
             for item in field_value:
                 child = reconstruct_child_element(field_name, item)
@@ -1123,17 +1433,17 @@ def load_element_data(cursor, element_key):
     if valueflags:
         data['value'] = [{'name': name} for name in valueflags]
     
-    # Add flags - reconstruct as attributes dict
+    # Add flags - get ALL flags for this element with their values (0 or 1)
     cursor.execute('''
-        SELECT f.name
+        SELECT f.name, ef.value
         FROM flags f
         JOIN element_flags ef ON f.id = ef.flag_id
-        WHERE ef.element_key = ? AND ef.value = 1
+        WHERE ef.element_key = ?
     ''', (element_key,))
-    flag_names = [r['name'] for r in cursor.fetchall()]
-    if flag_names:
-        # Create flags dict with all flags set to 1
-        flags_dict = {name: '1' for name in flag_names}
+    flag_rows = cursor.fetchall()
+    if flag_rows:
+        # Create flags dict with all flags and their values (0 or 1)
+        flags_dict = {r['name']: str(r['value']) for r in flag_rows}
         data['flags'] = flags_dict
     
     return data
@@ -1326,6 +1636,428 @@ def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
         return False
 
 
+@app.route('/api/elements/<element_key>/itemclass', methods=['PUT'])
+def update_element_itemclass(element_key):
+    """Update itemclass for an element (single itemclass only)."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        itemclass_id = data.get('itemclass_id')
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Delete existing itemclass assignment
+        cursor.execute('DELETE FROM element_itemclasses WHERE element_key = ?', (element_key,))
+        
+        # Add new assignment if itemclass_id is provided
+        if itemclass_id is not None:
+            try:
+                itemclass_id = int(itemclass_id)
+                # Verify itemclass exists
+                cursor.execute('SELECT id FROM itemclasses WHERE id = ?', (itemclass_id,))
+                if cursor.fetchone():
+                    cursor.execute('''
+                        INSERT INTO element_itemclasses (element_key, itemclass_id)
+                        VALUES (?, ?)
+                    ''', (element_key, itemclass_id))
+            except (ValueError, TypeError):
+                pass  # Invalid ID, just remove the assignment
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/itemtags', methods=['PUT'])
+def update_element_itemtags(element_key):
+    """Update itemtags for an element (multiple itemtags allowed)."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        itemtag_ids = data.get('itemtag_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not isinstance(itemtag_ids, list):
+            return jsonify({'error': 'itemtag_ids must be a list'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for itid in itemtag_ids:
+            if itid is not None and itid not in seen:
+                try:
+                    valid_ids.append(int(itid))
+                    seen.add(itid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Delete existing itemtag assignments
+        cursor.execute('DELETE FROM element_itemtags WHERE element_key = ?', (element_key,))
+        
+        # Add new assignments
+        for itemtag_id in valid_ids:
+            # Verify itemtag exists
+            cursor.execute('SELECT id FROM itemtags WHERE id = ?', (itemtag_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_itemtags (element_key, itemtag_id)
+                    VALUES (?, ?)
+                ''', (element_key, itemtag_id))
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/categories', methods=['PUT'])
+def update_element_categories(element_key):
+    """Update categories for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        category_ids = data.get('category_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not isinstance(category_ids, list):
+            return jsonify({'error': 'category_ids must be a list'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for cid in category_ids:
+            if cid is not None and cid not in seen:
+                try:
+                    valid_ids.append(int(cid))
+                    seen.add(cid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Delete existing category assignments
+        cursor.execute('DELETE FROM element_categories WHERE element_key = ?', (element_key,))
+        
+        # Add new assignments
+        for category_id in valid_ids:
+            # Verify category exists
+            cursor.execute('SELECT id FROM categories WHERE id = ?', (category_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_categories (element_key, category_id)
+                    VALUES (?, ?)
+                ''', (element_key, category_id))
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/valueflags', methods=['PUT'])
+def update_element_valueflags(element_key):
+    """Update valueflags for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        valueflag_ids = data.get('valueflag_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not isinstance(valueflag_ids, list):
+            return jsonify({'error': 'valueflag_ids must be a list'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for vid in valueflag_ids:
+            if vid is not None and vid not in seen:
+                try:
+                    valid_ids.append(int(vid))
+                    seen.add(vid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Delete existing valueflag assignments
+        cursor.execute('DELETE FROM element_valueflags WHERE element_key = ?', (element_key,))
+        
+        # Add new assignments
+        for valueflag_id in valid_ids:
+            # Verify valueflag exists
+            cursor.execute('SELECT id FROM valueflags WHERE id = ?', (valueflag_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_valueflags (element_key, valueflag_id)
+                    VALUES (?, ?)
+                ''', (element_key, valueflag_id))
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/usageflags', methods=['PUT'])
+def update_element_usageflags(element_key):
+    """Update usageflags for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        usageflag_ids = data.get('usageflag_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not isinstance(usageflag_ids, list):
+            return jsonify({'error': 'usageflag_ids must be a list'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for uid in usageflag_ids:
+            if uid is not None and uid not in seen:
+                try:
+                    valid_ids.append(int(uid))
+                    seen.add(uid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Delete existing usageflag assignments
+        cursor.execute('DELETE FROM element_usageflags WHERE element_key = ?', (element_key,))
+        
+        # Add new assignments
+        for usageflag_id in valid_ids:
+            # Verify usageflag exists
+            cursor.execute('SELECT id FROM usageflags WHERE id = ?', (usageflag_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_usageflags (element_key, usageflag_id)
+                    VALUES (?, ?)
+                ''', (element_key, usageflag_id))
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/flags', methods=['PUT'])
+def update_element_flags(element_key):
+    """Update flags for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        flag_ids = data.get('flag_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not isinstance(flag_ids, list):
+            return jsonify({'error': 'flag_ids must be a list'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        # Remove duplicates and None values
+        valid_ids = []
+        seen = set()
+        for fid in flag_ids:
+            if fid is not None and fid not in seen:
+                try:
+                    valid_ids.append(int(fid))
+                    seen.add(fid)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Delete existing flag assignments
+        cursor.execute('DELETE FROM element_flags WHERE element_key = ?', (element_key,))
+        
+        # Add new assignments (all flags are set to value=1)
+        for flag_id in valid_ids:
+            # Verify flag exists
+            cursor.execute('SELECT id FROM flags WHERE id = ?', (flag_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_flags (element_key, flag_id, value)
+                    VALUES (?, ?, 1)
+                ''', (element_key, flag_id))
+        
+        # Update the updated_at timestamp
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/elements/<element_key>/field/<field_name>', methods=['PUT'])
 def update_field(element_key, field_name):
     """Update a field value for an element."""
@@ -1338,12 +2070,17 @@ def update_field(element_key, field_name):
         
         data = request.json
         new_value = data.get('value')
-        mission_dir = data.get('mission_dir', current_mission_dir)
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
         
         if new_value is None:
             return jsonify({'error': 'Value is required'}), 400
         
-        conn = get_db_connection(mission_dir)
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
         cursor = conn.cursor()
         
         # Check if element exists
