@@ -723,6 +723,9 @@ async function loadGroups() {
     }
     
     missionDir = dir;
+    // Save to localStorage
+    localStorage.setItem('marker_viewer_missionDir', missionDir);
+    
     updateStatus('Loading markers...');
     
     try {
@@ -763,33 +766,78 @@ function loadBackgroundImage() {
 }
 
 // Handle background image file selection
-document.getElementById('backgroundImage').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
-        const img = new Image();
-        img.onload = () => {
-            backgroundImage = img;
-            // Set default dimensions based on image size (1 pixel per metre)
-            imageWidth = img.width;
-            imageHeight = img.height;
-            document.getElementById('imageWidth').value = imageWidth;
-            document.getElementById('imageHeight').value = imageHeight;
-            document.getElementById('imageDimensionsGroup').style.display = 'flex';
-            initBackgroundCache();
-            draw();
+function setupBackgroundImageHandler() {
+    document.getElementById('backgroundImage').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        // Check file size (localStorage limit is typically 5-10MB)
+        // We'll try to store images up to 3MB to be safe
+        const MAX_STORAGE_SIZE = 3 * 1024 * 1024; // 3MB in bytes
+        const willStore = file.size <= MAX_STORAGE_SIZE;
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const dataUrl = event.target.result;
+            
+            // Try to save to localStorage, but store file name if too large
+            if (willStore) {
+                try {
+                    localStorage.setItem('marker_viewer_backgroundImage', dataUrl);
+                    // Clear the file name flag since we stored the image
+                    localStorage.removeItem('marker_viewer_backgroundImageFileName');
+                } catch (error) {
+                    if (error.name === 'QuotaExceededError') {
+                        // Image too large, store file name instead
+                        localStorage.setItem('marker_viewer_backgroundImageFileName', file.name);
+                        updateStatus('Image too large to cache. File name saved - please reload image on next session', true);
+                        console.warn('Image too large for localStorage, storing file name instead:', file.name);
+                    } else {
+                        console.error('Error saving image to localStorage:', error);
+                    }
+                }
+            } else {
+                // File is too large, store file name instead
+                localStorage.setItem('marker_viewer_backgroundImageFileName', file.name);
+                updateStatus('Image too large to cache. File name saved - please reload image on next session', true);
+            }
+            
+            const img = new Image();
+            img.onload = () => {
+                backgroundImage = img;
+                // Set default dimensions based on image size (1 pixel per metre)
+                imageWidth = img.width;
+                imageHeight = img.height;
+                document.getElementById('imageWidth').value = imageWidth;
+                document.getElementById('imageHeight').value = imageHeight;
+                
+                // Save dimensions to localStorage (these are small, should always work)
+                try {
+                    localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
+                    localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+                } catch (error) {
+                    console.warn('Could not save image dimensions to localStorage:', error);
+                }
+                
+                document.getElementById('imageDimensionsGroup').style.display = 'flex';
+                initBackgroundCache();
+                draw();
+            };
+            img.src = dataUrl;
         };
-        img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-});
+        reader.readAsDataURL(file);
+    });
+}
 
 // Apply image dimensions
 function applyImageDimensions() {
     imageWidth = parseFloat(document.getElementById('imageWidth').value) || 1000;
     imageHeight = parseFloat(document.getElementById('imageHeight').value) || 1000;
+    
+    // Save to localStorage
+    localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
+    localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+    
     draw();
 }
 
@@ -799,12 +847,97 @@ function clearBackgroundImage() {
     backgroundCacheValid = false;
     document.getElementById('backgroundImage').value = '';
     document.getElementById('imageDimensionsGroup').style.display = 'none';
+    
+    // Remove from localStorage
+    localStorage.removeItem('marker_viewer_backgroundImage');
+    localStorage.removeItem('marker_viewer_backgroundImageFileName');
+    localStorage.removeItem('marker_viewer_imageWidth');
+    localStorage.removeItem('marker_viewer_imageHeight');
+    
     draw();
+}
+
+// Restore saved state from localStorage
+function restoreSavedState() {
+    // Restore mission directory
+    const savedMissionDir = localStorage.getItem('marker_viewer_missionDir');
+    if (savedMissionDir) {
+        missionDir = savedMissionDir;
+        document.getElementById('missionDir').value = savedMissionDir;
+    }
+    
+    // Restore background image
+    const savedImageDataUrl = localStorage.getItem('marker_viewer_backgroundImage');
+    const savedImageFileName = localStorage.getItem('marker_viewer_backgroundImageFileName');
+    
+    if (savedImageDataUrl) {
+        // Image was cached, restore it
+        const img = new Image();
+        img.onload = () => {
+            backgroundImage = img;
+            
+            // Restore dimensions
+            const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
+            const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+            
+            if (savedWidth) {
+                imageWidth = parseFloat(savedWidth);
+                document.getElementById('imageWidth').value = imageWidth;
+            } else {
+                imageWidth = img.width;
+                document.getElementById('imageWidth').value = imageWidth;
+            }
+            
+            if (savedHeight) {
+                imageHeight = parseFloat(savedHeight);
+                document.getElementById('imageHeight').value = imageHeight;
+            } else {
+                imageHeight = img.height;
+                document.getElementById('imageHeight').value = imageHeight;
+            }
+            
+            document.getElementById('imageDimensionsGroup').style.display = 'flex';
+            initBackgroundCache();
+            draw();
+        };
+        img.onerror = () => {
+            console.error('Failed to load cached background image');
+            updateStatus('Failed to load cached background image', true);
+        };
+        img.src = savedImageDataUrl;
+    } else if (savedImageFileName) {
+        // Image was too large to cache, but we saved the file name
+        // Restore dimensions if available
+        const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
+        const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+        
+        if (savedWidth && savedHeight) {
+            imageWidth = parseFloat(savedWidth);
+            imageHeight = parseFloat(savedHeight);
+            document.getElementById('imageWidth').value = imageWidth;
+            document.getElementById('imageHeight').value = imageHeight;
+            document.getElementById('imageDimensionsGroup').style.display = 'flex';
+        }
+        
+        // Show message to user
+        updateStatus(`Background image "${savedImageFileName}" was too large to cache. Please reload it using the "Load Image" button.`, true);
+    }
+    
+    // Auto-load markers if mission directory is saved
+    if (savedMissionDir) {
+        loadGroups();
+    }
 }
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
     initCanvas();
+    
+    // Setup background image handler
+    setupBackgroundImageHandler();
+    
+    // Restore saved state
+    restoreSavedState();
     
     document.getElementById('loadDataBtn').addEventListener('click', loadGroups);
     document.getElementById('showGrid').addEventListener('change', (e) => {
