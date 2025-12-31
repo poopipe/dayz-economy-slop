@@ -1983,13 +1983,13 @@ def reconstruct_xml_element(data_dict, element_tag='type'):
         if field_value is None:
             continue
         elif field_name == 'flags' and isinstance(field_value, dict):
-            # Flags are stored as a dict with attributes - include ALL flags with their values
+            # Flags are stored as a dict with attributes - include ALL flags with their values (0 or 1)
             flags_elem = ET.Element('flags')
             for flag_name, flag_value in field_value.items():
                 # Set all flags with their values (0 or 1)
                 flags_elem.set(flag_name, str(flag_value))
-            # Always add flags element if it has any flags
-            if len(flags_elem.attrib) > 0:
+            # Always add flags element if we have any flags in the dict
+            if field_value:  # If dict is not empty
                 elem.append(flags_elem)
         elif field_name == 'name':
             # Name should be a child element, not an attribute
@@ -2284,17 +2284,24 @@ def load_element_data(cursor, element_key):
     if valueflags:
         data['value'] = [{'name': name} for name in valueflags]
     
-    # Add flags - get ALL flags for this element with their values (0 or 1)
-    cursor.execute('''
-        SELECT f.name, ef.value
-        FROM flags f
-        JOIN element_flags ef ON f.id = ef.flag_id
-        WHERE ef.element_key = ?
-    ''', (element_key,))
-    flag_rows = cursor.fetchall()
-    if flag_rows:
-        # Create flags dict with all flags and their values (0 or 1)
-        flags_dict = {r['name']: str(r['value']) for r in flag_rows}
+    # Add flags - get ALL flags from the flags table, set to 1 if set for this element, 0 otherwise
+    cursor.execute('SELECT name FROM flags ORDER BY name')
+    all_flags = [r['name'] for r in cursor.fetchall()]
+    
+    if all_flags:
+        # Get flags that are set (value = 1) for this element
+        cursor.execute('''
+            SELECT f.name
+            FROM flags f
+            JOIN element_flags ef ON f.id = ef.flag_id
+            WHERE ef.element_key = ? AND ef.value = 1
+        ''', (element_key,))
+        set_flags = {r['name'] for r in cursor.fetchall()}
+        
+        # Create flags dict with ALL flags: 1 if set, 0 if not set
+        flags_dict = {}
+        for flag_name in all_flags:
+            flags_dict[flag_name] = '1' if flag_name in set_flags else '0'
         data['flags'] = flags_dict
     
     return data
