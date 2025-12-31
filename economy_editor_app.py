@@ -352,8 +352,49 @@ def init_database_for_file(db_file_path, mission_dir=None):
     for value in ref_data['valueflags']:
         cursor.execute('INSERT OR IGNORE INTO valueflags (name) VALUES (?)', (value['name'],))
     
+    # Ensure count_in_hoarder flag exists
+    cursor.execute('INSERT OR IGNORE INTO flags (name) VALUES (?)', ('count_in_hoarder',))
+    
     conn.commit()
     conn.close()
+
+
+def ensure_count_in_hoarder_flag(conn):
+    """Ensure count_in_hoarder flag exists and all elements have it set to 0 if not set."""
+    cursor = conn.cursor()
+    
+    # Ensure flag exists
+    cursor.execute('INSERT OR IGNORE INTO flags (name) VALUES (?)', ('count_in_hoarder',))
+    
+    # Get the flag ID
+    cursor.execute('SELECT id FROM flags WHERE name = ?', ('count_in_hoarder',))
+    flag_row = cursor.fetchone()
+    if not flag_row:
+        conn.commit()
+        return
+    
+    flag_id = flag_row['id']
+    
+    # Get all element keys that don't have this flag set
+    cursor.execute('''
+        SELECT DISTINCT te.element_key
+        FROM type_elements te
+        WHERE te.element_key NOT IN (
+            SELECT element_key FROM element_flags WHERE flag_id = ?
+        )
+    ''', (flag_id,))
+    
+    missing_elements = cursor.fetchall()
+    
+    # Set count_in_hoarder to 0 for all elements that don't have it
+    for row in missing_elements:
+        element_key = row['element_key']
+        cursor.execute('''
+            INSERT INTO element_flags (element_key, flag_id, value)
+            VALUES (?, ?, 0)
+        ''', (element_key, flag_id))
+    
+    conn.commit()
 
 
 def extract_element_data(root, element_type='type'):
@@ -809,6 +850,10 @@ def get_elements():
         else:
             mission_dir = mission_dir or current_mission_dir
             conn = get_db_connection(mission_dir)
+        
+        # Ensure count_in_hoarder flag exists and is set for all elements
+        ensure_count_in_hoarder_flag(conn)
+        
         cursor = conn.cursor()
         
         # Check if table exists, if not initialize schema
@@ -822,6 +867,8 @@ def get_elements():
                 conn = get_db_connection(db_file_path=db_file_path)
             else:
                 conn = get_db_connection(mission_dir or current_mission_dir)
+            # Ensure count_in_hoarder flag exists
+            ensure_count_in_hoarder_flag(conn)
             cursor = conn.cursor()
         
         # Get all elements
@@ -2139,62 +2186,49 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         conn.close()
         return result
     
-    # Normal export - group by source file
+    # Normal export - write all types to missionfolder/db/types.xml
     cursor.execute('''
-        SELECT DISTINCT source_folder, source_file
+        SELECT element_key
         FROM type_elements
-        WHERE source_file IS NOT NULL AND source_folder IS NOT NULL
-        ORDER BY source_folder, source_file
+        ORDER BY element_key
     ''')
     
-    files_data = defaultdict(list)
+    all_elements = []
     for row in cursor.fetchall():
-        source_folder = row['source_folder']
-        source_file = row['source_file']
-        
-        # Get all elements for this file
-        cursor.execute('''
-            SELECT element_key
-            FROM type_elements
-            WHERE source_folder = ? AND source_file = ?
-        ''', (source_folder, source_file))
-        
-        for elem_row in cursor.fetchall():
-            element_key = elem_row['element_key']
-            
-            # Load element data
-            data = load_element_data(cursor, element_key)
-            files_data[(source_folder, source_file)].append(data)
+        element_key = row['element_key']
+        # Load element data
+        data = load_element_data(cursor, element_key)
+        all_elements.append(data)
     
     # Close connection after normal export
     conn.close()
     
-    # Export each file
+    # Export to single file: missionfolder/db/types.xml
+    db_folder = mission_path / 'db'
+    db_folder.mkdir(parents=True, exist_ok=True)
+    xml_file = db_folder / 'types.xml'
+    
     exported_count = 0
     error_count = 0
     errors = []
     
-    for (folder_name, filename), elements in files_data.items():
-        xml_file = mission_path / folder_name / filename
-        xml_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        root = ET.Element('types')
+        for elem_data in all_elements:
+            type_elem = reconstruct_xml_element(elem_data, 'type')
+            root.append(type_elem)
         
-        try:
-            root = ET.Element('types')
-            for elem_data in elements:
-                type_elem = reconstruct_xml_element(elem_data, 'type')
-                root.append(type_elem)
-            
-            tree = ET.ElementTree(root)
-            ET.indent(tree, space='    ')
-            
-            with open(xml_file, 'wb') as f:
-                f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
-                tree.write(f, encoding='utf-8', xml_declaration=False)
-            
-            exported_count += 1
-        except Exception as e:
-            error_count += 1
-            errors.append({'file': str(xml_file), 'error': str(e)})
+        tree = ET.ElementTree(root)
+        ET.indent(tree, space='    ')
+        
+        with open(xml_file, 'wb') as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n'.encode('utf-8'))
+            tree.write(f, encoding='utf-8', xml_declaration=False)
+        
+        exported_count = 1
+    except Exception as e:
+        error_count = 1
+        errors.append({'file': str(xml_file), 'error': str(e)})
     
     return {
         'success': True,
@@ -2952,6 +2986,10 @@ def update_element_flags(element_key):
         else:
             mission_dir = mission_dir or current_mission_dir
             conn = get_db_connection(mission_dir)
+        
+        # Ensure count_in_hoarder flag exists
+        ensure_count_in_hoarder_flag(conn)
+        
         cursor = conn.cursor()
         
         # Check if element exists
