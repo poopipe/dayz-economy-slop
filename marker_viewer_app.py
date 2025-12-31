@@ -41,15 +41,83 @@ def parse_group_pos(pos_str):
         return (0.0, 0.0, 0.0)
 
 
-def load_groups_from_xml(xml_file_path):
+def load_proto_groups(proto_file_path):
     """
-    Load group data from mapgrouppos.xml.
+    Load group prototypes from mapgroupproto.xml.
+    Returns a dictionary mapping group names to their data (XML string and parsed attributes).
+    """
+    proto_groups = {}
+    
+    if not proto_file_path or not Path(proto_file_path).exists():
+        print(f"Proto XML file does not exist: {proto_file_path}")
+        return proto_groups
+    
+    try:
+        tree = ET.parse(proto_file_path)
+        root = tree.getroot()
+        
+        # Try different XPath expressions to find groups
+        group_elements = root.findall('.//group')
+        if len(group_elements) == 0:
+            group_elements = root.findall('//group')
+        if len(group_elements) == 0:
+            group_elements = root.findall('group')
+        
+        print(f"Found {len(group_elements)} group prototypes in mapgroupproto.xml")
+        
+        for group in group_elements:
+            name = group.get('name', '')
+            if name:
+                # Store the original XML element as a string
+                xml_string = ET.tostring(group, encoding='unicode')
+                xml_string = xml_string.strip()
+                
+                # Extract all attributes for searching
+                attributes = dict(group.attrib)
+                
+                # Extract all child element text content for searching
+                child_data = {}
+                for child in group:
+                    tag = child.tag
+                    text = child.text.strip() if child.text else ''
+                    # Store as list if multiple children with same tag
+                    if tag in child_data:
+                        if not isinstance(child_data[tag], list):
+                            child_data[tag] = [child_data[tag]]
+                        child_data[tag].append(text)
+                    else:
+                        child_data[tag] = text
+                
+                # Create searchable data structure
+                proto_groups[name] = {
+                    'xml': xml_string,
+                    'attributes': attributes,
+                    'children': child_data
+                }
+        
+        print(f"Successfully loaded {len(proto_groups)} group prototypes")
+    except Exception as e:
+        import traceback
+        print(f"Error loading proto groups: {e}")
+        traceback.print_exc()
+    
+    return proto_groups
+
+
+def load_groups_from_xml(xml_file_path, proto_file_path=None):
+    """
+    Load group data from mapgrouppos.xml and optionally match with mapgroupproto.xml.
     Returns list of group dictionaries with position data.
     Note: z coordinate will be reversed in the frontend to place origin at lower left.
     """
     if not xml_file_path or not Path(xml_file_path).exists():
         print(f"XML file does not exist: {xml_file_path}")
         return []
+    
+    # Load proto groups if proto file path is provided
+    proto_groups = {}
+    if proto_file_path:
+        proto_groups = load_proto_groups(proto_file_path)
     
     try:
         tree = ET.parse(xml_file_path)
@@ -110,12 +178,26 @@ def load_groups_from_xml(xml_file_path):
                 'y': y,
                 'z': z,  # Frontend will reverse this
                 'usage': usage,
-                'xml': xml_string  # Store original XML element
+                'xml': xml_string  # Store original XML element from mapgrouppos.xml
             }
+            
+            # Try to find matching proto group and store its data
+            if name in proto_groups:
+                proto_data = proto_groups[name]
+                group_data['proto_xml'] = proto_data['xml']
+                group_data['proto_attributes'] = proto_data['attributes']
+                group_data['proto_children'] = proto_data['children']
+                print(f"Found matching proto for group '{name}'")
+            else:
+                group_data['proto_xml'] = None
+                group_data['proto_attributes'] = {}
+                group_data['proto_children'] = {}
             
             groups.append(group_data)
         
         print(f"Successfully loaded {len(groups)} groups")
+        matched_count = sum(1 for g in groups if g.get('proto_xml') is not None)
+        print(f"Matched {matched_count} groups with prototypes")
         return groups
     except Exception as e:
         import traceback
@@ -154,8 +236,17 @@ def get_groups():
                 'error': f'mapgrouppos.xml not found at: {mapgrouppos_file}'
             }), 404
         
+        # Look for mapgroupproto.xml (optional)
+        mapgroupproto_file = mission_path / 'mapgroupproto.xml'
+        proto_file_path = str(mapgroupproto_file) if mapgroupproto_file.exists() else None
+        
+        if proto_file_path:
+            print(f"Found mapgroupproto.xml, will match groups by name")
+        else:
+            print(f"mapgroupproto.xml not found, loading groups without proto matching")
+        
         print(f"Loading groups from: {mapgrouppos_file}")
-        groups = load_groups_from_xml(str(mapgrouppos_file))
+        groups = load_groups_from_xml(str(mapgrouppos_file), proto_file_path)
         
         if len(groups) == 0:
             return jsonify({
