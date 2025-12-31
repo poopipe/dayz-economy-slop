@@ -6,13 +6,25 @@ Flask application for displaying markers in 2D space from mapgrouppos.xml.
 import os
 import json
 import xml.etree.ElementTree as ET
+import uuid
+import shutil
 from pathlib import Path
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
 # Default mission directory
 DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim"
+
+# Directory to store uploaded background images
+UPLOAD_FOLDER = Path('uploads/background_images')
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'}
+
+def allowed_file(filename):
+    """Check if file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def parse_group_pos(pos_str):
@@ -165,6 +177,127 @@ def get_groups():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/upload-background-image', methods=['POST'])
+def upload_background_image():
+    """Upload and save background image to server."""
+    try:
+        if 'image' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No image file provided'
+            }), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({
+                'success': False,
+                'error': 'No file selected'
+            }), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({
+                'success': False,
+                'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'
+            }), 400
+        
+        # Generate unique filename
+        file_ext = file.filename.rsplit('.', 1)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
+        file_path = UPLOAD_FOLDER / unique_filename
+        
+        # Save file
+        file.save(file_path)
+        
+        print(f"Background image saved: {file_path}")
+        
+        return jsonify({
+            'success': True,
+            'image_id': unique_filename,
+            'message': 'Image uploaded successfully'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/background-image/<image_id>')
+def get_background_image(image_id):
+    """Retrieve background image from server."""
+    try:
+        # Sanitize filename to prevent directory traversal
+        image_id = secure_filename(image_id)
+        file_path = UPLOAD_FOLDER / image_id
+        
+        if not file_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'Image not found'
+            }), 404
+        
+        # Check if file is within upload folder (security check)
+        upload_folder_resolved = str(UPLOAD_FOLDER.resolve())
+        file_path_resolved = str(file_path.resolve())
+        if not file_path_resolved.startswith(upload_folder_resolved):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid image path'
+            }), 403
+        
+        return send_file(file_path)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/delete-background-image/<image_id>', methods=['DELETE'])
+def delete_background_image(image_id):
+    """Delete background image from server."""
+    try:
+        # Sanitize filename to prevent directory traversal
+        image_id = secure_filename(image_id)
+        file_path = UPLOAD_FOLDER / image_id
+        
+        if not file_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'Image not found'
+            }), 404
+        
+        # Check if file is within upload folder (security check)
+        upload_folder_resolved = str(UPLOAD_FOLDER.resolve())
+        file_path_resolved = str(file_path.resolve())
+        if not file_path_resolved.startswith(upload_folder_resolved):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid image path'
+            }), 403
+        
+        file_path.unlink()
+        print(f"Background image deleted: {file_path}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Image deleted successfully'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print(f"Marker Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")

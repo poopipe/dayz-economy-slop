@@ -29,6 +29,31 @@ let backgroundCanvas = null;
 let backgroundCtx = null;
 let backgroundCacheValid = false;
 let animationFrameId = null;
+let isPanning = false;
+let isZooming = false;
+let needsRedraw = false;
+
+// WebGL for background image rendering
+let gl = null;
+let glProgram = null;
+let backgroundTexture = null;
+let backgroundVBO = null;
+let backgroundVAO = null;
+let useWebGL = false;
+
+// Request a draw using requestAnimationFrame (throttled)
+function requestDraw() {
+    if (!needsRedraw) {
+        needsRedraw = true;
+        if (!animationFrameId) {
+            animationFrameId = requestAnimationFrame(() => {
+                animationFrameId = null;
+                needsRedraw = false;
+                draw();
+            });
+        }
+    }
+}
 
 // Initialize canvas
 function initCanvas() {
@@ -39,7 +64,6 @@ function initCanvas() {
     resizeCanvas();
     
     // Pan with middle mouse button or space + drag
-    let isPanning = false;
     let panStartX = 0;
     let panStartY = 0;
     let panStartOffsetX = 0;
@@ -77,12 +101,12 @@ function initCanvas() {
             viewOffsetX = panStartOffsetX + (x - panStartX);
             viewOffsetY = panStartOffsetY + (y - panStartY);
             hoveredMarkerIndex = -1; // Clear hover when panning
-            draw();
+            requestDraw();
         } else if (isMarqueeSelecting) {
             // Update marquee rectangle
             marqueeCurrentX = x;
             marqueeCurrentY = y;
-            draw();
+            requestDraw();
         } else {
             // Check for hover
             updateHoveredMarker(x, y);
@@ -92,6 +116,8 @@ function initCanvas() {
     canvas.addEventListener('mouseup', (e) => {
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             isPanning = false;
+            // Force a full redraw after panning ends
+            draw();
         }
         handleMouseUp(e);
     });
@@ -121,6 +147,198 @@ function resizeCanvas() {
     canvasHeight = container.clientHeight;
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
+    
+    // Resize background canvas if it exists
+    if (backgroundCanvas) {
+        backgroundCanvas.width = canvasWidth;
+        backgroundCanvas.height = canvasHeight;
+    }
+    
+    // Update WebGL viewport if using WebGL
+    if (gl && useWebGL) {
+        gl.viewport(0, 0, canvasWidth, canvasHeight);
+    }
+}
+
+// Initialize WebGL for background rendering
+function initWebGL() {
+    if (!gl) return;
+    
+    // Vertex shader - simple pass-through
+    const vertexShaderSource = `
+        attribute vec2 a_position;
+        attribute vec2 a_texCoord;
+        varying vec2 v_texCoord;
+        uniform vec2 u_resolution;
+        
+        void main() {
+            vec2 clipSpace = ((a_position / u_resolution) * 2.0) - 1.0;
+            gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+            v_texCoord = a_texCoord;
+        }
+    `;
+    
+    // Fragment shader - texture sampling
+    const fragmentShaderSource = `
+        precision mediump float;
+        uniform sampler2D u_texture;
+        varying vec2 v_texCoord;
+        
+        void main() {
+            gl_FragColor = texture2D(u_texture, v_texCoord);
+        }
+    `;
+    
+    // Compile shaders
+    const vertexShader = compileShader(gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+    
+    if (!vertexShader || !fragmentShader) {
+        useWebGL = false;
+        return;
+    }
+    
+    // Create program
+    glProgram = gl.createProgram();
+    gl.attachShader(glProgram, vertexShader);
+    gl.attachShader(glProgram, fragmentShader);
+    gl.linkProgram(glProgram);
+    
+    if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
+        console.error('WebGL program link error:', gl.getProgramInfoLog(glProgram));
+        useWebGL = false;
+        return;
+    }
+    
+    // Create texture
+    backgroundTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+}
+
+// Compile WebGL shader
+function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+    }
+    
+    return shader;
+}
+
+// Upload background image to WebGL texture
+function uploadBackgroundToWebGL() {
+    if (!gl || !backgroundImage || !backgroundTexture) return;
+    
+    gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, backgroundImage);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+// Draw background using WebGL (much faster)
+function drawBackgroundImageWebGL() {
+    if (!gl || !backgroundImage || !backgroundTexture || !glProgram) return;
+    
+    // Calculate visible bounds
+    const topLeft = screenToWorld(0, 0);
+    const bottomRight = screenToWorld(canvasWidth, canvasHeight);
+    const topRight = screenToWorld(canvasWidth, 0);
+    const bottomLeft = screenToWorld(0, canvasHeight);
+    
+    const visibleMinX = Math.min(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const visibleMaxX = Math.max(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const visibleMinZ = Math.min(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
+    const visibleMaxZ = Math.max(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
+    
+    // Clamp to image bounds
+    const drawMinX = Math.max(visibleMinX, 0);
+    const drawMaxX = Math.min(visibleMaxX, imageWidth);
+    const drawMinZ = Math.max(visibleMinZ, 0);
+    const drawMaxZ = Math.min(visibleMaxZ, imageHeight);
+    
+    if (drawMinX >= drawMaxX || drawMinZ >= drawMaxZ) return;
+    
+    // Calculate texture coordinates
+    const texMinX = drawMinX / imageWidth;
+    const texMaxX = drawMaxX / imageWidth;
+    const texMinY = 1.0 - (drawMaxZ / imageHeight); // Flip Y
+    const texMaxY = 1.0 - (drawMinZ / imageHeight);
+    
+    // Calculate screen coordinates
+    const destTopLeft = worldToScreen(drawMinX, drawMaxZ);
+    const destBottomRight = worldToScreen(drawMaxX, drawMinZ);
+    
+    // Create quad vertices
+    const x1 = destTopLeft.x;
+    const y1 = destTopLeft.y;
+    const x2 = destBottomRight.x;
+    const y2 = destBottomRight.y;
+    
+    // Setup WebGL state
+    gl.useProgram(glProgram);
+    
+    // Create and bind vertex buffer
+    const positions = new Float32Array([
+        x1, y1,  // Top-left
+        x2, y1,  // Top-right
+        x1, y2,  // Bottom-left
+        x2, y2   // Bottom-right
+    ]);
+    
+    const texCoords = new Float32Array([
+        texMinX, texMinY,  // Top-left
+        texMaxX, texMinY,  // Top-right
+        texMinX, texMaxY,  // Bottom-left
+        texMaxX, texMaxY   // Bottom-right
+    ]);
+    
+    // Create position buffer
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+    
+    const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+    
+    // Create texture coordinate buffer
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+    
+    const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texCoord');
+    gl.enableVertexAttribArray(texCoordLocation);
+    gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+    
+    // Set uniforms
+    const resolutionLocation = gl.getUniformLocation(glProgram, 'u_resolution');
+    gl.uniform2f(resolutionLocation, canvasWidth, canvasHeight);
+    
+    // Bind texture
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
+    const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
+    gl.uniform1i(textureLocation, 0);
+    
+    // Enable blending for transparency
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    
+    // Draw
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    
+    // Cleanup
+    gl.deleteBuffer(positionBuffer);
+    gl.deleteBuffer(texCoordBuffer);
+    gl.disable(gl.BLEND);
 }
 
 // Convert world coordinates (metres) to screen coordinates
@@ -252,10 +470,17 @@ function initBackgroundCache() {
     backgroundCacheValid = false;
 }
 
-// Draw background image with optimization
+// Draw background image - uses WebGL if available for better performance
 function drawBackgroundImage() {
     if (!backgroundImage) return;
     
+    // Use WebGL if available (much faster)
+    if (useWebGL && gl && backgroundTexture) {
+        drawBackgroundImageWebGL();
+        return;
+    }
+    
+    // Fallback to 2D canvas rendering
     // Calculate visible bounds in world coordinates
     const topLeft = screenToWorld(0, 0);
     const bottomRight = screenToWorld(canvasWidth, canvasHeight);
@@ -300,12 +525,15 @@ function drawBackgroundImage() {
     const destWidth = destBottomRight.x - destTopLeft.x;
     const destHeight = destBottomRight.y - destTopLeft.y;
     
-    // Only draw the visible portion of the image
+    // Draw directly to main canvas
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(
         backgroundImage,
         sourceX, sourceY, sourceWidth, sourceHeight, // Source rectangle
         destX, destY, destWidth, destHeight // Destination rectangle
     );
+    ctx.restore();
 }
 
 // Draw markers
@@ -426,13 +654,25 @@ function draw() {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
     }
+    needsRedraw = false;
     
-    // For immediate feedback during pan/zoom, draw synchronously
-    // The clipping optimization in drawBackgroundImage handles performance
+    // Clear background canvas if using WebGL
+    if (useWebGL && gl && backgroundCanvas) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.clearColor(1.0, 1.0, 1.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        drawBackgroundImage(); // Draw background on WebGL canvas
+    }
+    
+    // Clear main canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw in order: background image, grid, markers, marquee, tooltip
-    drawBackgroundImage();
+    // Draw background on 2D canvas if not using WebGL
+    if (!useWebGL) {
+        drawBackgroundImage();
+    }
+    
+    // Draw grid, markers, marquee on main canvas
     drawGrid();
     drawMarkers();
     drawMarquee();
@@ -476,7 +716,7 @@ function handleMouseDown(e) {
             marqueeStartY = y;
             marqueeCurrentX = x;
             marqueeCurrentY = y;
-            draw();
+            requestDraw();
         }
     }
 }
@@ -555,9 +795,6 @@ function handleWheel(e) {
     // Get world coordinates at mouse position before zoom
     const worldPoint = screenToWorld(mouseX, mouseY);
     
-    // Store old scale
-    const oldScale = viewScale;
-    
     // Adjust scale
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     viewScale *= zoomFactor;
@@ -570,7 +807,7 @@ function handleWheel(e) {
     viewOffsetX += mouseX - newScreenPos.x;
     viewOffsetY += mouseY - newScreenPos.y;
     
-    draw();
+    requestDraw();
 }
 
 // Select marker at point
@@ -767,66 +1004,81 @@ function loadBackgroundImage() {
 
 // Handle background image file selection
 function setupBackgroundImageHandler() {
-    document.getElementById('backgroundImage').addEventListener('change', (e) => {
+    document.getElementById('backgroundImage').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
         
-        // Check file size (localStorage limit is typically 5-10MB)
-        // We'll try to store images up to 3MB to be safe
-        const MAX_STORAGE_SIZE = 3 * 1024 * 1024; // 3MB in bytes
-        const willStore = file.size <= MAX_STORAGE_SIZE;
+        updateStatus('Uploading image to server...');
         
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const dataUrl = event.target.result;
+        try {
+            // Upload image to server
+            const formData = new FormData();
+            formData.append('image', file);
             
-            // Try to save to localStorage, but store file name if too large
-            if (willStore) {
-                try {
-                    localStorage.setItem('marker_viewer_backgroundImage', dataUrl);
-                    // Clear the file name flag since we stored the image
-                    localStorage.removeItem('marker_viewer_backgroundImageFileName');
-                } catch (error) {
-                    if (error.name === 'QuotaExceededError') {
-                        // Image too large, store file name instead
-                        localStorage.setItem('marker_viewer_backgroundImageFileName', file.name);
-                        updateStatus('Image too large to cache. File name saved - please reload image on next session', true);
-                        console.warn('Image too large for localStorage, storing file name instead:', file.name);
-                    } else {
-                        console.error('Error saving image to localStorage:', error);
-                    }
-                }
-            } else {
-                // File is too large, store file name instead
-                localStorage.setItem('marker_viewer_backgroundImageFileName', file.name);
-                updateStatus('Image too large to cache. File name saved - please reload image on next session', true);
+            const response = await fetch('/api/upload-background-image', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (!data.success) {
+                updateStatus(`Error uploading image: ${data.error}`, true);
+                return;
             }
             
-            const img = new Image();
-            img.onload = () => {
-                backgroundImage = img;
-                // Set default dimensions based on image size (1 pixel per metre)
-                imageWidth = img.width;
-                imageHeight = img.height;
-                document.getElementById('imageWidth').value = imageWidth;
-                document.getElementById('imageHeight').value = imageHeight;
-                
-                // Save dimensions to localStorage (these are small, should always work)
-                try {
-                    localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
-                    localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
-                } catch (error) {
-                    console.warn('Could not save image dimensions to localStorage:', error);
-                }
-                
-                document.getElementById('imageDimensionsGroup').style.display = 'flex';
-                initBackgroundCache();
-                draw();
-            };
-            img.src = dataUrl;
-        };
-        reader.readAsDataURL(file);
+            const imageId = data.image_id;
+            
+            // Store image ID in localStorage (not the image data)
+            localStorage.setItem('marker_viewer_backgroundImageId', imageId);
+            // Clear old localStorage image data if it exists
+            localStorage.removeItem('marker_viewer_backgroundImage');
+            localStorage.removeItem('marker_viewer_backgroundImageFileName');
+            
+            // Load image from server
+            await loadBackgroundImageFromServer(imageId);
+            
+            updateStatus('Image uploaded and loaded successfully');
+        } catch (error) {
+            updateStatus(`Error uploading image: ${error.message}`, true);
+            console.error('Error uploading image:', error);
+        }
     });
+}
+
+// Load background image from server
+async function loadBackgroundImageFromServer(imageId) {
+    try {
+        const img = new Image();
+        
+        img.onload = () => {
+            backgroundImage = img;
+            // Set default dimensions based on image size (1 pixel per metre)
+            imageWidth = img.width;
+            imageHeight = img.height;
+            document.getElementById('imageWidth').value = imageWidth;
+            document.getElementById('imageHeight').value = imageHeight;
+            
+            // Save dimensions to localStorage
+            localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
+            localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+            
+            document.getElementById('imageDimensionsGroup').style.display = 'flex';
+            initBackgroundCache();
+            draw();
+        };
+        
+        img.onerror = () => {
+            updateStatus('Failed to load image from server', true);
+            console.error('Failed to load image from server:', imageId);
+        };
+        
+        // Load image from server endpoint
+        img.src = `/api/background-image/${imageId}`;
+    } catch (error) {
+        updateStatus(`Error loading image: ${error.message}`, true);
+        console.error('Error loading image from server:', error);
+    }
 }
 
 // Apply image dimensions
@@ -842,7 +1094,19 @@ function applyImageDimensions() {
 }
 
 // Clear background image
-function clearBackgroundImage() {
+async function clearBackgroundImage() {
+    // Delete image from server if we have an image ID
+    const imageId = localStorage.getItem('marker_viewer_backgroundImageId');
+    if (imageId) {
+        try {
+            await fetch(`/api/delete-background-image/${imageId}`, {
+                method: 'DELETE'
+            });
+        } catch (error) {
+            console.warn('Error deleting image from server:', error);
+        }
+    }
+    
     backgroundImage = null;
     backgroundCacheValid = false;
     document.getElementById('backgroundImage').value = '';
@@ -850,6 +1114,7 @@ function clearBackgroundImage() {
     
     // Remove from localStorage
     localStorage.removeItem('marker_viewer_backgroundImage');
+    localStorage.removeItem('marker_viewer_backgroundImageId');
     localStorage.removeItem('marker_viewer_backgroundImageFileName');
     localStorage.removeItem('marker_viewer_imageWidth');
     localStorage.removeItem('marker_viewer_imageHeight');
@@ -858,7 +1123,7 @@ function clearBackgroundImage() {
 }
 
 // Restore saved state from localStorage
-function restoreSavedState() {
+async function restoreSavedState() {
     // Restore mission directory
     const savedMissionDir = localStorage.getItem('marker_viewer_missionDir');
     if (savedMissionDir) {
@@ -866,15 +1131,34 @@ function restoreSavedState() {
         document.getElementById('missionDir').value = savedMissionDir;
     }
     
-    // Restore background image
+    // Restore background image - try server first, then fallback to localStorage
+    const savedImageId = localStorage.getItem('marker_viewer_backgroundImageId');
     const savedImageDataUrl = localStorage.getItem('marker_viewer_backgroundImage');
-    const savedImageFileName = localStorage.getItem('marker_viewer_backgroundImageFileName');
     
-    if (savedImageDataUrl) {
-        // Image was cached, restore it
+    if (savedImageId) {
+        // Try to load from server
+        await loadBackgroundImageFromServer(savedImageId);
+        
+        // Restore dimensions if available
+        const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
+        const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+        
+        if (savedWidth && savedHeight) {
+            imageWidth = parseFloat(savedWidth);
+            imageHeight = parseFloat(savedHeight);
+            document.getElementById('imageWidth').value = imageWidth;
+            document.getElementById('imageHeight').value = imageHeight;
+        }
+    } else if (savedImageDataUrl) {
+        // Fallback: old localStorage cached image (for backward compatibility)
         const img = new Image();
         img.onload = () => {
             backgroundImage = img;
+            
+            // Upload to WebGL texture if using WebGL
+            if (useWebGL && gl) {
+                uploadBackgroundToWebGL();
+            }
             
             // Restore dimensions
             const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
@@ -905,22 +1189,6 @@ function restoreSavedState() {
             updateStatus('Failed to load cached background image', true);
         };
         img.src = savedImageDataUrl;
-    } else if (savedImageFileName) {
-        // Image was too large to cache, but we saved the file name
-        // Restore dimensions if available
-        const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
-        const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
-        
-        if (savedWidth && savedHeight) {
-            imageWidth = parseFloat(savedWidth);
-            imageHeight = parseFloat(savedHeight);
-            document.getElementById('imageWidth').value = imageWidth;
-            document.getElementById('imageHeight').value = imageHeight;
-            document.getElementById('imageDimensionsGroup').style.display = 'flex';
-        }
-        
-        // Show message to user
-        updateStatus(`Background image "${savedImageFileName}" was too large to cache. Please reload it using the "Load Image" button.`, true);
     }
     
     // Auto-load markers if mission directory is saved
