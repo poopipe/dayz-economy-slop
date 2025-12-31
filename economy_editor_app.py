@@ -2436,10 +2436,26 @@ def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
             root = tree.getroot()
             
             # Find or create economycore element
-            economycore = root.find('economycore')
-            if economycore is None:
-                # If no economycore exists, create it
-                economycore = ET.SubElement(root, 'economycore')
+            # Check if root itself is economycore
+            if root.tag == 'economycore':
+                economycore = root
+            else:
+                # Look for economycore as a child
+                all_economycore = root.findall('economycore')
+                if len(all_economycore) > 1:
+                    # Multiple economycore elements found - merge them into the first one
+                    economycore = all_economycore[0]
+                    for other in all_economycore[1:]:
+                        # Move all children from other economycore to the first one
+                        for child in list(other):
+                            economycore.append(child)
+                        # Remove the duplicate
+                        root.remove(other)
+                elif len(all_economycore) == 1:
+                    economycore = all_economycore[0]
+                else:
+                    # If no economycore exists, create it
+                    economycore = ET.SubElement(root, 'economycore')
             
             # Find existing ce element with matching folder
             existing_ce = None
