@@ -182,7 +182,8 @@ function fitToView() {
 function drawGrid() {
     if (!showGrid) return;
     
-    ctx.strokeStyle = '#cccccc';
+    // Use a slightly transparent color so background image shows through
+    ctx.strokeStyle = 'rgba(204, 204, 204, 0.6)';
     ctx.lineWidth = 1;
     
     // Calculate grid bounds in world coordinates from all four corners
@@ -242,18 +243,31 @@ function drawGrid() {
 function drawBackgroundImage() {
     if (!backgroundImage) return;
     
-    // Calculate image position and size
-    const imageScreenWidth = imageWidth * viewScale;
-    const imageScreenHeight = imageHeight * viewScale;
-    const imagePos = worldToScreen(0, imageHeight); // Bottom left corner
+    // Calculate image position and size in screen coordinates
+    // Image should be positioned at world origin (0, 0) and extend to (imageWidth, imageHeight)
+    // In world space: (0, 0) is bottom-left, (imageWidth, imageHeight) is top-right
+    const bottomLeft = worldToScreen(0, 0); // Bottom-left corner in world
+    const topRight = worldToScreen(imageWidth, imageHeight); // Top-right corner in world
     
+    const imageScreenX = bottomLeft.x;
+    const imageScreenY = topRight.y; // Top Y coordinate
+    const imageScreenWidth = topRight.x - bottomLeft.x;
+    const imageScreenHeight = bottomLeft.y - topRight.y; // Positive height (top to bottom)
+    
+    // Save context state
+    ctx.save();
+    
+    // Draw the image
     ctx.drawImage(
         backgroundImage,
-        imagePos.x,
-        imagePos.y,
+        imageScreenX,
+        imageScreenY,
         imageScreenWidth,
-        -imageScreenHeight // Negative height to flip vertically
+        imageScreenHeight
     );
+    
+    // Restore context state
+    ctx.restore();
 }
 
 // Draw markers
