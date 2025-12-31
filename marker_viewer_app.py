@@ -87,13 +87,18 @@ def load_groups_from_xml(xml_file_path):
             usage_elem = group.find('usage')
             usage = usage_elem.text.strip() if usage_elem is not None and usage_elem.text else ''
             
+            # Store the original XML element as a string
+            xml_string = ET.tostring(group, encoding='unicode')
+            xml_string = xml_string.strip()
+            
             group_data = {
                 'id': len(groups),  # Simple ID for now
                 'name': name,
                 'x': x,
                 'y': y,
                 'z': z,  # Frontend will reverse this
-                'usage': usage
+                'usage': usage,
+                'xml': xml_string  # Store original XML element
             }
             
             groups.append(group_data)
@@ -160,8 +165,6 @@ def get_groups():
             'success': False,
             'error': str(e)
         }), 500
-
-
 if __name__ == '__main__':
     print(f"Marker Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")

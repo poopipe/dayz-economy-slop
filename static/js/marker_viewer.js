@@ -643,6 +643,69 @@ function updateSelectedCount() {
     document.getElementById('selectedCount').textContent = `Selected: ${selectedMarkers.size}`;
 }
 
+// Clear all selected markers
+function clearSelection() {
+    selectedMarkers.clear();
+    updateSelectedCount();
+    draw();
+}
+
+// Copy selected markers XML to clipboard
+async function copySelectedXml() {
+    if (selectedMarkers.size === 0) {
+        updateStatus('No markers selected', true);
+        return;
+    }
+    
+    // Collect XML from selected markers only
+    const xmlLines = [];
+    const selectedIndices = Array.from(selectedMarkers); // Convert Set to Array for clarity
+    
+    // Verify we're only processing selected markers
+    console.log(`Copying XML for ${selectedIndices.length} selected marker(s):`, selectedIndices);
+    
+    for (const index of selectedIndices) {
+        // Validate index is within bounds
+        if (index < 0 || index >= markers.length) {
+            console.warn(`Invalid marker index: ${index}`);
+            continue;
+        }
+        
+        const marker = markers[index];
+        if (!marker) {
+            console.warn(`Marker at index ${index} is undefined`);
+            continue;
+        }
+        
+        if (marker.xml) {
+            xmlLines.push(marker.xml);
+        } else {
+            console.warn(`Marker at index ${index} has no XML data`);
+        }
+    }
+    
+    if (xmlLines.length === 0) {
+        updateStatus('Selected markers have no XML data', true);
+        return;
+    }
+    
+    // Verify we only got XML for the selected markers
+    if (xmlLines.length !== selectedIndices.length) {
+        console.warn(`Warning: Expected ${selectedIndices.length} XML elements but got ${xmlLines.length}`);
+    }
+    
+    // Join all XML elements with newlines
+    const xmlText = xmlLines.join('\n');
+    
+    try {
+        await navigator.clipboard.writeText(xmlText);
+        updateStatus(`Copied ${xmlLines.length} marker(s) XML to clipboard`);
+    } catch (error) {
+        updateStatus(`Error copying XML: ${error.message}`, true);
+        console.error('Error copying XML:', error);
+    }
+}
+
 // Update status message
 function updateStatus(message, isError = false) {
     const statusEl = document.getElementById('status');
@@ -752,6 +815,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showMarkers = e.target.checked;
         draw();
     });
+    document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
+    document.getElementById('copySelectedXmlBtn').addEventListener('click', copySelectedXml);
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
     document.getElementById('clearImageBtn').addEventListener('click', clearBackgroundImage);
     document.getElementById('applyDimensionsBtn').addEventListener('click', applyImageDimensions);
