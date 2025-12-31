@@ -33,8 +33,25 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupEventListeners() {
+    const addNewItemBtn = document.getElementById('addNewItemBtn');
+    if (addNewItemBtn) {
+        addNewItemBtn.addEventListener('click', function(e) {
+            console.log('Add New Item button clicked');
+            e.preventDefault();
+            if (typeof openAddNewItemModal === 'function') {
+                openAddNewItemModal();
+            } else {
+                console.error('openAddNewItemModal function not found');
+                alert('Error: openAddNewItemModal function not found. Please refresh the page.');
+            }
+        });
+    } else {
+        console.error('Add New Item button not found');
+    }
     document.getElementById('loadDataBtn').addEventListener('click', loadXMLData);
     document.getElementById('exportBtn').addEventListener('click', exportToXML);
+    document.getElementById('importXmlBtn').addEventListener('click', () => document.getElementById('importXmlFile').click());
+    document.getElementById('importXmlFile').addEventListener('change', handleXmlFileSelected);
     document.getElementById('deleteBtn').addEventListener('click', deleteSelectedElements);
     document.getElementById('columnVisibilityBtn').addEventListener('click', openColumnVisibilityModal);
     document.getElementById('manageItemclassesBtn').addEventListener('click', openItemclassesModal);
@@ -94,6 +111,8 @@ function setupEventListeners() {
     document.getElementById('cancelItemclassBtn').addEventListener('click', closeItemclassEditorModal);
     document.getElementById('saveItemtagsBtn').addEventListener('click', saveItemtags);
     document.getElementById('cancelItemtagsBtn').addEventListener('click', closeItemtagsEditorModal);
+    document.getElementById('saveNewItemBtn').addEventListener('click', saveNewItem);
+    document.getElementById('cancelNewItemBtn').addEventListener('click', closeAddNewItemModal);
     
     // Itemclasses/Itemtags management
     const itemclassesCloseBtn = document.querySelector('#itemclassesModal .close-modal');
@@ -192,6 +211,8 @@ function setupEventListeners() {
         btn.addEventListener('click', () => {
             if (btn.closest('#columnVisibilityModal')) {
                 closeColumnVisibilityModal();
+            } else if (btn.closest('#addNewItemModal')) {
+                closeAddNewItemModal();
             }
         });
     });
@@ -201,6 +222,15 @@ function setupEventListeners() {
             closeColumnVisibilityModal();
         }
     });
+    
+    const addNewItemModal = document.getElementById('addNewItemModal');
+    if (addNewItemModal) {
+        addNewItemModal.addEventListener('click', (e) => {
+            if (e.target.id === 'addNewItemModal') {
+                closeAddNewItemModal();
+            }
+        });
+    }
     
     document.getElementById('valueflagsModal').addEventListener('click', (e) => {
         if (e.target.id === 'valueflagsModal') {
@@ -2963,6 +2993,503 @@ async function deleteSelectedElements() {
         console.error('Error deleting elements:', error);
         alert(`Error deleting elements: ${error.message}`);
         updateStatus('Error deleting elements');
+    }
+}
+
+let selectedXmlFile = null;
+
+function handleXmlFileSelected(event) {
+    const file = event.target.files[0];
+    if (file) {
+        selectedXmlFile = file;
+        document.getElementById('importXmlFileName').textContent = file.name;
+        // Auto-start import when file is selected
+        importXmlFile();
+    }
+}
+
+async function importXmlFile() {
+    if (!selectedXmlFile) {
+        alert('Please select an XML file first');
+        return;
+    }
+    
+    updateStatus('Checking for duplicates...');
+    
+    try {
+        // First, check for duplicates
+        const formData = new FormData();
+        formData.append('file', selectedXmlFile);
+        formData.append('mission_dir', currentMissionDir || '');
+        formData.append('db_file_path', currentDbFilePath || '');
+        formData.append('element_type', 'type');
+        
+        const checkResponse = await fetch('/api/import-xml/check-duplicates', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const checkData = await checkResponse.json();
+        if (!checkData.success) {
+            throw new Error(checkData.error || 'Failed to check duplicates');
+        }
+        
+        const { duplicates, new_elements, duplicate_count, new_count } = checkData;
+        
+        // If there are duplicates, ask user for decisions
+        let decisions = {};
+        let overwriteAll = false;
+        let skipAll = false;
+        
+        if (duplicate_count > 0) {
+            // Show dialog for duplicates
+            const result = await showDuplicateDialog(duplicates, new_count);
+            if (result.cancelled) {
+                updateStatus('Import cancelled');
+                return;
+            }
+            
+            decisions = result.decisions;
+            overwriteAll = result.overwriteAll;
+            skipAll = result.skipAll;
+        }
+        
+        // Create backup before import
+        updateStatus('Creating backup...');
+        if (currentDbFilePath) {
+            const backupResponse = await fetch('/api/backup-database', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    db_file_path: currentDbFilePath
+                })
+            });
+            
+            const backupData = await backupResponse.json();
+            if (!backupData.success) {
+                if (!confirm(`Failed to create backup: ${backupData.error}\n\nContinue with import anyway?`)) {
+                    updateStatus('Import cancelled - backup failed');
+                    return;
+                }
+            }
+        }
+        
+        // Perform import
+        updateStatus('Importing elements...');
+        
+        const importFormData = new FormData();
+        importFormData.append('file', selectedXmlFile);
+        importFormData.append('mission_dir', currentMissionDir || '');
+        importFormData.append('db_file_path', currentDbFilePath || '');
+        importFormData.append('element_type', 'type');
+        importFormData.append('overwrite_all', overwriteAll.toString());
+        importFormData.append('skip_all', skipAll.toString());
+        importFormData.append('decisions', JSON.stringify(decisions));
+        
+        const importResponse = await fetch('/api/import-xml', {
+            method: 'POST',
+            body: importFormData
+        });
+        
+        const importData = await importResponse.json();
+        if (importData.success) {
+            // Clear file selection
+            selectedXmlFile = null;
+            document.getElementById('importXmlFile').value = '';
+            document.getElementById('importXmlFileName').textContent = '';
+            
+            // Reload elements
+            await loadElements();
+            
+            const errorMsg = importData.errors && importData.errors.length > 0 
+                ? ` (${importData.errors.length} errors)` 
+                : '';
+            updateStatus(`Import complete: ${importData.added_count} added, ${importData.updated_count} updated, ${importData.skipped_count} skipped${errorMsg}`);
+            
+            if (importData.errors && importData.errors.length > 0) {
+                console.error('Import errors:', importData.errors);
+                alert(`Some errors occurred during import:\n${importData.errors.slice(0, 5).join('\n')}${importData.errors.length > 5 ? '\n...' : ''}`);
+            }
+        } else {
+            throw new Error(importData.error || 'Failed to import XML file');
+        }
+    } catch (error) {
+        console.error('Error importing XML:', error);
+        alert(`Error importing XML file: ${error.message}`);
+        updateStatus('Error importing XML file');
+    }
+}
+
+function showDuplicateDialog(duplicates, newCount) {
+    return new Promise((resolve) => {
+        // Create modal dialog
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'block';
+        
+        const decisions = {};
+        let overwriteAll = false;
+        let skipAll = false;
+        let cancelled = false;
+        
+        let currentIndex = 0;
+        
+        function showNextDuplicate() {
+            if (currentIndex >= duplicates.length) {
+                // All duplicates processed
+                modal.remove();
+                resolve({ decisions, overwriteAll, skipAll, cancelled: false });
+                return;
+            }
+            
+            const dup = duplicates[currentIndex];
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+            content.style.maxWidth = '600px';
+            
+            content.innerHTML = `
+                <h2>Import XML File</h2>
+                <p><strong>Found ${duplicates.length} duplicate(s) and ${newCount} new element(s)</strong></p>
+                <div class="duplicate-item">
+                    <p><strong>Element "${dup.name}"</strong> already exists in the database.</p>
+                    <p>What would you like to do?</p>
+                </div>
+                <div class="duplicate-actions">
+                    <button class="btn btn-primary" id="overwriteBtn">Overwrite</button>
+                    <button class="btn" id="skipBtn">Skip</button>
+                    <button class="btn btn-warning" id="overwriteAllBtn">Overwrite All</button>
+                    <button class="btn btn-warning" id="skipAllBtn">Skip All</button>
+                    <button class="btn btn-danger" id="cancelBtn">Cancel</button>
+                </div>
+                <div class="duplicate-progress">
+                    Processing duplicate ${currentIndex + 1} of ${duplicates.length}
+                </div>
+            `;
+            
+            modal.innerHTML = '';
+            modal.appendChild(content);
+            
+            document.getElementById('overwriteBtn').addEventListener('click', () => {
+                decisions[dup.element_key] = 'overwrite';
+                currentIndex++;
+                showNextDuplicate();
+            });
+            
+            document.getElementById('skipBtn').addEventListener('click', () => {
+                decisions[dup.element_key] = 'skip';
+                currentIndex++;
+                showNextDuplicate();
+            });
+            
+            document.getElementById('overwriteAllBtn').addEventListener('click', () => {
+                overwriteAll = true;
+                modal.remove();
+                resolve({ decisions, overwriteAll, skipAll, cancelled: false });
+            });
+            
+            document.getElementById('skipAllBtn').addEventListener('click', () => {
+                skipAll = true;
+                modal.remove();
+                resolve({ decisions, overwriteAll, skipAll, cancelled: false });
+            });
+            
+            document.getElementById('cancelBtn').addEventListener('click', () => {
+                cancelled = true;
+                modal.remove();
+                resolve({ decisions, overwriteAll, skipAll, cancelled: true });
+            });
+        }
+        
+        document.body.appendChild(modal);
+        showNextDuplicate();
+    });
+}
+
+// Add New Item Modal Functions
+async function openAddNewItemModal() {
+    console.log('openAddNewItemModal called');
+    try {
+        const modal = document.getElementById('addNewItemModal');
+        if (!modal) {
+            console.error('Add New Item modal not found');
+            alert('Modal not found. Please refresh the page.');
+            return;
+        }
+        console.log('Modal found:', modal);
+        
+        // Check if database is loaded
+        if (!currentDbFilePath && !currentMissionDir) {
+            alert('Please load a database first before adding new items.');
+            return;
+        }
+        
+        // Check parent element
+        console.log('Modal parent:', modal.parentElement);
+        console.log('Modal parent tag:', modal.parentElement ? modal.parentElement.tagName : 'N/A');
+        console.log('Modal parent display:', modal.parentElement ? window.getComputedStyle(modal.parentElement).display : 'N/A');
+        console.log('Modal parent position:', modal.parentElement ? window.getComputedStyle(modal.parentElement).position : 'N/A');
+        
+        // Move modal to body if it's not already there (fixes dimension issues with fixed positioning)
+        if (modal.parentElement !== document.body) {
+            console.log('Moving modal to body');
+            // Store the original parent to restore later if needed
+            const originalParent = modal.parentElement;
+            document.body.appendChild(modal);
+            console.log('Modal moved to body, new parent:', modal.parentElement);
+        }
+        
+        // Show modal first, then load data
+        // Force all visibility properties - use explicit pixel dimensions
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        
+        console.log('Viewport size:', viewportWidth, viewportHeight);
+        
+        // Remove any conflicting styles first
+        modal.removeAttribute('style');
+        
+        // Set styles directly (not with setProperty to avoid issues)
+        modal.style.display = 'block';
+        modal.style.visibility = 'visible';
+        modal.style.opacity = '1';
+        modal.style.position = 'fixed';
+        modal.style.zIndex = '10000';
+        modal.style.left = '0px';
+        modal.style.top = '0px';
+        modal.style.width = viewportWidth + 'px';
+        modal.style.height = viewportHeight + 'px';
+        modal.style.margin = '0';
+        modal.style.padding = '0';
+        modal.style.boxSizing = 'border-box';
+        modal.style.overflow = 'auto';
+        
+        console.log('Modal styles set, dimensions:', modal.offsetWidth, modal.offsetHeight);
+        
+        // Debug: Log computed styles
+        const computed = window.getComputedStyle(modal);
+        console.log('Modal styles after setting:', {
+            display: computed.display,
+            visibility: computed.visibility,
+            opacity: computed.opacity,
+            zIndex: computed.zIndex,
+            position: computed.position,
+            width: computed.width,
+            height: computed.height,
+            left: computed.left,
+            top: computed.top
+        });
+        
+        // Ensure reference data is loaded (but don't block modal display)
+        loadReferenceData().catch(error => {
+            console.error('Error loading reference data:', error);
+            // Continue anyway - user can still create items
+        }).then(() => {
+            // Populate after data loads
+            populateModalFields();
+        });
+        
+        // Also populate immediately with whatever data we have
+        populateModalFields();
+    } catch (error) {
+        console.error('Error opening Add New Item modal:', error);
+        alert('Error opening dialog: ' + error.message);
+    }
+}
+
+function populateModalFields() {
+    try {
+        
+        // Populate itemclass dropdown
+        const itemclassSelect = document.getElementById('newItemItemclass');
+        if (itemclassSelect) {
+            itemclassSelect.innerHTML = '<option value="">-- None --</option>';
+            if (availableItemclasses && availableItemclasses.length > 0) {
+                availableItemclasses.forEach(itemclass => {
+                    const option = document.createElement('option');
+                    option.value = itemclass.id;
+                    option.textContent = itemclass.name;
+                    itemclassSelect.appendChild(option);
+                });
+            }
+        }
+        
+        // Populate itemtags checkboxes
+        populateCheckboxes('newItemItemtagsCheckboxes', availableItemtags || [], 'itemtag');
+        
+        // Populate categories checkboxes
+        populateCheckboxes('newItemCategoriesCheckboxes', availableCategories || [], 'category');
+        
+        // Populate tags checkboxes
+        populateCheckboxes('newItemTagsCheckboxes', availableTags || [], 'tag');
+        
+        // Populate usageflags checkboxes
+        populateCheckboxes('newItemUsageflagsCheckboxes', availableUsageflags || [], 'usageflag');
+        
+        // Populate valueflags checkboxes
+        populateCheckboxes('newItemValueflagsCheckboxes', availableValueflags || [], 'valueflag');
+        
+        // Populate flags checkboxes
+        populateCheckboxes('newItemFlagsCheckboxes', availableFlags || [], 'flag');
+        
+        // Clear form
+        const elementKeyInput = document.getElementById('newItemElementKey');
+        const nameInput = document.getElementById('newItemName');
+        const fieldsInput = document.getElementById('newItemFields');
+        if (elementKeyInput) elementKeyInput.value = '';
+        if (nameInput) nameInput.value = '';
+        if (fieldsInput) fieldsInput.value = '';
+    } catch (error) {
+        console.error('Error populating modal fields:', error);
+    }
+}
+
+function populateCheckboxes(containerId, items, type) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (items.length === 0) {
+        container.innerHTML = '<p style="color: #666; font-style: italic;">No items available</p>';
+        return;
+    }
+    
+    items.forEach(item => {
+        const checkboxItem = document.createElement('div');
+        checkboxItem.className = 'checkbox-item';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `newItem_${type}_${item.id}`;
+        checkbox.value = item.id;
+        
+        const label = document.createElement('label');
+        label.htmlFor = `newItem_${type}_${item.id}`;
+        label.textContent = item.name;
+        
+        checkboxItem.appendChild(checkbox);
+        checkboxItem.appendChild(label);
+        container.appendChild(checkboxItem);
+    });
+}
+
+function closeAddNewItemModal() {
+    const modal = document.getElementById('addNewItemModal');
+    if (modal) {
+        modal.style.display = 'none';
+        // Note: We keep the modal in body even when closed - this is fine for modals
+    }
+}
+
+async function saveNewItem() {
+    const elementKey = document.getElementById('newItemElementKey').value.trim();
+    const name = document.getElementById('newItemName').value.trim();
+    
+    if (!elementKey) {
+        alert('Element Key is required');
+        return;
+    }
+    
+    // Collect selected itemclass
+    const itemclassSelect = document.getElementById('newItemItemclass');
+    const itemclassId = itemclassSelect ? itemclassSelect.value : null;
+    
+    // Collect selected itemtags
+    const itemtagIds = [];
+    document.querySelectorAll('#newItemItemtagsCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        itemtagIds.push(parseInt(cb.value));
+    });
+    
+    // Collect selected categories
+    const categoryIds = [];
+    document.querySelectorAll('#newItemCategoriesCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        categoryIds.push(parseInt(cb.value));
+    });
+    
+    // Collect selected tags
+    const tagIds = [];
+    document.querySelectorAll('#newItemTagsCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        tagIds.push(parseInt(cb.value));
+    });
+    
+    // Collect selected usageflags
+    const usageflagIds = [];
+    document.querySelectorAll('#newItemUsageflagsCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        usageflagIds.push(parseInt(cb.value));
+    });
+    
+    // Collect selected valueflags
+    const valueflagIds = [];
+    document.querySelectorAll('#newItemValueflagsCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        valueflagIds.push(parseInt(cb.value));
+    });
+    
+    // Collect selected flags
+    const flagIds = [];
+    document.querySelectorAll('#newItemFlagsCheckboxes input[type="checkbox"]:checked').forEach(cb => {
+        flagIds.push(parseInt(cb.value));
+    });
+    
+    // Parse custom fields JSON
+    let customFields = {};
+    const fieldsText = document.getElementById('newItemFields').value.trim();
+    if (fieldsText) {
+        try {
+            customFields = JSON.parse(fieldsText);
+        } catch (e) {
+            alert('Invalid JSON in custom fields. Please check the format.');
+            return;
+        }
+    }
+    
+    // Prepare request data
+    const requestData = {
+        element_key: elementKey,
+        name: name || elementKey,
+        itemclass_id: itemclassId ? parseInt(itemclassId) : null,
+        itemtag_ids: itemtagIds,
+        category_ids: categoryIds,
+        tag_ids: tagIds,
+        usageflag_ids: usageflagIds,
+        valueflag_ids: valueflagIds,
+        flag_ids: flagIds,
+        custom_fields: customFields
+    };
+    
+    // Add database connection info
+    if (currentDbFilePath) {
+        requestData.db_file_path = currentDbFilePath;
+    } else {
+        requestData.mission_dir = currentMissionDir;
+    }
+    
+    try {
+        updateStatus('Creating new item...');
+        const response = await fetch('/api/elements/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestData)
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            updateStatus(`Item "${elementKey}" created successfully`);
+            closeAddNewItemModal();
+            // Reload elements to show the new item
+            await loadElements();
+        } else {
+            alert(`Error: ${data.error || 'Failed to create item'}`);
+            updateStatus('Error creating item');
+        }
+    } catch (error) {
+        console.error('Error creating item:', error);
+        alert(`Error: ${error.message}`);
+        updateStatus('Error creating item');
     }
 }
 

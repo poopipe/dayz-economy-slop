@@ -15,6 +15,9 @@
         
         <div class="controls">
             <div class="control-group">
+                <button id="addNewItemBtn" class="btn btn-success">+ Add New Item</button>
+            </div>
+            <div class="control-group">
                 <label for="dbFilePath">Database File:</label>
                 <input type="text" id="dbFilePath" placeholder="Enter database file path..." class="db-file-input">
                 <button id="loadDatabaseBtn" class="btn btn-primary">Load Database</button>
@@ -24,6 +27,13 @@
                 <label for="missionDir">Mission Directory:</label>
                 <input type="text" id="missionDir" placeholder="Enter mission directory path..." class="mission-dir-input">
                 <button id="loadDataBtn" class="btn btn-primary">Load XML Data</button>
+            </div>
+            
+            <div class="control-group">
+                <label for="importXmlFile">Import from XML File:</label>
+                <input type="file" id="importXmlFile" accept=".xml" style="display: none;">
+                <button id="importXmlBtn" class="btn btn-primary">Choose XML File</button>
+                <span id="importXmlFileName" class="file-name-display"></span>
             </div>
             
             <div class="control-group">
@@ -311,6 +321,91 @@
             <div class="modal-actions">
                 <button id="applyColumnVisibilityBtn" class="btn btn-primary">Apply</button>
                 <button id="cancelColumnVisibilityBtn" class="btn">Cancel</button>
+        </div>
+    </div>
+    
+    <!-- Add New Item Modal -->
+    <div id="addNewItemModal" class="modal">
+        <div class="modal-content modal-large">
+            <span class="close-modal">&times;</span>
+            <h2>Add New Item</h2>
+            <div class="add-item-form">
+                <div class="form-section">
+                    <h3>Basic Information</h3>
+                    <div class="form-group">
+                        <label for="newItemElementKey">Element Key <span class="required">*</span>:</label>
+                        <input type="text" id="newItemElementKey" placeholder="Enter unique element key..." class="form-input" required>
+                        <small class="form-help">Unique identifier for this element (e.g., "MyNewItem")</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemName">Name:</label>
+                        <input type="text" id="newItemName" placeholder="Enter name..." class="form-input">
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Classifications</h3>
+                    <div class="form-group">
+                        <label for="newItemItemclass">Itemclass:</label>
+                        <select id="newItemItemclass" class="form-select">
+                            <option value="">-- None --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemItemtags">Itemtags:</label>
+                        <div id="newItemItemtagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemCategories">Categories:</label>
+                        <div id="newItemCategoriesCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemTags">Tags:</label>
+                        <div id="newItemTagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Flags</h3>
+                    <div class="form-group">
+                        <label for="newItemUsageflags">Usageflags:</label>
+                        <div id="newItemUsageflagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemValueflags">Valueflags:</label>
+                        <div id="newItemValueflagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemFlags">Flags:</label>
+                        <div id="newItemFlagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Additional Fields</h3>
+                    <div class="form-group">
+                        <label for="newItemFields">Custom Fields (JSON format):</label>
+                        <textarea id="newItemFields" placeholder='{"field1": "value1", "field2": "value2"}' class="form-textarea" rows="5"></textarea>
+                        <small class="form-help">Optional: Add custom fields as JSON object</small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveNewItemBtn" class="btn btn-primary">Save</button>
+                <button id="cancelNewItemBtn" class="btn">Cancel</button>
+            </div>
         </div>
     </div>
     

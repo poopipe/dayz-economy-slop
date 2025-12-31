@@ -1021,6 +1021,532 @@ def delete_elements():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/elements/create', methods=['POST'])
+def create_element():
+    """Create a new element in the database."""
+    try:
+        data = request.json
+        element_key = data.get('element_key')
+        name = data.get('name')
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not element_key:
+            return jsonify({'success': False, 'error': 'element_key is required'}), 400
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if element already exists
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'error': f'Element with key "{element_key}" already exists'}), 400
+        
+        # Insert new element
+        cursor.execute('''
+            INSERT INTO type_elements 
+            (element_key, name, source_file, source_folder, created_at, updated_at)
+            VALUES (?, ?, NULL, NULL, ?, ?)
+        ''', (element_key, name, datetime.now().isoformat(), datetime.now().isoformat()))
+        
+        # Handle itemclass (single selection)
+        itemclass_id = data.get('itemclass_id')
+        if itemclass_id:
+            cursor.execute('''
+                INSERT INTO element_itemclasses (element_key, itemclass_id)
+                VALUES (?, ?)
+            ''', (element_key, itemclass_id))
+        
+        # Handle itemtags (multiple)
+        itemtag_ids = data.get('itemtag_ids', [])
+        for itemtag_id in itemtag_ids:
+            cursor.execute('''
+                INSERT INTO element_itemtags (element_key, itemtag_id)
+                VALUES (?, ?)
+            ''', (element_key, itemtag_id))
+        
+        # Handle categories (multiple)
+        category_ids = data.get('category_ids', [])
+        for category_id in category_ids:
+            cursor.execute('''
+                INSERT INTO element_categories (element_key, category_id)
+                VALUES (?, ?)
+            ''', (element_key, category_id))
+        
+        # Handle tags (multiple)
+        tag_ids = data.get('tag_ids', [])
+        for tag_id in tag_ids:
+            cursor.execute('''
+                INSERT INTO element_tags (element_key, tag_id)
+                VALUES (?, ?)
+            ''', (element_key, tag_id))
+        
+        # Handle usageflags (multiple)
+        usageflag_ids = data.get('usageflag_ids', [])
+        for usageflag_id in usageflag_ids:
+            cursor.execute('''
+                INSERT INTO element_usageflags (element_key, usageflag_id)
+                VALUES (?, ?)
+            ''', (element_key, usageflag_id))
+        
+        # Handle valueflags (multiple)
+        valueflag_ids = data.get('valueflag_ids', [])
+        for valueflag_id in valueflag_ids:
+            cursor.execute('''
+                INSERT INTO element_valueflags (element_key, valueflag_id)
+                VALUES (?, ?)
+            ''', (element_key, valueflag_id))
+        
+        # Handle flags (multiple)
+        flag_ids = data.get('flag_ids', [])
+        for flag_id in flag_ids:
+            cursor.execute('''
+                INSERT INTO element_flags (element_key, flag_id, value)
+                VALUES (?, ?, 1)
+            ''', (element_key, flag_id))
+        
+        # Handle custom fields (from JSON)
+        custom_fields = data.get('custom_fields', {})
+        if isinstance(custom_fields, dict):
+            for field_name, field_value in custom_fields.items():
+                if field_name.startswith('_'):
+                    continue  # Skip metadata fields
+                
+                data_type = infer_data_type(field_value)
+                cursor.execute('''
+                    INSERT INTO type_element_fields 
+                    (element_key, field_name, field_value, data_type, field_order, attributes_json)
+                    VALUES (?, ?, ?, ?, NULL, NULL)
+                ''', (element_key, field_name, str(field_value), data_type))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'element_key': element_key,
+            'message': f'Element "{element_key}" created successfully'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/import-xml', methods=['POST'])
+def import_xml():
+    """Import elements from a user-specified XML file."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        mission_dir = request.form.get('mission_dir', '')
+        db_file_path = request.form.get('db_file_path', '')
+        element_type = request.form.get('element_type', 'type')
+        
+        # Get decisions from form data (overwrite_all, skip_all, or individual decisions)
+        overwrite_all = request.form.get('overwrite_all', 'false').lower() == 'true'
+        skip_all = request.form.get('skip_all', 'false').lower() == 'true'
+        decisions_json = request.form.get('decisions', '{}')  # JSON object with element_key -> 'overwrite' or 'skip'
+        
+        try:
+            decisions = json.loads(decisions_json) if decisions_json else {}
+        except:
+            decisions = {}
+        
+        # Save uploaded file temporarily
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xml') as tmp_file:
+            file.save(tmp_file.name)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Create backup before import
+            if db_file_path:
+                import shutil
+                from datetime import datetime
+                db_file = Path(db_file_path)
+                if db_file.exists():
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    backup_dir = db_file.parent / 'backups'
+                    backup_dir.mkdir(exist_ok=True)
+                    backup_file = backup_dir / f"{db_file.stem}_backup_{timestamp}{db_file.suffix}"
+                    shutil.copy2(db_file, backup_file)
+            
+            # Process import
+            result = import_xml_file(tmp_path, mission_dir, db_file_path, element_type, overwrite_all, skip_all, decisions)
+            return jsonify(result)
+        finally:
+            # Clean up temporary file
+            try:
+                import os
+                os.unlink(tmp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/import-xml/check-duplicates', methods=['POST'])
+def check_import_duplicates():
+    """Check which elements in an XML file would be duplicates."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        mission_dir = request.form.get('mission_dir', '')
+        db_file_path = request.form.get('db_file_path', '')
+        element_type = request.form.get('element_type', 'type')
+        
+        # Save uploaded file temporarily
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xml') as tmp_file:
+            file.save(tmp_file.name)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Get database connection
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                mission_dir = mission_dir or current_mission_dir
+                conn = get_db_connection(mission_dir)
+            cursor = conn.cursor()
+            
+            # Get existing element keys
+            cursor.execute('SELECT element_key, name FROM type_elements')
+            existing_elements = {row['element_key']: row['name'] for row in cursor.fetchall()}
+            conn.close()
+            
+            # Parse XML file
+            tree = ET.parse(tmp_path)
+            root = tree.getroot()
+            elements = extract_element_data(root, element_type)
+            
+            duplicates = []
+            new_elements = []
+            
+            for elem in elements:
+                name_value = elem.get('name')
+                if not name_value:
+                    continue
+                
+                element_key = str(name_value)
+                
+                if element_key in existing_elements:
+                    duplicates.append({
+                        'element_key': element_key,
+                        'name': name_value,
+                        'existing_name': existing_elements[element_key]
+                    })
+                else:
+                    new_elements.append({
+                        'element_key': element_key,
+                        'name': name_value
+                    })
+            
+            return jsonify({
+                'success': True,
+                'duplicates': duplicates,
+                'new_elements': new_elements,
+                'total': len(elements),
+                'duplicate_count': len(duplicates),
+                'new_count': len(new_elements)
+            })
+        finally:
+            # Clean up temporary file
+            try:
+                import os
+                os.unlink(tmp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type', overwrite_all=False, skip_all=False, decisions=None):
+    """
+    Import elements from an XML file into the database.
+    Returns statistics about the import operation.
+    """
+    if decisions is None:
+        decisions = {}
+    
+    try:
+        # Get database connection
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Parse XML file
+        tree = ET.parse(xml_file_path)
+        root = tree.getroot()
+        elements = extract_element_data(root, element_type)
+        
+        # Get existing element keys
+        cursor.execute('SELECT element_key FROM type_elements')
+        existing_keys = {row['element_key'] for row in cursor.fetchall()}
+        
+        added_count = 0
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+        
+        source_file = Path(xml_file_path).name
+        source_folder = 'imported'
+        
+        for elem in elements:
+            try:
+                name_value = elem.get('name')
+                if not name_value:
+                    continue
+                
+                element_key = str(name_value)
+                is_duplicate = element_key in existing_keys
+                
+                # Determine action for duplicates
+                if is_duplicate:
+                    if skip_all:
+                        skipped_count += 1
+                        continue
+                    elif overwrite_all:
+                        action = 'overwrite'
+                    elif element_key in decisions:
+                        action = decisions[element_key]
+                    else:
+                        # Should not happen if client sent decisions correctly
+                        skipped_count += 1
+                        continue
+                    
+                    if action == 'skip':
+                        skipped_count += 1
+                        continue
+                    elif action == 'overwrite':
+                        # Delete existing element first (CASCADE will handle related tables)
+                        cursor.execute('DELETE FROM type_elements WHERE element_key = ?', (element_key,))
+                        updated_count += 1
+                
+                # Insert or update element
+                cursor.execute('''
+                    INSERT OR REPLACE INTO type_elements 
+                    (element_key, name, source_file, source_folder, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (element_key, name_value, source_file, source_folder, datetime.now().isoformat()))
+                
+                # Delete existing fields for this element
+                cursor.execute('DELETE FROM type_element_fields WHERE element_key = ?', (element_key,))
+                
+                # Process and save fields to normalized table
+                # First, handle relationships (categories, tags, usageflags, valueflags, flags)
+                relationship_fields = ['category', 'tag', 'usage', 'value', 'flags']
+                for field_name, field_value in elem.items():
+                    if field_name == 'name' or field_name.startswith('_'):
+                        continue
+                    
+                    # Skip relationship fields - they'll be handled separately
+                    if field_name in relationship_fields:
+                        continue
+                    
+                    # Handle different field types
+                    if isinstance(field_value, list):
+                        for idx, item in enumerate(field_value):
+                            if isinstance(item, dict):
+                                # Store as field with attributes
+                                attributes_json = json.dumps({k: v for k, v in item.items() if k != '_text'})
+                                text_value = item.get('_text')
+                                cursor.execute('''
+                                    INSERT INTO type_element_fields 
+                                    (element_key, field_name, field_value, data_type, field_order, attributes_json)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                ''', (element_key, field_name, text_value, infer_data_type(text_value), idx, attributes_json))
+                            else:
+                                # Simple list item
+                                cursor.execute('''
+                                    INSERT INTO type_element_fields 
+                                    (element_key, field_name, field_value, data_type, field_order)
+                                    VALUES (?, ?, ?, ?, ?)
+                                ''', (element_key, field_name, str(item), infer_data_type(item), idx))
+                    elif isinstance(field_value, dict):
+                        # Store as single field with attributes
+                        attributes_json = json.dumps({k: v for k, v in field_value.items() if k != '_text'})
+                        text_value = field_value.get('_text')
+                        cursor.execute('''
+                            INSERT INTO type_element_fields 
+                            (element_key, field_name, field_value, data_type, attributes_json)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (element_key, field_name, text_value, infer_data_type(text_value), attributes_json))
+                    else:
+                        # Simple value
+                        cursor.execute('''
+                            INSERT INTO type_element_fields 
+                            (element_key, field_name, field_value, data_type)
+                            VALUES (?, ?, ?, ?)
+                        ''', (element_key, field_name, str(field_value), infer_data_type(field_value)))
+                
+                # Handle categories, tags, usageflags, valueflags, flags relationships
+                for field_name, field_value in elem.items():
+                    if field_name == 'name' or field_name.startswith('_'):
+                        continue
+                    
+                    # Handle categories
+                    if field_name == 'category':
+                        if isinstance(field_value, dict) and 'name' in field_value:
+                            cat_name = field_value['name']
+                            cursor.execute('SELECT id FROM categories WHERE name = ?', (cat_name,))
+                            cat_row = cursor.fetchone()
+                            if cat_row:
+                                cursor.execute('''
+                                    INSERT OR REPLACE INTO element_categories (element_key, category_id)
+                                    VALUES (?, ?)
+                                ''', (element_key, cat_row['id']))
+                        elif isinstance(field_value, list):
+                            for cat_item in field_value:
+                                if isinstance(cat_item, dict) and 'name' in cat_item:
+                                    cat_name = cat_item['name']
+                                    cursor.execute('SELECT id FROM categories WHERE name = ?', (cat_name,))
+                                    cat_row = cursor.fetchone()
+                                    if cat_row:
+                                        cursor.execute('''
+                                            INSERT OR REPLACE INTO element_categories (element_key, category_id)
+                                            VALUES (?, ?)
+                                        ''', (element_key, cat_row['id']))
+                        continue
+                    
+                    # Handle tags
+                    if field_name == 'tag':
+                        tag_names = []
+                        if isinstance(field_value, dict) and 'name' in field_value:
+                            tag_names = [field_value['name']]
+                        elif isinstance(field_value, list):
+                            tag_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
+                        
+                        for tag_name in tag_names:
+                            cursor.execute('SELECT id FROM tags WHERE name = ?', (tag_name,))
+                            tag_row = cursor.fetchone()
+                            if tag_row:
+                                cursor.execute('''
+                                    INSERT OR REPLACE INTO element_tags (element_key, tag_id)
+                                    VALUES (?, ?)
+                                ''', (element_key, tag_row['id']))
+                        continue
+                    
+                    # Handle usage
+                    if field_name == 'usage':
+                        usage_names = []
+                        if isinstance(field_value, dict) and 'name' in field_value:
+                            usage_names = [field_value['name']]
+                        elif isinstance(field_value, list):
+                            usage_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
+                        
+                        for usage_name in usage_names:
+                            cursor.execute('SELECT id FROM usageflags WHERE name = ?', (usage_name,))
+                            usage_row = cursor.fetchone()
+                            if usage_row:
+                                cursor.execute('''
+                                    INSERT OR REPLACE INTO element_usageflags (element_key, usageflag_id)
+                                    VALUES (?, ?)
+                                ''', (element_key, usage_row['id']))
+                        continue
+                    
+                    # Handle value
+                    if field_name == 'value':
+                        value_names = []
+                        if isinstance(field_value, dict) and 'name' in field_value:
+                            value_names = [field_value['name']]
+                        elif isinstance(field_value, list):
+                            value_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
+                        
+                        for value_name in value_names:
+                            cursor.execute('SELECT id FROM valueflags WHERE name = ?', (value_name,))
+                            value_row = cursor.fetchone()
+                            if value_row:
+                                cursor.execute('''
+                                    INSERT OR REPLACE INTO element_valueflags (element_key, valueflag_id)
+                                    VALUES (?, ?)
+                                ''', (element_key, value_row['id']))
+                        continue
+                    
+                    # Handle flags - extract attributes as boolean flags
+                    if field_name == 'flags':
+                        flags_dict = None
+                        if isinstance(field_value, dict):
+                            flags_dict = field_value
+                        elif isinstance(field_value, list) and len(field_value) > 0:
+                            flags_dict = {}
+                            for item in field_value:
+                                if isinstance(item, dict):
+                                    flags_dict.update(item)
+                        
+                        if flags_dict:
+                            for flag_name, flag_value in flags_dict.items():
+                                # Get or create flag
+                                cursor.execute('SELECT id FROM flags WHERE name = ?', (flag_name,))
+                                flag_row = cursor.fetchone()
+                                if not flag_row:
+                                    cursor.execute('INSERT INTO flags (name) VALUES (?)', (flag_name,))
+                                    flag_id = cursor.lastrowid
+                                else:
+                                    flag_id = flag_row['id']
+                                
+                                # Store flag value (0 or 1)
+                                flag_val = 1 if str(flag_value).strip() in ('1', 'true', 'True') else 0
+                                cursor.execute('''
+                                    INSERT OR REPLACE INTO element_flags (element_key, flag_id, flag_value)
+                                    VALUES (?, ?, ?)
+                                ''', (element_key, flag_id, flag_val))
+                        continue
+                
+                if not is_duplicate:
+                    added_count += 1
+                    
+            except Exception as e:
+                errors.append(f"Error processing element '{elem.get('name', 'unknown')}': {str(e)}")
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'added_count': added_count,
+            'updated_count': updated_count,
+            'skipped_count': skipped_count,
+            'errors': errors if errors else None,
+            'total_processed': len(elements)
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            'success': False,
+            'error': str(e),
+            'added_count': 0,
+            'updated_count': 0,
+            'skipped_count': 0
+        }
+
+
 @app.route('/api/itemclasses', methods=['GET', 'POST'])
 def manage_itemclasses():
     """Get all itemclasses or create a new itemclass."""
