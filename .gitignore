@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Flask
+instance/
+.webassets-cache
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+type-editor-db-v2/
+
+# User uploads (optional - can be included if needed)
+uploads/background_images/*.png
+uploads/background_images/*.jpg
+uploads/background_images/*.jpeg
+uploads/background_images/*.gif
+uploads/background_images/*.bmp
+uploads/background_images/*.webp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Distribution
+*.zip
+*.tar.gz
+dist/
+build/

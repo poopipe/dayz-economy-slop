@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Economy Editor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/economy_editor.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Economy Editor</h1>
+            <p class="status" id="status">Ready</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <button id="addNewItemBtn" class="btn btn-success">+ Add New Item</button>
+            </div>
+            <div class="control-group">
+                <label for="dbFilePath">Database File:</label>
+                <input type="text" id="dbFilePath" placeholder="Enter database file path..." class="db-file-input">
+                <button id="loadDatabaseBtn" class="btn btn-primary">Load Database</button>
+                <button id="backupDatabaseBtn" class="btn">Backup Database</button>
+            </div>
+            <div class="control-group">
+                <label for="missionDir">Mission Directory:</label>
+                <input type="text" id="missionDir" placeholder="Enter mission directory path..." class="mission-dir-input">
+                <button id="loadDataBtn" class="btn btn-primary">Load XML Data</button>
+            </div>
+            
+            <div class="control-group">
+                <label for="importXmlFile">Import from XML File:</label>
+                <input type="file" id="importXmlFile" accept=".xml" style="display: none;">
+                <button id="importXmlBtn" class="btn btn-primary">Choose XML File</button>
+                <span id="importXmlFileName" class="file-name-display"></span>
+            </div>
+            
+            <div class="control-group">
+                <button id="exportBtn" class="btn btn-success">Export to XML</button>
+                <label>
+                    <input type="checkbox" id="exportByItemclass"> Export by Itemclass
+                </label>
+                <input type="text" id="exportSubfolder" placeholder="Export subfolder..." value="exported-types" class="subfolder-input">
+                <button id="deleteBtn" class="btn btn-danger">Delete Selected</button>
+                <button id="columnVisibilityBtn" class="btn">Column Visibility</button>
+                <button id="manageItemclassesBtn" class="btn">Manage Itemclasses</button>
+                <button id="manageItemtagsBtn" class="btn">Manage Itemtags</button>
+                <button id="manageUsageflagsBtn" class="btn">Manage Usageflags</button>
+                <button id="manageValueflagsBtn" class="btn">Manage Valueflags</button>
+            </div>
+        </div>
+        
+        <!-- Filter Section -->
+        <div class="filter-section">
+            <h3>Filters</h3>
+            <div class="filter-builder">
+                <div class="filter-input-group">
+                    <label for="filterColumn">Column:</label>
+                    <select id="filterColumn" class="filter-select">
+                        <option value="">-- Select Column --</option>
+                    </select>
+                    
+                    <label for="filterCriteria">Criteria:</label>
+                    <select id="filterCriteria" class="filter-select">
+                        <option value="contains">Contains</option>
+                        <option value="equals">Equals</option>
+                        <option value="startsWith">Starts With</option>
+                        <option value="endsWith">Ends With</option>
+                    </select>
+                    
+                    <label for="filterValue">Value:</label>
+                    <input type="text" id="filterValue" class="filter-input" placeholder="Enter filter value...">
+                    <select id="filterValueSelect" class="filter-select filter-value-select" multiple style="display: none;">
+                        <!-- Options will be populated dynamically -->
+                    </select>
+                    
+                    <label class="filter-include-label">
+                        <input type="checkbox" id="filterInclude" checked>
+                        Include
+                    </label>
+                    
+                    <button id="addFilterBtn" class="btn btn-small">Add Filter</button>
+                    <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
+                </div>
+            </div>
+            <div id="activeFiltersList" class="active-filters-list">
+                <!-- Active filters will be displayed here -->
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="table-container" id="tableContainer">
+                <p class="no-data">Load XML data to begin</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Valueflags Editor Modal -->
+    <div id="valueflagsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Value Flags</h2>
+            <div class="valueflags-editor">
+                <div id="valueflagsCheckboxes" class="valueflags-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveValueflagsBtn" class="btn btn-primary">Save</button>
+                <button id="cancelValueflagsBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Usageflags Editor Modal -->
+    <div id="usageflagsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Usage Flags</h2>
+            <div class="usageflags-editor">
+                <div id="usageflagsCheckboxes" class="usageflags-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveUsageflagsBtn" class="btn btn-primary">Save</button>
+                <button id="cancelUsageflagsBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Flags Editor Modal -->
+    <div id="flagsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Flags</h2>
+            <div class="flags-editor">
+                <div id="flagsCheckboxes" class="flags-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveFlagsBtn" class="btn btn-primary">Save</button>
+                <button id="cancelFlagsBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Categories Editor Modal -->
+    <div id="categoriesModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Categories</h2>
+            <div class="categories-editor">
+                <div id="categoriesCheckboxes" class="categories-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveCategoriesBtn" class="btn btn-primary">Save</button>
+                <button id="cancelCategoriesBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Itemclass Editor Modal -->
+    <div id="itemclassEditorModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Itemclass</h2>
+            <div class="itemclass-editor">
+                <p class="help-text">Select one itemclass for this element</p>
+                <select id="itemclassSelect" class="itemclass-select">
+                    <!-- Options will be generated here -->
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="saveItemclassBtn" class="btn btn-primary">Save</button>
+                <button id="cancelItemclassBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Itemtags Editor Modal -->
+    <div id="itemtagsEditorModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Itemtags</h2>
+            <div class="itemtags-editor">
+                <p class="help-text">Select one or more itemtags for this element</p>
+                <div id="itemtagsEditorCheckboxes" class="itemtags-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveItemtagsBtn" class="btn btn-primary">Save</button>
+                <button id="cancelItemtagsBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Itemclasses Management Modal -->
+    <div id="itemclassesModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Itemclasses</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Itemclass</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newItemclassName" placeholder="Enter itemclass name..." class="name-input">
+                        <button id="addItemclassBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Itemclasses</h3>
+                    <div id="itemclassesList" class="items-list">
+                        <!-- Itemclasses will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeItemclassesBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Itemtags Management Modal -->
+    <div id="itemtagsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Itemtags</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Itemtag</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newItemtagName" placeholder="Enter itemtag name..." class="name-input">
+                        <button id="addItemtagBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Itemtags</h3>
+                    <div id="itemtagsList" class="items-list">
+                        <!-- Itemtags will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeItemtagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Usageflags Management Modal -->
+    <div id="usageflagsManagementModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Usageflags</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Usageflag</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newUsageflagName" placeholder="Enter usageflag name..." class="name-input">
+                        <button id="addUsageflagBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Usageflags</h3>
+                    <div id="usageflagsList" class="items-list">
+                        <!-- Usageflags will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeUsageflagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Valueflags Management Modal -->
+    <div id="valueflagsManagementModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Valueflags</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Valueflag</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newValueflagName" placeholder="Enter valueflag name..." class="name-input">
+                        <button id="addValueflagBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Valueflags</h3>
+                    <div id="valueflagsList" class="items-list">
+                        <!-- Valueflags will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeValueflagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Column Visibility Modal -->
+    <div id="columnVisibilityModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Column Visibility</h2>
+            <div class="column-visibility-controls">
+                <div class="visibility-actions">
+                    <button id="showAllColumnsBtn" class="btn btn-small">Show All</button>
+                    <button id="hideAllColumnsBtn" class="btn btn-small">Hide All</button>
+                </div>
+                <div id="columnCheckboxes" class="column-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="applyColumnVisibilityBtn" class="btn btn-primary">Apply</button>
+                <button id="cancelColumnVisibilityBtn" class="btn">Cancel</button>
+        </div>
+    </div>
+    
+    <!-- Add New Item Modal -->
+    <div id="addNewItemModal" class="modal">
+        <div class="modal-content modal-large">
+            <span class="close-modal">&times;</span>
+            <h2>Add New Item</h2>
+            <div class="add-item-form">
+                <div class="form-section">
+                    <h3>Basic Information</h3>
+                    <div class="form-group">
+                        <label for="newItemElementKey">Element Key <span class="required">*</span>:</label>
+                        <input type="text" id="newItemElementKey" placeholder="Enter unique element key..." class="form-input" required>
+                        <small class="form-help">Unique identifier for this element (e.g., "MyNewItem")</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemName">Name:</label>
+                        <input type="text" id="newItemName" placeholder="Enter name..." class="form-input">
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Classifications</h3>
+                    <div class="form-group">
+                        <label for="newItemItemclass">Itemclass:</label>
+                        <select id="newItemItemclass" class="form-select">
+                            <option value="">-- None --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemItemtags">Itemtags:</label>
+                        <div id="newItemItemtagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemCategories">Categories:</label>
+                        <div id="newItemCategoriesCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemTags">Tags:</label>
+                        <div id="newItemTagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Flags</h3>
+                    <div class="form-group">
+                        <label for="newItemUsageflags">Usageflags:</label>
+                        <div id="newItemUsageflagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemValueflags">Valueflags:</label>
+                        <div id="newItemValueflagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="newItemFlags">Flags:</label>
+                        <div id="newItemFlagsCheckboxes" class="checkboxes-group">
+                            <!-- Checkboxes will be generated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h3>Additional Fields</h3>
+                    <div class="form-group">
+                        <label for="newItemFields">Custom Fields (JSON format):</label>
+                        <textarea id="newItemFields" placeholder='{"field1": "value1", "field2": "value2"}' class="form-textarea" rows="5"></textarea>
+                        <small class="form-help">Optional: Add custom fields as JSON object</small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveNewItemBtn" class="btn btn-primary">Save</button>
+                <button id="cancelNewItemBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/economy_editor.js') }}"></script>
+</body>
+</html>
+
