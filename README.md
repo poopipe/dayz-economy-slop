@@ -4,15 +4,15 @@ A collection of web-based tools for viewing and editing XML data from DayZ serve
 
 ## Applications
 
-### 1. Editor v2 (`editor_v2_app.py`)
+### 1. Economy Editor (`economy_editor_app.py`)
 A database editor for managing XML type elements with a normalized database schema.
 
 **Run:**
 ```cmd
-python run_editor_v2.py
+python run_economy_editor.py
 ```
 
-**Access:** `http://localhost:5001`
+**Access:** `http://localhost:5004`
 
 ### 2. Marker Viewer (`marker_viewer_app.py`)
 A 2D marker viewer for visualizing group positions from `mapgrouppos.xml` with filtering capabilities.
@@ -45,19 +45,19 @@ python run_marker_viewer.py
 
 ```
 .
-├── editor_v2_app.py          # Database editor Flask application
+├── economy_editor_app.py     # Economy editor Flask application
 ├── marker_viewer_app.py      # Marker viewer Flask application
-├── run_editor_v2.py          # Convenience script to run editor
+├── run_economy_editor.py     # Convenience script to run economy editor
 ├── run_marker_viewer.py      # Convenience script to run marker viewer
 ├── static/                   # Static files (CSS, JS)
 │   ├── css/
-│   │   ├── editor_v2.css
+│   │   ├── economy_editor.css
 │   │   └── marker_viewer.css
 │   └── js/
-│       ├── editor_v2.js
+│       ├── economy_editor.js
 │       └── marker_viewer.js
 ├── templates/                # HTML templates
-│   ├── editor_v2.html
+│   ├── economy_editor.html
 │   └── marker_viewer.html
 ├── uploads/                  # Uploaded files (background images, etc.)
 │   └── background_images/
@@ -68,7 +68,7 @@ python run_marker_viewer.py
 
 ## Features
 
-### Editor v2
+### Economy Editor
 - Database-backed XML element management
 - Normalized schema for efficient querying
 - Import/export XML files
@@ -87,6 +87,6 @@ python run_marker_viewer.py
 
 The applications use:
 - **Flask**: Web framework
-- **SQLite**: Database (for editor v2)
+- **SQLite**: Database (for economy editor)
 - **ElementTree**: XML parsing (Python standard library)
 - **WebGL**: GPU-accelerated rendering (for marker viewer background)

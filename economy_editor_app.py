@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-New Database Editor Application v2
+Economy Editor Application
 Uses a properly normalized database schema without JSON blobs.
 """
 
@@ -691,7 +691,7 @@ def load_xml_to_database(mission_dir, element_type='type'):
 @app.route('/')
 def index():
     """Main page."""
-    return render_template('editor_v2.html')
+    return render_template('economy_editor.html')
 
 
 @app.route('/api/load', methods=['POST'])
@@ -3080,7 +3080,7 @@ def export_to_xml():
 
 
 if __name__ == '__main__':
-    print("Editor v2 starting...")
+    print("Economy Editor starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")
     print(f"Open your browser to http://localhost:5004")
     app.run(debug=True, host='0.0.0.0', port=5004)

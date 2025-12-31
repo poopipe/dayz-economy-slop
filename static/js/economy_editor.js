@@ -1,4 +1,4 @@
-// Editor v2 JavaScript
+// Economy Editor JavaScript
 
 let currentMissionDir = '';
 let currentDbFilePath = ''; // Direct database file path
