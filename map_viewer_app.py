@@ -14,6 +14,13 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
+# Allow iframe embedding for launcher (remove X-Frame-Options if set)
+@app.after_request
+def set_frame_options(response):
+    # Remove X-Frame-Options to allow embedding from launcher
+    response.headers.pop('X-Frame-Options', None)
+    return response
+
 # Default mission directory
 DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim"
 

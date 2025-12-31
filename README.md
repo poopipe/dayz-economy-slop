@@ -4,6 +4,28 @@ A collection of web-based tools for viewing and editing XML data from DayZ serve
 
 ## Applications
 
+### Launcher (`launcher_app.py`)
+A unified entry point that provides navigation between all applications in a single browser session.
+
+**Run:**
+```cmd
+python run_launcher.py
+```
+
+**Access:** `http://localhost:5000`
+
+**Note:** The launcher requires both Economy Editor and Map Viewer to be running. Start them in separate terminals:
+```cmd
+# Terminal 1
+python run_economy_editor.py
+
+# Terminal 2
+python run_map_viewer.py
+
+# Terminal 3 (optional - for launcher)
+python run_launcher.py
+```
+
 ### 1. Economy Editor (`economy_editor_app.py`)
 A database editor for managing XML type elements with a normalized database schema.
 
@@ -45,18 +67,23 @@ python run_map_viewer.py
 
 ```
 .
+├── launcher_app.py           # Launcher Flask application
 ├── economy_editor_app.py     # Economy editor Flask application
 ├── map_viewer_app.py         # Map viewer Flask application
+├── run_launcher.py           # Convenience script to run launcher
 ├── run_economy_editor.py     # Convenience script to run economy editor
 ├── run_map_viewer.py         # Convenience script to run map viewer
 ├── static/                   # Static files (CSS, JS)
 │   ├── css/
+│   │   ├── launcher.css
 │   │   ├── economy_editor.css
 │   │   └── map_viewer.css
 │   └── js/
+│       ├── launcher.js
 │       ├── economy_editor.js
 │       └── map_viewer.js
-├── templates/                # HTML templates
+├── templates/                 # HTML templates
+│   ├── launcher.html
 │   ├── economy_editor.html
 │   └── map_viewer.html
 ├── uploads/                  # Uploaded files (background images, etc.)

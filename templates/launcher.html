@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML Data Viewer - Launcher</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/launcher.css') }}">
+</head>
+<body>
+    <div class="launcher-container">
+        <nav class="app-tabs">
+            <button class="tab-button active" data-app="economy-editor" onclick="switchApp('economy-editor')">
+                <span class="tab-icon">📊</span>
+                <span class="tab-label">Economy Editor</span>
+            </button>
+            <button class="tab-button" data-app="map-viewer" onclick="switchApp('map-viewer')">
+                <span class="tab-icon">🗺️</span>
+                <span class="tab-label">Map Viewer</span>
+            </button>
+        </nav>
+        
+        <div class="app-container">
+            <div id="economy-editor-frame" class="app-frame active">
+                <iframe 
+                    id="economy-editor-iframe"
+                    data-src="{{ economy_editor_url }}"
+                    frameborder="0"
+                    allowfullscreen>
+                </iframe>
+                <div class="frame-loading" id="economy-editor-loading">
+                    <div class="loading-spinner"></div>
+                    <p>Loading Economy Editor...</p>
+                </div>
+                <div class="frame-error" id="economy-editor-error" style="display: none;">
+                    <p>⚠️ Failed to load Economy Editor</p>
+                    <button onclick="reloadApp('economy-editor')" class="reload-btn">Retry</button>
+                </div>
+            </div>
+            
+            <div id="map-viewer-frame" class="app-frame">
+                <iframe 
+                    id="map-viewer-iframe"
+                    data-src="{{ map_viewer_url }}"
+                    frameborder="0"
+                    allowfullscreen>
+                </iframe>
+                <div class="frame-loading" id="map-viewer-loading" style="display: none;">
+                    <div class="loading-spinner"></div>
+                    <p>Loading Map Viewer...</p>
+                </div>
+                <div class="frame-error" id="map-viewer-error" style="display: none;">
+                    <p>⚠️ Failed to load Map Viewer</p>
+                    <button onclick="reloadApp('map-viewer')" class="reload-btn">Retry</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-label">Economy Editor:</span>
+                <span class="status-indicator" id="economy-status">Checking...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Map Viewer:</span>
+                <span class="status-indicator" id="map-status">Checking...</span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/launcher.js') }}"></script>
+</body>
+</html>
+
