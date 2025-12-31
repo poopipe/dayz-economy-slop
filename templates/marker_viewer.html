@@ -53,17 +53,28 @@
                 
                 <!-- Filter Section -->
                 <div class="filter-section" id="filterSection" style="display: none;">
-                    <h3>Filter by Usage</h3>
+                    <h3>Filters</h3>
                     <div class="filter-builder">
                         <div class="filter-input-group">
+                            <label for="filterType">Filter Type:</label>
+                            <select id="filterType" class="filter-select">
+                                <option value="usage">Usage</option>
+                                <option value="groupName">Group Name</option>
+                            </select>
+                            
                             <label for="filterCriteria">Criteria:</label>
                             <select id="filterCriteria" class="filter-select">
                                 <option value="isOneOf">Is One Of</option>
                                 <option value="isNotOneOf">Is Not One Of</option>
                             </select>
                             
-                            <label for="filterUsageSelect">Usage:</label>
+                            <label for="filterUsageSelect" id="filterValueLabel">Usage:</label>
                             <select id="filterUsageSelect" class="filter-select filter-value-select" multiple>
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            
+                            <input type="text" id="filterGroupNameInput" class="filter-input" placeholder="Search group names..." style="display: none;">
+                            <select id="filterGroupNameSelect" class="filter-select filter-value-select" multiple style="display: none;">
                                 <!-- Options will be populated dynamically -->
                             </select>
                             

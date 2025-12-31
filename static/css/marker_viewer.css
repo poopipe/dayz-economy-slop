@@ -212,9 +212,12 @@ header h1 {
 
 .filter-input-group {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 10px;
-    flex-wrap: wrap;
+}
+
+.filter-input-group > * {
+    width: 100%;
 }
 
 .filter-input-group label {
@@ -234,6 +237,15 @@ header h1 {
     min-width: 200px;
     min-height: 80px;
     max-height: 200px;
+}
+
+.filter-input {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9em;
+    min-width: 200px;
+    width: 100%;
 }
 
 .btn-small {

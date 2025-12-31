@@ -5,7 +5,7 @@ let ctx;
 let markers = [];
 let selectedMarkers = new Set();
 let visibleMarkers = new Set(); // For filtering
-let activeFilters = []; // Array of filter objects: { criteria: 'isOneOf'|'isNotOneOf', usageNames: ['name1', 'name2'] }
+let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf'|'isNotOneOf', values: ['name1', 'name2'] }
 let backgroundImage = null;
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
@@ -1220,11 +1220,13 @@ async function loadGroups() {
         markers = data.groups || [];
         selectedMarkers.clear();
         
-        // Show filter section and populate usage dropdown
+        // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
         if (filterSection && markers.length > 0) {
             filterSection.style.display = 'block';
             populateFilterUsageDropdown();
+            populateFilterGroupNameDropdown();
+            updateFilterTypeUI();
             applyFilters(); // Apply any existing filters (or show all if no filters)
         } else if (filterSection) {
             filterSection.style.display = 'none';
@@ -1479,6 +1481,19 @@ function getMarkerUsageNames(marker) {
     return [...new Set(usageNames)]; // Remove duplicates
 }
 
+// Get all unique group names from markers
+function getAllGroupNames() {
+    const groupNames = new Set();
+    
+    markers.forEach(marker => {
+        if (marker.name && marker.name.trim()) {
+            groupNames.add(marker.name.trim());
+        }
+    });
+    
+    return Array.from(groupNames).sort();
+}
+
 // Populate filter usage dropdown
 function populateFilterUsageDropdown() {
     const select = document.getElementById('filterUsageSelect');
@@ -1495,6 +1510,41 @@ function populateFilterUsageDropdown() {
     });
 }
 
+// Populate filter group name dropdown
+function populateFilterGroupNameDropdown() {
+    const select = document.getElementById('filterGroupNameSelect');
+    if (!select) return;
+    
+    select.innerHTML = '';
+    const groupNames = getAllGroupNames();
+    
+    groupNames.forEach(groupName => {
+        const option = document.createElement('option');
+        option.value = groupName;
+        option.textContent = groupName;
+        select.appendChild(option);
+    });
+}
+
+// Filter group name dropdown based on search input
+function filterGroupNameDropdown() {
+    const input = document.getElementById('filterGroupNameInput');
+    const select = document.getElementById('filterGroupNameSelect');
+    if (!input || !select) return;
+    
+    const searchTerm = input.value.toLowerCase();
+    const options = select.querySelectorAll('option');
+    
+    options.forEach(option => {
+        const text = option.textContent.toLowerCase();
+        if (text.includes(searchTerm)) {
+            option.style.display = '';
+        } else {
+            option.style.display = 'none';
+        }
+    });
+}
+
 // Apply filters to markers
 function applyFilters() {
     visibleMarkers.clear();
@@ -1505,14 +1555,23 @@ function applyFilters() {
     } else {
         // Apply filters
         markers.forEach((marker, index) => {
-            const markerUsageNames = getMarkerUsageNames(marker);
             let matches = true;
             
             // All filters must match (AND logic)
             for (const filter of activeFilters) {
-                const hasMatch = filter.usageNames.some(usageName => 
-                    markerUsageNames.includes(usageName)
-                );
+                let hasMatch = false;
+                
+                if (filter.type === 'usage') {
+                    const markerUsageNames = getMarkerUsageNames(marker);
+                    hasMatch = filter.values.some(usageName => 
+                        markerUsageNames.includes(usageName)
+                    );
+                } else if (filter.type === 'groupName') {
+                    const markerName = marker.name ? marker.name.trim() : '';
+                    hasMatch = filter.values.some(groupName => 
+                        markerName === groupName
+                    );
+                }
                 
                 if (filter.criteria === 'isOneOf') {
                     matches = matches && hasMatch;
@@ -1532,30 +1591,67 @@ function applyFilters() {
     draw();
 }
 
+// Update filter UI based on filter type
+function updateFilterTypeUI() {
+    const filterType = document.getElementById('filterType').value;
+    const usageSelect = document.getElementById('filterUsageSelect');
+    const groupNameInput = document.getElementById('filterGroupNameInput');
+    const groupNameSelect = document.getElementById('filterGroupNameSelect');
+    const valueLabel = document.getElementById('filterValueLabel');
+    
+    if (filterType === 'usage') {
+        valueLabel.textContent = 'Usage:';
+        usageSelect.style.display = 'block';
+        groupNameInput.style.display = 'none';
+        groupNameSelect.style.display = 'none';
+    } else if (filterType === 'groupName') {
+        valueLabel.textContent = 'Group Name:';
+        usageSelect.style.display = 'none';
+        groupNameInput.style.display = 'block';
+        groupNameSelect.style.display = 'block';
+    }
+}
+
 // Add filter
 function addFilter() {
+    const filterType = document.getElementById('filterType').value;
     const criteria = document.getElementById('filterCriteria').value;
-    const select = document.getElementById('filterUsageSelect');
     
     if (!criteria) {
         alert('Please select a criteria');
         return;
     }
     
-    const selectedOptions = Array.from(select.selectedOptions);
-    if (selectedOptions.length === 0) {
-        alert('Please select at least one usage');
-        return;
-    }
+    let values = [];
     
-    const usageNames = selectedOptions.map(opt => opt.value);
+    if (filterType === 'usage') {
+        const select = document.getElementById('filterUsageSelect');
+        const selectedOptions = Array.from(select.selectedOptions);
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one usage');
+            return;
+        }
+        values = selectedOptions.map(opt => opt.value);
+        select.selectedIndex = -1;
+    } else if (filterType === 'groupName') {
+        const select = document.getElementById('filterGroupNameSelect');
+        const selectedOptions = Array.from(select.selectedOptions);
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one group name');
+            return;
+        }
+        values = selectedOptions.map(opt => opt.value);
+        select.selectedIndex = -1;
+        document.getElementById('filterGroupNameInput').value = '';
+        filterGroupNameDropdown(); // Reset filter
+    }
     
     // Check if filter already exists
     const exists = activeFilters.some(f => {
-        if (f.criteria !== criteria) return false;
-        return f.usageNames.length === usageNames.length &&
-               f.usageNames.every(name => usageNames.includes(name)) &&
-               usageNames.every(name => f.usageNames.includes(name));
+        if (f.type !== filterType || f.criteria !== criteria) return false;
+        return f.values.length === values.length &&
+               f.values.every(name => values.includes(name)) &&
+               values.every(name => f.values.includes(name));
     });
     
     if (exists) {
@@ -1565,12 +1661,10 @@ function addFilter() {
     
     // Add filter
     activeFilters.push({
+        type: filterType,
         criteria: criteria,
-        usageNames: usageNames
+        values: values
     });
-    
-    // Clear selection
-    select.selectedIndex = -1;
     
     // Update UI and apply filters
     updateFilterUI();
@@ -1608,10 +1702,11 @@ function updateFilterUI() {
         filterItem.className = 'active-filter-item';
         
         const criteriaText = filter.criteria === 'isOneOf' ? 'Is One Of' : 'Is Not One Of';
-        const usageText = filter.usageNames.join(', ');
+        const typeText = filter.type === 'usage' ? 'Usage' : 'Group Name';
+        const valuesText = filter.values.join(', ');
         
         filterItem.innerHTML = `
-            <span class="filter-text">Usage ${criteriaText}: ${usageText}</span>
+            <span class="filter-text">${typeText} ${criteriaText}: ${valuesText}</span>
             <button class="btn-remove-filter" onclick="removeFilter(${index})" title="Remove filter">×</button>
         `;
         
@@ -1722,6 +1817,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Filter event listeners
     document.getElementById('addFilterBtn').addEventListener('click', addFilter);
     document.getElementById('clearAllFiltersBtn').addEventListener('click', clearAllFilters);
+    document.getElementById('filterType').addEventListener('change', updateFilterTypeUI);
+    document.getElementById('filterGroupNameInput').addEventListener('input', filterGroupNameDropdown);
     
     // Allow Enter key to trigger load
     document.getElementById('missionDir').addEventListener('keypress', (e) => {
