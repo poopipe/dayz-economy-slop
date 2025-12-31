@@ -1567,7 +1567,7 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                                 # Store flag value (0 or 1)
                                 flag_val = 1 if str(flag_value).strip() in ('1', 'true', 'True') else 0
                                 cursor.execute('''
-                                    INSERT OR REPLACE INTO element_flags (element_key, flag_id, flag_value)
+                                    INSERT OR REPLACE INTO element_flags (element_key, flag_id, value)
                                     VALUES (?, ?, ?)
                                 ''', (element_key, flag_id, flag_val))
                         continue
@@ -2025,32 +2025,88 @@ def get_reference_data():
 
 def reconstruct_xml_element(data_dict, element_tag='type'):
     """Reconstruct an XML element from normalized data."""
-    elem = ET.Element(element_tag)
+    # Set name as attribute if present
+    name_value = data_dict.get('name')
+    if name_value:
+        elem = ET.Element(element_tag, name=str(name_value))
+    else:
+        elem = ET.Element(element_tag)
     
-    # Type elements should have no attributes - name goes as child element
+    # Define the order of elements
+    # Order: nominal, lifetime, restock, min, quantmin, quantmax, cost, flags, category, usage, value (last)
+    ordered_fields = ['nominal', 'lifetime', 'restock', 'min', 'quantmin', 'quantmax', 'cost']
     
-    # Process fields (skip internal fields)
+    # Collect other fields to process
+    other_fields = {}
+    flags_data = None
+    categories = []
+    usages = []
+    values = []
+    
+    # Process fields (skip internal fields and name)
     for field_name, field_value in data_dict.items():
-        if field_name.startswith('_'):
+        if field_name.startswith('_') or field_name == 'name':
             continue
         
         if field_value is None:
             continue
         elif field_name == 'flags' and isinstance(field_value, dict):
-            # Flags are stored as a dict with attributes - include ALL flags with their values (0 or 1)
-            flags_elem = ET.Element('flags')
-            for flag_name, flag_value in field_value.items():
-                # Set all flags with their values (0 or 1)
-                flags_elem.set(flag_name, str(flag_value))
-            # Always add flags element if we have any flags in the dict
-            if field_value:  # If dict is not empty
-                elem.append(flags_elem)
-        elif field_name == 'name':
-            # Name should be a child element, not an attribute
-            child = ET.Element('name')
+            flags_data = field_value
+        elif field_name == 'category':
+            if isinstance(field_value, list):
+                categories.extend(field_value)
+            else:
+                categories.append(field_value)
+        elif field_name == 'usage':
+            if isinstance(field_value, list):
+                usages.extend(field_value)
+            else:
+                usages.append(field_value)
+        elif field_name == 'value':
+            if isinstance(field_value, list):
+                values.extend(field_value)
+            else:
+                values.append(field_value)
+        else:
+            other_fields[field_name] = field_value
+    
+    # Add ordered fields first
+    for field_name in ordered_fields:
+        if field_name in other_fields:
+            field_value = other_fields[field_name]
+            child = ET.Element(field_name)
             child.text = str(field_value)
             elem.append(child)
-        elif isinstance(field_value, list):
+            del other_fields[field_name]
+    
+    # Add flags element
+    if flags_data:
+        flags_elem = ET.Element('flags')
+        for flag_name, flag_value in flags_data.items():
+            flags_elem.set(flag_name, str(flag_value))
+        elem.append(flags_elem)
+    
+    # Add category elements
+    for cat in categories:
+        child = reconstruct_child_element('category', cat)
+        if child is not None:
+            elem.append(child)
+    
+    # Add usage elements
+    for usage in usages:
+        child = reconstruct_child_element('usage', usage)
+        if child is not None:
+            elem.append(child)
+    
+    # Add value elements last
+    for value in values:
+        child = reconstruct_child_element('value', value)
+        if child is not None:
+            elem.append(child)
+    
+    # Add any remaining fields that weren't in the ordered list
+    for field_name, field_value in other_fields.items():
+        if isinstance(field_value, list):
             for item in field_value:
                 child = reconstruct_child_element(field_name, item)
                 if child is not None:
