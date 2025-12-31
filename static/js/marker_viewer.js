@@ -561,6 +561,37 @@ function drawMarkers() {
     });
 }
 
+// Format a value for tooltip display (handles arrays/lists)
+function formatTooltipValue(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    
+    // Handle arrays/lists
+    if (Array.isArray(value)) {
+        if (value.length === 0) {
+            return '';
+        }
+        // Return array items, one per line (indented)
+        return value.map(item => `  • ${item}`).join('\n');
+    }
+    
+    // Handle objects (for future use)
+    if (typeof value === 'object') {
+        // Convert object to key-value pairs
+        const pairs = [];
+        for (const [key, val] of Object.entries(value)) {
+            if (val !== null && val !== undefined && val !== '') {
+                pairs.push(`  ${key}: ${val}`);
+            }
+        }
+        return pairs.length > 0 ? pairs.join('\n') : '';
+    }
+    
+    // Handle simple values
+    return String(value);
+}
+
 // Draw tooltip
 function drawTooltip() {
     if (hoveredMarkerIndex < 0 || hoveredMarkerIndex >= markers.length) {
@@ -572,28 +603,52 @@ function drawTooltip() {
     const lineHeight = 18;
     const fontSize = 12;
     
-    // Build tooltip content
+    // Build tooltip content - initially only name and coordinates
     const lines = [];
-    if (marker.name) lines.push(`Name: ${marker.name}`);
+    
+    // Name on first line
+    if (marker.name) {
+        lines.push(marker.name);
+    } else {
+        lines.push('(Unnamed)');
+    }
+    
+    // Empty line separator
+    lines.push('');
+    
+    // Coordinates on separate lines
     lines.push(`X: ${marker.x.toFixed(2)} m`);
     lines.push(`Y: ${marker.y.toFixed(2)} m`);
     lines.push(`Z: ${marker.z.toFixed(2)} m`);
-    if (marker.usage) lines.push(`Usage: ${marker.usage}`);
     
-    // Add any other attributes
-    for (const [key, value] of Object.entries(marker)) {
-        if (!['id', 'name', 'x', 'y', 'z', 'usage'].includes(key) && value !== null && value !== undefined && value !== '') {
-            lines.push(`${key}: ${value}`);
-        }
-    }
+    // Support for displaying lists/groups (for future expansion)
+    // This structure allows adding groups of items later
+    // Example: if we want to show proto data, we can add:
+    // lines.push('');
+    // lines.push('Proto Attributes:');
+    // const protoAttrs = formatTooltipValue(marker.proto_attributes);
+    // if (protoAttrs) {
+    //     const attrLines = protoAttrs.split('\n');
+    //     lines.push(...attrLines);
+    // }
     
     if (lines.length === 0) return;
     
-    // Calculate tooltip dimensions
+    // Calculate tooltip dimensions (accounting for multi-line values)
     ctx.font = `${fontSize}px Arial`;
-    const maxWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
+    let maxWidth = 0;
+    let totalHeight = 0;
+    
+    lines.forEach(line => {
+        const width = ctx.measureText(line).width;
+        if (width > maxWidth) {
+            maxWidth = width;
+        }
+        totalHeight += lineHeight;
+    });
+    
     const tooltipWidth = maxWidth + padding * 2;
-    const tooltipHeight = lines.length * lineHeight + padding * 2;
+    const tooltipHeight = totalHeight + padding * 2;
     
     // Position tooltip (offset from mouse, but keep it on screen)
     let tooltipXPos = tooltipX + 15;
@@ -619,8 +674,11 @@ function drawTooltip() {
     // Draw tooltip text
     ctx.fillStyle = '#ffffff';
     ctx.font = `${fontSize}px Arial`;
+    let currentY = tooltipYPos + padding + lineHeight;
+    
     lines.forEach((line, i) => {
-        ctx.fillText(line, tooltipXPos + padding, tooltipYPos + padding + (i + 1) * lineHeight - 4);
+        ctx.fillText(line, tooltipXPos + padding, currentY - 4);
+        currentY += lineHeight;
     });
 }
 
