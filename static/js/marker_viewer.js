@@ -174,33 +174,55 @@ function drawGrid() {
     ctx.strokeStyle = '#cccccc';
     ctx.lineWidth = 1;
     
-    // Calculate grid bounds in world coordinates
+    // Calculate grid bounds in world coordinates from all four corners
     const topLeft = screenToWorld(0, 0);
+    const topRight = screenToWorld(canvasWidth, 0);
+    const bottomLeft = screenToWorld(0, canvasHeight);
     const bottomRight = screenToWorld(canvasWidth, canvasHeight);
     
-    // Round to nearest 100m
-    const startX = Math.floor(topLeft.x / 100) * 100;
-    const endX = Math.ceil(bottomRight.x / 100) * 100;
-    const startZ = Math.floor(topLeft.z / 100) * 100;
-    const endZ = Math.ceil(bottomRight.z / 100) * 100;
+    // Find the full range of visible world coordinates
+    const minX = Math.min(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const maxX = Math.max(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const minZ = Math.min(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
+    const maxZ = Math.max(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
     
-    // Draw vertical lines
+    // Round to nearest 100m
+    const startX = Math.floor(minX / 100) * 100;
+    const endX = Math.ceil(maxX / 100) * 100;
+    const startZ = Math.floor(minZ / 100) * 100;
+    const endZ = Math.ceil(maxZ / 100) * 100;
+    
+    // Draw vertical lines (constant x, varying z)
+    // These appear as vertical lines on screen - draw from top to bottom of visible area
     for (let x = startX; x <= endX; x += 100) {
-        const start = worldToScreen(x, startZ);
-        const end = worldToScreen(x, endZ);
+        // Draw line from top of visible area to bottom
+        const topPoint = worldToScreen(x, maxZ);
+        const bottomPoint = worldToScreen(x, minZ);
+        
+        // Extend lines slightly beyond visible area to ensure they cover the canvas
+        const lineTopY = Math.max(0, topPoint.y);
+        const lineBottomY = Math.min(canvasHeight, bottomPoint.y);
+        
         ctx.beginPath();
-        ctx.moveTo(start.x, start.y);
-        ctx.lineTo(end.x, end.y);
+        ctx.moveTo(topPoint.x, lineTopY);
+        ctx.lineTo(bottomPoint.x, lineBottomY);
         ctx.stroke();
     }
     
-    // Draw horizontal lines
+    // Draw horizontal lines (constant z, varying x)
+    // These appear as horizontal lines on screen - draw from left to right of visible area
     for (let z = startZ; z <= endZ; z += 100) {
-        const start = worldToScreen(startX, z);
-        const end = worldToScreen(endX, z);
+        // Draw line from left to right of visible area
+        const leftPoint = worldToScreen(minX, z);
+        const rightPoint = worldToScreen(maxX, z);
+        
+        // Extend lines slightly beyond visible area to ensure they cover the canvas
+        const lineLeftX = Math.max(0, leftPoint.x);
+        const lineRightX = Math.min(canvasWidth, rightPoint.x);
+        
         ctx.beginPath();
-        ctx.moveTo(start.x, start.y);
-        ctx.lineTo(end.x, end.y);
+        ctx.moveTo(lineLeftX, leftPoint.y);
+        ctx.lineTo(lineRightX, rightPoint.y);
         ctx.stroke();
     }
 }
