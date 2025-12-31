@@ -56,6 +56,7 @@ function setupEventListeners() {
     document.getElementById('columnVisibilityBtn').addEventListener('click', openColumnVisibilityModal);
     document.getElementById('manageItemclassesBtn').addEventListener('click', openItemclassesModal);
     document.getElementById('manageItemtagsBtn').addEventListener('click', openItemtagsModal);
+    document.getElementById('manageCategoriesBtn').addEventListener('click', openCategoriesModal);
     document.getElementById('manageUsageflagsBtn').addEventListener('click', openUsageflagsModal);
     document.getElementById('manageValueflagsBtn').addEventListener('click', openValueflagsModal);
     document.getElementById('loadDatabaseBtn').addEventListener('click', loadDatabase);
@@ -90,6 +91,9 @@ function setupEventListeners() {
     document.getElementById('addValueflagBtn').addEventListener('click', addValueflag);
     document.getElementById('closeItemclassesBtn').addEventListener('click', closeItemclassesModal);
     document.getElementById('closeItemtagsBtn').addEventListener('click', closeItemtagsModal);
+    const closeCategoriesBtn = document.getElementById('closeCategoriesBtn');
+    if (closeCategoriesBtn) closeCategoriesBtn.addEventListener('click', closeCategoriesManagementModal);
+    
     const closeUsageflagsBtn = document.getElementById('closeUsageflagsBtn');
     if (closeUsageflagsBtn) closeUsageflagsBtn.addEventListener('click', closeUsageflagsManagementModal);
     
@@ -103,6 +107,7 @@ function setupEventListeners() {
     document.getElementById('cancelValueflagsBtn').addEventListener('click', closeValueflagsModal);
     document.getElementById('saveUsageflagsBtn').addEventListener('click', saveUsageflags);
     document.getElementById('cancelUsageflagsBtn').addEventListener('click', closeUsageflagsModal);
+    document.getElementById('addCategoryBtn').addEventListener('click', addCategory);
     document.getElementById('saveFlagsBtn').addEventListener('click', saveFlags);
     document.getElementById('cancelFlagsBtn').addEventListener('click', closeFlagsModal);
     document.getElementById('saveCategoriesBtn').addEventListener('click', saveCategories);
@@ -128,6 +133,11 @@ function setupEventListeners() {
     const usageflagsManagementCloseBtn = document.querySelector('#usageflagsManagementModal .close-modal');
     if (usageflagsManagementCloseBtn) {
         usageflagsManagementCloseBtn.addEventListener('click', closeUsageflagsManagementModal);
+    }
+    
+    const categoriesManagementCloseBtn = document.querySelector('#categoriesManagementModal .close-modal');
+    if (categoriesManagementCloseBtn) {
+        categoriesManagementCloseBtn.addEventListener('click', closeCategoriesManagementModal);
     }
     
     const valueflagsManagementCloseBtn = document.querySelector('#valueflagsManagementModal .close-modal');
@@ -1190,8 +1200,20 @@ async function saveValueflags() {
         
         closeValueflagsModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated flag lists
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                // Update the record with new valueflag IDs
+                record._valueflags = availableValueflags.filter(vf => selectedIds.includes(vf.id));
+                record._valueflag_names = record._valueflags.map(vf => vf.name).join(', ');
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, '_valueflags');
+        updateCellDisplays(elementKeys, '_valueflag_names');
         
         updateStatus(`Valueflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1314,8 +1336,20 @@ async function saveUsageflags() {
         
         closeUsageflagsModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated flag lists
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                // Update the record with new usageflag IDs
+                record._usageflags = availableUsageflags.filter(uf => selectedIds.includes(uf.id));
+                record._usageflag_names = record._usageflags.map(uf => uf.name).join(', ');
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, '_usageflags');
+        updateCellDisplays(elementKeys, '_usageflag_names');
         
         updateStatus(`Usageflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1434,8 +1468,30 @@ async function saveFlags() {
         
         closeFlagsModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated flag lists
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                // Update the record with new flag IDs
+                const selectedFlags = availableFlags.filter(f => selectedIds.includes(f.id));
+                const flagsDict = {};
+                availableFlags.forEach(flag => {
+                    flagsDict[flag.name] = selectedFlags.some(sf => sf.id === flag.id) ? '1' : '0';
+                });
+                record.flags = flagsDict;
+                record._flags = flagsDict;
+                record._flag_names = Object.entries(flagsDict)
+                    .filter(([k, v]) => v === '1' || v === 1)
+                    .map(([k]) => k)
+                    .join(', ');
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, 'flags');
+        updateCellDisplays(elementKeys, '_flags');
+        updateCellDisplays(elementKeys, '_flag_names');
         
         updateStatus(`Flags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1558,8 +1614,20 @@ async function saveCategories() {
         
         closeCategoriesModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated category lists
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                // Update the record with new category IDs
+                record._categories = availableCategories.filter(cat => selectedIds.includes(cat.id));
+                record._category_names = record._categories.map(cat => cat.name).join(', ');
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, '_categories');
+        updateCellDisplays(elementKeys, '_category_names');
         
         updateStatus(`Categories updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1671,8 +1739,20 @@ async function saveItemclass() {
         
         closeItemclassEditorModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated itemclass lists
+        const selectedItemclass = availableItemclasses.find(ic => ic.id === itemclassId);
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                record._itemclass_id = itemclassId;
+                record._itemclass_name = selectedItemclass ? selectedItemclass.name : '';
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, '_itemclass_id');
+        updateCellDisplays(elementKeys, '_itemclass_name');
         
         updateStatus(`Itemclass updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1795,8 +1875,20 @@ async function saveItemtags() {
         
         closeItemtagsEditorModal();
         
-        // Reload elements to get updated data
-        await loadElements();
+        // Update data in memory and refresh display immediately
+        await loadReferenceData(); // Refresh reference data to get updated itemtag lists
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                // Update the record with new itemtag IDs
+                record._itemtags = availableItemtags.filter(it => selectedIds.includes(it.id));
+                record._itemtag_names = record._itemtags.map(it => it.name).join(', ');
+            }
+        });
+        
+        // Update cell displays immediately
+        updateCellDisplays(elementKeys, '_itemtags');
+        updateCellDisplays(elementKeys, '_itemtag_names');
         
         updateStatus(`Itemtags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -2294,9 +2386,6 @@ function makeCellEditable(cell) {
                 throw new Error(failed[0].error || 'Failed to update some fields');
             }
             
-            // Update the cell display
-            cell.textContent = newValue;
-            
             // Update the data in memory for all affected elements
             elementKeys.forEach(key => {
                 const record = tableData.find(r => r._element_key === key);
@@ -2304,6 +2393,9 @@ function makeCellEditable(cell) {
                     record[fieldName] = newValue;
                 }
             });
+            
+            // Update all affected cells in the display immediately
+            updateCellDisplays(elementKeys, fieldName);
             
             updateStatus(`Field updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
         } catch (error) {
@@ -2329,6 +2421,114 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * Format a value for display based on field name and column type
+ */
+function formatDisplayValue(value, fieldName) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    
+    // Check field types
+    const isValueflags = fieldName === '_valueflag_names' || fieldName === '_valueflags';
+    const isUsageflags = fieldName === '_usageflag_names' || fieldName === '_usageflags';
+    const isFlags = fieldName === '_flag_names' || fieldName === '_flags';
+    const isCategories = fieldName === '_category_names' || fieldName === '_categories';
+    const isTags = fieldName === '_tag_names' || fieldName === '_tags';
+    const isItemclass = fieldName === '_itemclass_name' || fieldName === '_itemclass_id';
+    const isItemtags = fieldName === '_itemtag_names' || fieldName === '_itemtags';
+    
+    // For _category_names, _tag_names, etc., if it's already a string, return it
+    if ((isCategories && fieldName === '_category_names') || 
+        (isTags && fieldName === '_tag_names') ||
+        (isValueflags && fieldName === '_valueflag_names') ||
+        (isUsageflags && fieldName === '_usageflag_names') ||
+        (isItemtags && fieldName === '_itemtag_names')) {
+        if (typeof value === 'string') {
+            return value;
+        }
+    }
+    
+    if (Array.isArray(value)) {
+        if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
+            if (isCategories || isTags || isUsageflags || isValueflags || isItemtags) {
+                // For _category_names, _tag_names, etc., show just names
+                if (fieldName.endsWith('_names')) {
+                    return value.map(v => v.name || (v.id ? `${v.id}: ${v.name || ''}` : '')).filter(n => n).join(', ');
+                } else {
+                    // For full objects, show "id: name" format
+                    return value.map(v => {
+                        if (v.name !== undefined && v.id !== undefined) {
+                            return `${v.id}: ${v.name}`;
+                        } else if (v.name !== undefined) {
+                            return v.name;
+                        }
+                        return JSON.stringify(v);
+                    }).join(', ');
+                }
+            } else {
+                return value.map(v => {
+                    if (typeof v === 'object' && v.name) {
+                        return v.name;
+                    }
+                    return JSON.stringify(v);
+                }).join(', ');
+            }
+        } else {
+            return value.length > 0 ? value.join(', ') : '';
+        }
+    } else if (typeof value === 'object') {
+        if (isFlags || fieldName === 'flags' || fieldName.toLowerCase().includes('flag')) {
+            const flagEntries = Object.entries(value).filter(([k]) => k !== '_text');
+            if (flagEntries.length > 0) {
+                return flagEntries.map(([k, v]) => `${k}: ${v}`).join(', ');
+            }
+            return '';
+        } else if (value.name !== undefined) {
+            return value.name;
+        } else {
+            const entries = Object.entries(value).filter(([k]) => k !== '_text');
+            const allBinary = entries.length > 0 && entries.every(([k, v]) => 
+                v === '1' || v === '0' || v === 1 || v === 0
+            );
+            if (allBinary) {
+                return entries.map(([k, v]) => `${k}: ${v}`).join(', ');
+            }
+            return JSON.stringify(value, null, 2);
+        }
+    } else {
+        return String(value);
+    }
+}
+
+/**
+ * Update cell displays immediately after data change
+ */
+function updateCellDisplays(elementKeys, fieldName) {
+    elementKeys.forEach(key => {
+        const record = tableData.find(r => r._element_key === key);
+        if (!record) return;
+        
+        const value = record[fieldName];
+        const displayValue = formatDisplayValue(value, fieldName);
+        
+        // Find all cells with matching element key and field name
+        const allCells = document.querySelectorAll(`td[data-element-key][data-field-name]`);
+        allCells.forEach(cell => {
+            const cellElementKey = cell.getAttribute('data-element-key');
+            const cellFieldName = cell.getAttribute('data-field-name');
+            if (cellElementKey === key && cellFieldName === fieldName) {
+                // Remove input field if present
+                const input = cell.querySelector('input');
+                if (input) {
+                    cell.removeChild(input);
+                }
+                cell.textContent = displayValue;
+            }
+        });
+    });
 }
 
 async function exportToXML() {
@@ -2934,6 +3134,145 @@ async function deleteValueflag(valueflagId) {
     } catch (error) {
         console.error('Error deleting valueflag:', error);
         alert(`Error deleting valueflag: ${error.message}`);
+    }
+}
+
+function openCategoriesModal() {
+    const modal = document.getElementById('categoriesManagementModal');
+    if (!modal) {
+        console.error('categoriesManagementModal not found');
+        return;
+    }
+    loadCategories();
+    modal.style.display = 'block';
+}
+
+function closeCategoriesManagementModal() {
+    const modal = document.getElementById('categoriesManagementModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function loadCategories() {
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/categories?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/categories?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.success) {
+            availableCategories = data.categories || [];
+            displayCategories();
+        } else {
+            throw new Error(data.error || 'Failed to load categories');
+        }
+    } catch (error) {
+        console.error('Error loading categories:', error);
+        alert(`Error loading categories: ${error.message}`);
+    }
+}
+
+function displayCategories() {
+    const listContainer = document.getElementById('categoriesList');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '';
+    
+    if (availableCategories.length === 0) {
+        listContainer.innerHTML = '<p class="no-items">No categories defined</p>';
+        return;
+    }
+    
+    availableCategories.forEach(category => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'item-row';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'item-name';
+        nameSpan.textContent = category.name;
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-small btn-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteCategory(category.id));
+        
+        itemDiv.appendChild(nameSpan);
+        itemDiv.appendChild(deleteBtn);
+        listContainer.appendChild(itemDiv);
+    });
+}
+
+async function addCategory() {
+    const nameInput = document.getElementById('newCategoryName');
+    if (!nameInput) return;
+    
+    const name = nameInput.value.trim();
+    
+    if (!name) {
+        alert('Please enter a category name');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/categories', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                mission_dir: currentMissionDir || '',
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            nameInput.value = '';
+            await loadCategories();
+            await loadReferenceData(); // Refresh reference data
+            updateStatus('Category added successfully');
+        } else {
+            throw new Error(data.error || 'Failed to add category');
+        }
+    } catch (error) {
+        console.error('Error adding category:', error);
+        alert(`Error adding category: ${error.message}`);
+    }
+}
+
+async function deleteCategory(categoryId) {
+    if (!confirm('Are you sure you want to delete this category? This will remove it from all elements that use it.')) {
+        return;
+    }
+    
+    try {
+        let url;
+        if (currentDbFilePath) {
+            url = `/api/categories/${categoryId}?db_file_path=${encodeURIComponent(currentDbFilePath)}`;
+        } else {
+            url = `/api/categories/${categoryId}?mission_dir=${encodeURIComponent(currentMissionDir || '')}`;
+        }
+        const response = await fetch(url, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            await loadCategories();
+            await loadReferenceData(); // Refresh reference data
+            await loadElements(); // Refresh elements to reflect changes
+            updateStatus('Category deleted successfully');
+        } else {
+            throw new Error(data.error || 'Failed to delete category');
+        }
+    } catch (error) {
+        console.error('Error deleting category:', error);
+        alert(`Error deleting category: ${error.message}`);
     }
 }
 

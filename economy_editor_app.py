@@ -1832,6 +1832,11 @@ def manage_usageflags():
                 conn.commit()
                 usageflag_id = cursor.lastrowid
                 conn.close()
+                
+                # Update cfglimitsdefinition.xml
+                if mission_dir:
+                    update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+                
                 return jsonify({'success': True, 'id': usageflag_id, 'name': name})
             except sqlite3.IntegrityError:
                 conn.close()
@@ -1872,6 +1877,10 @@ def delete_usageflag(usageflag_id):
         cursor.execute('DELETE FROM usageflags WHERE id = ?', (usageflag_id,))
         conn.commit()
         conn.close()
+        
+        # Update cfglimitsdefinition.xml
+        if mission_dir:
+            update_cfglimitsdefinition_xml(mission_dir, db_file_path)
         
         return jsonify({'success': True})
     except Exception as e:
@@ -1925,6 +1934,11 @@ def manage_valueflags():
                 conn.commit()
                 valueflag_id = cursor.lastrowid
                 conn.close()
+                
+                # Update cfglimitsdefinition.xml
+                if mission_dir:
+                    update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+                
                 return jsonify({'success': True, 'id': valueflag_id, 'name': name})
             except sqlite3.IntegrityError:
                 conn.close()
@@ -1965,6 +1979,112 @@ def delete_valueflag(valueflag_id):
         cursor.execute('DELETE FROM valueflags WHERE id = ?', (valueflag_id,))
         conn.commit()
         conn.close()
+        
+        # Update cfglimitsdefinition.xml
+        if mission_dir:
+            update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/categories', methods=['GET', 'POST'])
+def manage_categories():
+    """Get all categories or create a new category."""
+    try:
+        if request.method == 'POST':
+            mission_dir = request.args.get('mission_dir') or (request.json.get('mission_dir') if request.json else None)
+            db_file_path = request.args.get('db_file_path') or (request.json.get('db_file_path') if request.json else None)
+        else:
+            mission_dir = request.args.get('mission_dir')
+            db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if table exists, if not initialize schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categories'")
+        if not cursor.fetchone():
+            conn.close()
+            # Initialize schema
+            init_database_for_file(db_file_path if db_file_path else get_db_path(mission_dir or current_mission_dir), mission_dir)
+            # Reconnect
+            if db_file_path:
+                conn = get_db_connection(db_file_path=db_file_path)
+            else:
+                conn = get_db_connection(mission_dir or current_mission_dir)
+            cursor = conn.cursor()
+        
+        if request.method == 'POST':
+            data = request.json
+            name = data.get('name', '').strip()
+            
+            if not name:
+                conn.close()
+                return jsonify({'error': 'Category name is required'}), 400
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO categories (name)
+                    VALUES (?)
+                ''', (name,))
+                conn.commit()
+                category_id = cursor.lastrowid
+                conn.close()
+                
+                # Update cfglimitsdefinition.xml
+                if mission_dir:
+                    update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+                
+                return jsonify({'success': True, 'id': category_id, 'name': name})
+            except sqlite3.IntegrityError:
+                conn.close()
+                return jsonify({'error': 'Category name already exists'}), 400
+        else:
+            cursor.execute('SELECT id, name FROM categories ORDER BY name')
+            categories = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            conn.close()
+            return jsonify({'success': True, 'categories': categories})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/categories/<int:category_id>', methods=['DELETE'])
+def delete_category(category_id):
+    """Delete a category."""
+    try:
+        # DELETE requests use query parameters, not JSON body
+        mission_dir = request.args.get('mission_dir')
+        db_file_path = request.args.get('db_file_path')
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        # Check if category exists
+        cursor.execute('SELECT id FROM categories WHERE id = ?', (category_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Category not found'}), 404
+        
+        # Delete the category (CASCADE will handle element_categories)
+        cursor.execute('DELETE FROM categories WHERE id = ?', (category_id,))
+        conn.commit()
+        conn.close()
+        
+        # Update cfglimitsdefinition.xml
+        if mission_dir:
+            update_cfglimitsdefinition_xml(mission_dir, db_file_path)
         
         return jsonify({'success': True})
     except Exception as e:
@@ -2143,7 +2263,7 @@ def reconstruct_child_element(tag, value):
 
 def update_cfglimitsdefinition_xml(mission_dir, db_file_path=None):
     """
-    Update cfglimitsdefinition.xml with usageflags and valueflags from the database.
+    Update cfglimitsdefinition.xml with categories, usageflags and valueflags from the database.
     """
     try:
         mission_path = Path(mission_dir)
@@ -2156,7 +2276,10 @@ def update_cfglimitsdefinition_xml(mission_dir, db_file_path=None):
             conn = get_db_connection(mission_dir)
         cursor = conn.cursor()
         
-        # Get all usageflags and valueflags from database
+        # Get all categories, usageflags and valueflags from database
+        cursor.execute('SELECT name FROM categories ORDER BY name')
+        categories = [row['name'] for row in cursor.fetchall()]
+        
         cursor.execute('SELECT name FROM usageflags ORDER BY name')
         usageflags = [row['name'] for row in cursor.fetchall()]
         
@@ -2172,6 +2295,18 @@ def update_cfglimitsdefinition_xml(mission_dir, db_file_path=None):
         else:
             root = ET.Element('cfglimitsdefinition')
             tree = ET.ElementTree(root)
+        
+        # Update categories section
+        categories_elem = root.find('categories')
+        if categories_elem is None:
+            categories_elem = ET.SubElement(root, 'categories')
+        else:
+            # Clear existing category elements
+            categories_elem.clear()
+        
+        for category_name in categories:
+            category_elem = ET.SubElement(categories_elem, 'category')
+            category_elem.set('name', category_name)
         
         # Update usageflags section
         usageflags_elem = root.find('usageflags')

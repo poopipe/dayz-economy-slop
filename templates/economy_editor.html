@@ -46,6 +46,7 @@
                 <button id="columnVisibilityBtn" class="btn">Column Visibility</button>
                 <button id="manageItemclassesBtn" class="btn">Manage Itemclasses</button>
                 <button id="manageItemtagsBtn" class="btn">Manage Itemtags</button>
+                <button id="manageCategoriesBtn" class="btn">Manage Categories</button>
                 <button id="manageUsageflagsBtn" class="btn">Manage Usageflags</button>
                 <button id="manageValueflagsBtn" class="btn">Manage Valueflags</button>
             </div>
@@ -274,6 +275,32 @@
             </div>
             <div class="modal-actions">
                 <button id="closeUsageflagsBtn" class="btn">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Categories Management Modal -->
+    <div id="categoriesManagementModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Manage Categories</h2>
+            <div class="management-section">
+                <div class="add-section">
+                    <h3>Add Category</h3>
+                    <div class="add-controls">
+                        <input type="text" id="newCategoryName" placeholder="Enter category name..." class="name-input">
+                        <button id="addCategoryBtn" class="btn btn-primary">Add</button>
+                    </div>
+                </div>
+                <div class="list-section">
+                    <h3>Existing Categories</h3>
+                    <div id="categoriesList" class="items-list">
+                        <!-- Categories will be listed here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="closeCategoriesBtn" class="btn">Close</button>
             </div>
         </div>
     </div>
