@@ -1,14 +1,28 @@
 # XML Data Viewer
 
-A web-based XML data viewer with live updates when source XML files change.
+A collection of web-based tools for viewing and editing XML data from DayZ server mission files.
 
-## Features
+## Applications
 
-- Web browser-based interface
-- Python backend (Flask)
-- Live file watching and automatic updates
-- Virtual environment setup
-- Real-time XML data display with auto-refresh
+### 1. Editor v2 (`editor_v2_app.py`)
+A database editor for managing XML type elements with a normalized database schema.
+
+**Run:**
+```cmd
+python run_editor_v2.py
+```
+
+**Access:** `http://localhost:5001`
+
+### 2. Marker Viewer (`marker_viewer_app.py`)
+A 2D marker viewer for visualizing group positions from `mapgrouppos.xml` with filtering capabilities.
+
+**Run:**
+```cmd
+python run_marker_viewer.py
+```
+
+**Access:** `http://localhost:5003`
 
 ## Requirements
 
@@ -27,59 +41,52 @@ A web-based XML data viewer with live updates when source XML files change.
    pip install -r requirements.txt
    ```
 
-3. Run the server with file watching:
-   ```cmd
-   python run.py
-   ```
-   
-   Or run the app directly (without file watcher):
-   ```cmd
-   python app.py
-   ```
-
-4. Open your browser to `http://localhost:5000`
-
 ## Project Structure
 
 ```
 .
-├── app.py                 # Main Flask application
-├── run.py                 # Startup script with file watcher
-├── file_watcher.py        # File watching service
-├── static/                # Static files (CSS, JS)
+├── editor_v2_app.py          # Database editor Flask application
+├── marker_viewer_app.py      # Marker viewer Flask application
+├── run_editor_v2.py          # Convenience script to run editor
+├── run_marker_viewer.py      # Convenience script to run marker viewer
+├── static/                   # Static files (CSS, JS)
 │   ├── css/
-│   │   └── style.css
+│   │   ├── editor_v2.css
+│   │   └── marker_viewer.css
 │   └── js/
-│       └── app.js
-├── templates/             # HTML templates
-│   └── index.html
-├── data/                  # XML data files to watch
-│   └── sample.xml
-├── requirements.txt       # Python dependencies
-├── activate_venv.bat      # Virtual environment activation script
-└── venv/                  # Virtual environment (created automatically)
-
+│       ├── editor_v2.js
+│       └── marker_viewer.js
+├── templates/                # HTML templates
+│   ├── editor_v2.html
+│   └── marker_viewer.html
+├── uploads/                  # Uploaded files (background images, etc.)
+│   └── background_images/
+├── requirements.txt          # Python dependencies
+├── activate_venv.bat         # Virtual environment activation script
+└── venv/                     # Virtual environment (created automatically)
 ```
-
-## Usage
-
-1. Place XML files in the `data/` directory
-2. The viewer will automatically detect changes and update the display
-3. The web interface auto-refreshes every 2 seconds (configurable)
-4. Click on any XML file in the list to view its contents
-5. The file watcher will log changes to the console
 
 ## Features
 
-- **Auto-refresh**: The web interface automatically polls for updates
-- **File watching**: Backend monitors the data directory for file changes
-- **Multiple files**: View any XML file in the data directory
-- **Error handling**: Displays parse errors gracefully
-- **Responsive design**: Modern, clean interface
+### Editor v2
+- Database-backed XML element management
+- Normalized schema for efficient querying
+- Import/export XML files
+- Filter and search capabilities
+- Relationship management (categories, tags, flags, etc.)
+
+### Marker Viewer
+- 2D visualization of group positions
+- Pan and zoom functionality
+- Background image support
+- Filter by usage and group name
+- Marker selection and XML export
+- Grid overlay with 100m and 1km lines
 
 ## Development
 
-The application uses:
+The applications use:
 - **Flask**: Web framework
-- **watchdog**: File system monitoring
+- **SQLite**: Database (for editor v2)
 - **ElementTree**: XML parsing (Python standard library)
+- **WebGL**: GPU-accelerated rendering (for marker viewer background)
