@@ -14,12 +14,12 @@ python run_economy_editor.py
 
 **Access:** `http://localhost:5004`
 
-### 2. Marker Viewer (`marker_viewer_app.py`)
-A 2D marker viewer for visualizing group positions from `mapgrouppos.xml` with filtering capabilities.
+### 2. Map Viewer (`map_viewer_app.py`)
+A 2D map viewer for visualizing group positions from `mapgrouppos.xml` with filtering capabilities.
 
 **Run:**
 ```cmd
-python run_marker_viewer.py
+python run_map_viewer.py
 ```
 
 **Access:** `http://localhost:5003`
@@ -46,19 +46,19 @@ python run_marker_viewer.py
 ```
 .
 ├── economy_editor_app.py     # Economy editor Flask application
-├── marker_viewer_app.py      # Marker viewer Flask application
+├── map_viewer_app.py         # Map viewer Flask application
 ├── run_economy_editor.py     # Convenience script to run economy editor
-├── run_marker_viewer.py      # Convenience script to run marker viewer
+├── run_map_viewer.py         # Convenience script to run map viewer
 ├── static/                   # Static files (CSS, JS)
 │   ├── css/
 │   │   ├── economy_editor.css
-│   │   └── marker_viewer.css
+│   │   └── map_viewer.css
 │   └── js/
 │       ├── economy_editor.js
-│       └── marker_viewer.js
+│       └── map_viewer.js
 ├── templates/                # HTML templates
 │   ├── economy_editor.html
-│   └── marker_viewer.html
+│   └── map_viewer.html
 ├── uploads/                  # Uploaded files (background images, etc.)
 │   └── background_images/
 ├── requirements.txt          # Python dependencies
@@ -75,7 +75,7 @@ python run_marker_viewer.py
 - Filter and search capabilities
 - Relationship management (categories, tags, flags, etc.)
 
-### Marker Viewer
+### Map Viewer
 - 2D visualization of group positions
 - Pan and zoom functionality
 - Background image support
@@ -89,4 +89,4 @@ The applications use:
 - **Flask**: Web framework
 - **SQLite**: Database (for economy editor)
 - **ElementTree**: XML parsing (Python standard library)
-- **WebGL**: GPU-accelerated rendering (for marker viewer background)
+- **WebGL**: GPU-accelerated rendering (for map viewer background)

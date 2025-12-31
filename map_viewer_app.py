@@ -213,7 +213,7 @@ def load_groups_from_xml(xml_file_path, proto_file_path=None):
 @app.route('/')
 def index():
     """Main page."""
-    return render_template('marker_viewer.html')
+    return render_template('map_viewer.html')
 
 
 @app.route('/api/groups')
@@ -394,7 +394,7 @@ def delete_background_image(image_id):
 
 
 if __name__ == '__main__':
-    print(f"Marker Viewer starting...")
+    print(f"Map Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")
     print(f"Open your browser to http://localhost:5003")
     app.run(debug=True, host='0.0.0.0', port=5003)

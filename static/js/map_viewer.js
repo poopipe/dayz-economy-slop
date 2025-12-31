@@ -1,4 +1,4 @@
-// Marker Viewer JavaScript
+// Map Viewer JavaScript
 
 let canvas;
 let ctx;
@@ -1203,7 +1203,7 @@ async function loadGroups() {
     
     missionDir = dir;
     // Save to localStorage
-    localStorage.setItem('marker_viewer_missionDir', missionDir);
+    localStorage.setItem('map_viewer_missionDir', missionDir);
     
     updateStatus('Loading markers...');
     
@@ -1283,10 +1283,10 @@ function setupBackgroundImageHandler() {
             const imageId = data.image_id;
             
             // Store image ID in localStorage (not the image data)
-            localStorage.setItem('marker_viewer_backgroundImageId', imageId);
+            localStorage.setItem('map_viewer_backgroundImageId', imageId);
             // Clear old localStorage image data if it exists
-            localStorage.removeItem('marker_viewer_backgroundImage');
-            localStorage.removeItem('marker_viewer_backgroundImageFileName');
+            localStorage.removeItem('map_viewer_backgroundImage');
+            localStorage.removeItem('map_viewer_backgroundImageFileName');
             
             // Load image from server
             await loadBackgroundImageFromServer(imageId);
@@ -1308,8 +1308,8 @@ async function loadBackgroundImageFromServer(imageId) {
             backgroundImage = img;
             
             // Check for saved dimensions first, otherwise use image size as default (1 pixel per metre)
-            const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
-            const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+            const savedWidth = localStorage.getItem('map_viewer_imageWidth');
+            const savedHeight = localStorage.getItem('map_viewer_imageHeight');
             
             if (savedWidth && savedHeight) {
                 // Restore saved dimensions
@@ -1320,8 +1320,8 @@ async function loadBackgroundImageFromServer(imageId) {
                 imageWidth = img.width;
                 imageHeight = img.height;
                 // Save default dimensions to localStorage
-                localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
-                localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+                localStorage.setItem('map_viewer_imageWidth', imageWidth.toString());
+                localStorage.setItem('map_viewer_imageHeight', imageHeight.toString());
             }
             
             document.getElementById('imageWidth').value = imageWidth;
@@ -1356,8 +1356,8 @@ function applyImageDimensions() {
     imageHeight = parseFloat(document.getElementById('imageHeight').value) || 1000;
     
     // Save to localStorage
-    localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
-    localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+    localStorage.setItem('map_viewer_imageWidth', imageWidth.toString());
+    localStorage.setItem('map_viewer_imageHeight', imageHeight.toString());
     
     draw();
 }
@@ -1365,7 +1365,7 @@ function applyImageDimensions() {
 // Clear background image
 async function clearBackgroundImage() {
     // Delete image from server if we have an image ID
-    const imageId = localStorage.getItem('marker_viewer_backgroundImageId');
+    const imageId = localStorage.getItem('map_viewer_backgroundImageId');
     if (imageId) {
         try {
             await fetch(`/api/delete-background-image/${imageId}`, {
@@ -1382,11 +1382,11 @@ async function clearBackgroundImage() {
     document.getElementById('imageDimensionsGroup').style.display = 'none';
     
     // Remove from localStorage
-    localStorage.removeItem('marker_viewer_backgroundImage');
-    localStorage.removeItem('marker_viewer_backgroundImageId');
-    localStorage.removeItem('marker_viewer_backgroundImageFileName');
-    localStorage.removeItem('marker_viewer_imageWidth');
-    localStorage.removeItem('marker_viewer_imageHeight');
+    localStorage.removeItem('map_viewer_backgroundImage');
+    localStorage.removeItem('map_viewer_backgroundImageId');
+    localStorage.removeItem('map_viewer_backgroundImageFileName');
+    localStorage.removeItem('map_viewer_imageWidth');
+    localStorage.removeItem('map_viewer_imageHeight');
     
     draw();
 }
@@ -1717,23 +1717,23 @@ function updateFilterUI() {
 // Restore saved state from localStorage
 async function restoreSavedState() {
     // Restore mission directory
-    const savedMissionDir = localStorage.getItem('marker_viewer_missionDir');
+    const savedMissionDir = localStorage.getItem('map_viewer_missionDir');
     if (savedMissionDir) {
         missionDir = savedMissionDir;
         document.getElementById('missionDir').value = savedMissionDir;
     }
     
     // Restore background image - try server first, then fallback to localStorage
-    const savedImageId = localStorage.getItem('marker_viewer_backgroundImageId');
-    const savedImageDataUrl = localStorage.getItem('marker_viewer_backgroundImage');
+    const savedImageId = localStorage.getItem('map_viewer_backgroundImageId');
+    const savedImageDataUrl = localStorage.getItem('map_viewer_backgroundImage');
     
     if (savedImageId) {
         // Try to load from server
         await loadBackgroundImageFromServer(savedImageId);
         
         // Restore dimensions if available
-        const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
-        const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+        const savedWidth = localStorage.getItem('map_viewer_imageWidth');
+        const savedHeight = localStorage.getItem('map_viewer_imageHeight');
         
         if (savedWidth && savedHeight) {
             imageWidth = parseFloat(savedWidth);
@@ -1753,8 +1753,8 @@ async function restoreSavedState() {
             }
             
             // Restore dimensions
-            const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
-            const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+            const savedWidth = localStorage.getItem('map_viewer_imageWidth');
+            const savedHeight = localStorage.getItem('map_viewer_imageHeight');
             
             if (savedWidth) {
                 imageWidth = parseFloat(savedWidth);
