@@ -4,7 +4,8 @@ let canvas;
 let ctx;
 let markers = [];
 let selectedMarkers = new Set();
-let visibleMarkers = new Set(); // For filtering (future use)
+let visibleMarkers = new Set(); // For filtering
+let activeFilters = []; // Array of filter objects: { criteria: 'isOneOf'|'isNotOneOf', usageNames: ['name1', 'name2'] }
 let backgroundImage = null;
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
@@ -1218,7 +1219,16 @@ async function loadGroups() {
         
         markers = data.groups || [];
         selectedMarkers.clear();
-        visibleMarkers.clear(); // Show all by default
+        
+        // Show filter section and populate usage dropdown
+        const filterSection = document.getElementById('filterSection');
+        if (filterSection && markers.length > 0) {
+            filterSection.style.display = 'block';
+            populateFilterUsageDropdown();
+            applyFilters(); // Apply any existing filters (or show all if no filters)
+        } else if (filterSection) {
+            filterSection.style.display = 'none';
+        }
         
         if (markers.length > 0) {
             fitToView();
@@ -1379,6 +1389,236 @@ async function clearBackgroundImage() {
     draw();
 }
 
+// Get all unique usage names from markers
+function getAllUsageNames() {
+    const usageNames = new Set();
+    
+    markers.forEach(marker => {
+        // Check direct usage property (from mapgrouppos.xml)
+        if (marker.usage) {
+            if (Array.isArray(marker.usage)) {
+                marker.usage.forEach(u => {
+                    if (typeof u === 'object' && u.name) {
+                        usageNames.add(u.name.trim());
+                    } else if (typeof u === 'string' && u.trim()) {
+                        usageNames.add(u.trim());
+                    }
+                });
+            } else if (typeof marker.usage === 'object' && marker.usage.name) {
+                usageNames.add(marker.usage.name.trim());
+            } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
+                usageNames.add(marker.usage.trim());
+            }
+        }
+        
+        // Check proto_children for usage (from mapgroupproto.xml)
+        if (marker.proto_children && typeof marker.proto_children === 'object') {
+            if (marker.proto_children.usage) {
+                const usage = marker.proto_children.usage;
+                if (Array.isArray(usage)) {
+                    usage.forEach(u => {
+                        if (typeof u === 'object' && u.name) {
+                            usageNames.add(u.name.trim());
+                        } else if (typeof u === 'string' && u.trim()) {
+                            usageNames.add(u.trim());
+                        }
+                    });
+                } else if (typeof usage === 'object' && usage.name) {
+                    usageNames.add(usage.name.trim());
+                } else if (typeof usage === 'string' && usage.trim()) {
+                    usageNames.add(usage.trim());
+                }
+            }
+        }
+    });
+    
+    return Array.from(usageNames).sort();
+}
+
+// Get usage names for a specific marker
+function getMarkerUsageNames(marker) {
+    const usageNames = [];
+    
+    // Check direct usage property (from mapgrouppos.xml)
+    if (marker.usage) {
+        if (Array.isArray(marker.usage)) {
+            marker.usage.forEach(u => {
+                if (typeof u === 'object' && u.name) {
+                    usageNames.push(u.name.trim());
+                } else if (typeof u === 'string' && u.trim()) {
+                    usageNames.push(u.trim());
+                }
+            });
+        } else if (typeof marker.usage === 'object' && marker.usage.name) {
+            usageNames.push(marker.usage.name.trim());
+        } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
+            usageNames.push(marker.usage.trim());
+        }
+    }
+    
+    // Check proto_children for usage (from mapgroupproto.xml)
+    if (marker.proto_children && typeof marker.proto_children === 'object') {
+        if (marker.proto_children.usage) {
+            const usage = marker.proto_children.usage;
+            if (Array.isArray(usage)) {
+                usage.forEach(u => {
+                    if (typeof u === 'object' && u.name) {
+                        usageNames.push(u.name.trim());
+                    } else if (typeof u === 'string' && u.trim()) {
+                        usageNames.push(u.trim());
+                    }
+                });
+            } else if (typeof usage === 'object' && usage.name) {
+                usageNames.push(usage.name.trim());
+            } else if (typeof usage === 'string' && usage.trim()) {
+                usageNames.push(usage.trim());
+            }
+        }
+    }
+    
+    return [...new Set(usageNames)]; // Remove duplicates
+}
+
+// Populate filter usage dropdown
+function populateFilterUsageDropdown() {
+    const select = document.getElementById('filterUsageSelect');
+    if (!select) return;
+    
+    select.innerHTML = '';
+    const usageNames = getAllUsageNames();
+    
+    usageNames.forEach(usageName => {
+        const option = document.createElement('option');
+        option.value = usageName;
+        option.textContent = usageName;
+        select.appendChild(option);
+    });
+}
+
+// Apply filters to markers
+function applyFilters() {
+    visibleMarkers.clear();
+    
+    if (activeFilters.length === 0) {
+        // No filters - show all markers
+        markers.forEach((_, index) => visibleMarkers.add(index));
+    } else {
+        // Apply filters
+        markers.forEach((marker, index) => {
+            const markerUsageNames = getMarkerUsageNames(marker);
+            let matches = true;
+            
+            // All filters must match (AND logic)
+            for (const filter of activeFilters) {
+                const hasMatch = filter.usageNames.some(usageName => 
+                    markerUsageNames.includes(usageName)
+                );
+                
+                if (filter.criteria === 'isOneOf') {
+                    matches = matches && hasMatch;
+                } else if (filter.criteria === 'isNotOneOf') {
+                    matches = matches && !hasMatch;
+                }
+                
+                if (!matches) break; // Short-circuit if one filter fails
+            }
+            
+            if (matches) {
+                visibleMarkers.add(index);
+            }
+        });
+    }
+    
+    draw();
+}
+
+// Add filter
+function addFilter() {
+    const criteria = document.getElementById('filterCriteria').value;
+    const select = document.getElementById('filterUsageSelect');
+    
+    if (!criteria) {
+        alert('Please select a criteria');
+        return;
+    }
+    
+    const selectedOptions = Array.from(select.selectedOptions);
+    if (selectedOptions.length === 0) {
+        alert('Please select at least one usage');
+        return;
+    }
+    
+    const usageNames = selectedOptions.map(opt => opt.value);
+    
+    // Check if filter already exists
+    const exists = activeFilters.some(f => {
+        if (f.criteria !== criteria) return false;
+        return f.usageNames.length === usageNames.length &&
+               f.usageNames.every(name => usageNames.includes(name)) &&
+               usageNames.every(name => f.usageNames.includes(name));
+    });
+    
+    if (exists) {
+        alert('This filter already exists');
+        return;
+    }
+    
+    // Add filter
+    activeFilters.push({
+        criteria: criteria,
+        usageNames: usageNames
+    });
+    
+    // Clear selection
+    select.selectedIndex = -1;
+    
+    // Update UI and apply filters
+    updateFilterUI();
+    applyFilters();
+}
+
+// Remove filter
+function removeFilter(index) {
+    activeFilters.splice(index, 1);
+    updateFilterUI();
+    applyFilters();
+}
+
+// Clear all filters
+function clearAllFilters() {
+    activeFilters = [];
+    updateFilterUI();
+    applyFilters();
+}
+
+// Update filter UI
+function updateFilterUI() {
+    const activeFiltersList = document.getElementById('activeFiltersList');
+    if (!activeFiltersList) return;
+    
+    activeFiltersList.innerHTML = '';
+    
+    if (activeFilters.length === 0) {
+        activeFiltersList.innerHTML = '<p style="color: #666; font-size: 0.9em;">No active filters</p>';
+        return;
+    }
+    
+    activeFilters.forEach((filter, index) => {
+        const filterItem = document.createElement('div');
+        filterItem.className = 'active-filter-item';
+        
+        const criteriaText = filter.criteria === 'isOneOf' ? 'Is One Of' : 'Is Not One Of';
+        const usageText = filter.usageNames.join(', ');
+        
+        filterItem.innerHTML = `
+            <span class="filter-text">Usage ${criteriaText}: ${usageText}</span>
+            <button class="btn-remove-filter" onclick="removeFilter(${index})" title="Remove filter">×</button>
+        `;
+        
+        activeFiltersList.appendChild(filterItem);
+    });
+}
+
 // Restore saved state from localStorage
 async function restoreSavedState() {
     // Restore mission directory
@@ -1478,6 +1718,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
     document.getElementById('clearImageBtn').addEventListener('click', clearBackgroundImage);
     document.getElementById('applyDimensionsBtn').addEventListener('click', applyImageDimensions);
+    
+    // Filter event listeners
+    document.getElementById('addFilterBtn').addEventListener('click', addFilter);
+    document.getElementById('clearAllFiltersBtn').addEventListener('click', clearAllFilters);
     
     // Allow Enter key to trigger load
     document.getElementById('missionDir').addEventListener('keypress', (e) => {
