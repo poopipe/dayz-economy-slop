@@ -2412,7 +2412,7 @@ def sanitize_filename(name):
 
 
 def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
-    """Update cfgeconomycore.xml with new ce section."""
+    """Update cfgeconomycore.xml with new ce section inside <economycore> tags."""
     cfgeconomycore_file = mission_path / 'cfgeconomycore.xml'
     
     if not cfgeconomycore_file.exists():
@@ -2421,7 +2421,63 @@ def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
     try:
         # Read existing file
         with open(cfgeconomycore_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+            content = f.read()
+        
+        # Parse as XML to properly handle structure
+        try:
+            tree = ET.parse(cfgeconomycore_file)
+            root = tree.getroot()
+            
+            # Find or create economycore element
+            economycore = root.find('economycore')
+            if economycore is None:
+                # If no economycore exists, create it
+                economycore = ET.SubElement(root, 'economycore')
+            
+            # Find existing ce element with matching folder
+            existing_ce = None
+            for ce in economycore.findall('ce'):
+                folder_attr = ce.get('folder')
+                if folder_attr == export_subfolder:
+                    existing_ce = ce
+                    break
+            
+            # Create new ce section
+            if existing_ce is not None:
+                # Remove old file elements
+                for file_elem in list(existing_ce):
+                    existing_ce.remove(file_elem)
+            else:
+                # Create new ce element
+                existing_ce = ET.SubElement(economycore, 'ce')
+                existing_ce.set('folder', export_subfolder)
+            
+            # Add file elements
+            for filename in sorted(exported_files):
+                file_elem = ET.SubElement(existing_ce, 'file')
+                file_elem.set('name', filename)
+                file_elem.set('type', 'types')
+            
+            # Write back with proper formatting
+            ET.indent(tree, space='    ')
+            tree.write(cfgeconomycore_file, encoding='utf-8', xml_declaration=True)
+            
+            return True
+        except ET.ParseError:
+            # If XML parsing fails, fall back to text-based approach
+            return update_cfgeconomycore_xml_text_based(cfgeconomycore_file, export_subfolder, exported_files, content)
+        
+    except Exception as e:
+        print(f"Error updating cfgeconomycore.xml: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def update_cfgeconomycore_xml_text_based(cfgeconomycore_file, export_subfolder, exported_files, content):
+    """Fallback text-based update if XML parsing fails."""
+    try:
+        lines = content.splitlines(keepends=True)
         
         # Find existing ce elements with matching folder
         new_lines = []
@@ -2475,14 +2531,20 @@ def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
             # Replace existing ce
             new_lines[ce_start_idx:ce_end_idx+1] = ce_section
         else:
-            # Find insertion point (before closing </cfglimitsdefinition> or at end)
+            # Find insertion point inside <economycore> tags (before closing </economycore>)
             insert_idx = len(new_lines)
             for idx, line in enumerate(new_lines):
-                if '</cfglimitsdefinition>' in line:
+                if '</economycore>' in line:
                     insert_idx = idx
                     break
-            new_lines.insert(insert_idx, '\n')
-            new_lines.insert(insert_idx + 1, ''.join(ce_section))
+            # If no </economycore> found, try to find it case-insensitively
+            if insert_idx == len(new_lines):
+                for idx, line in enumerate(new_lines):
+                    if '</economycore>' in line.lower():
+                        insert_idx = idx
+                        break
+            # Insert the ce section before the closing </economycore> tag
+            new_lines.insert(insert_idx, ''.join(ce_section))
         
         # Write back
         with open(cfgeconomycore_file, 'w', encoding='utf-8') as f:
@@ -2490,7 +2552,7 @@ def update_cfgeconomycore_xml(mission_path, export_subfolder, exported_files):
         
         return True
     except Exception as e:
-        print(f"Error updating cfgeconomycore.xml: {e}")
+        print(f"Error in text-based update of cfgeconomycore.xml: {e}")
         return False
 
 
