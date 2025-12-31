@@ -25,6 +25,10 @@ let marqueeStartX = 0;
 let marqueeStartY = 0;
 let marqueeCurrentX = 0;
 let marqueeCurrentY = 0;
+let backgroundCanvas = null;
+let backgroundCtx = null;
+let backgroundCacheValid = false;
+let animationFrameId = null;
 
 // Initialize canvas
 function initCanvas() {
@@ -239,35 +243,69 @@ function drawGrid() {
     }
 }
 
-// Draw background image
+// Initialize background cache canvas
+function initBackgroundCache() {
+    if (!backgroundCanvas) {
+        backgroundCanvas = document.createElement('canvas');
+        backgroundCtx = backgroundCanvas.getContext('2d');
+    }
+    backgroundCacheValid = false;
+}
+
+// Draw background image with optimization
 function drawBackgroundImage() {
     if (!backgroundImage) return;
     
-    // Calculate image position and size in screen coordinates
-    // Image should be positioned at world origin (0, 0) and extend to (imageWidth, imageHeight)
-    // In world space: (0, 0) is bottom-left, (imageWidth, imageHeight) is top-right
-    const bottomLeft = worldToScreen(0, 0); // Bottom-left corner in world
-    const topRight = worldToScreen(imageWidth, imageHeight); // Top-right corner in world
+    // Calculate visible bounds in world coordinates
+    const topLeft = screenToWorld(0, 0);
+    const bottomRight = screenToWorld(canvasWidth, canvasHeight);
+    const topRight = screenToWorld(canvasWidth, 0);
+    const bottomLeft = screenToWorld(0, canvasHeight);
     
-    const imageScreenX = bottomLeft.x;
-    const imageScreenY = topRight.y; // Top Y coordinate
-    const imageScreenWidth = topRight.x - bottomLeft.x;
-    const imageScreenHeight = bottomLeft.y - topRight.y; // Positive height (top to bottom)
+    // Find the visible world bounds
+    const visibleMinX = Math.min(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const visibleMaxX = Math.max(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const visibleMinZ = Math.min(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
+    const visibleMaxZ = Math.max(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
     
-    // Save context state
-    ctx.save();
+    // Calculate the intersection of visible area with image bounds
+    const imageMinX = 0;
+    const imageMaxX = imageWidth;
+    const imageMinZ = 0;
+    const imageMaxZ = imageHeight;
     
-    // Draw the image
+    // Clamp to image bounds
+    const drawMinX = Math.max(visibleMinX, imageMinX);
+    const drawMaxX = Math.min(visibleMaxX, imageMaxX);
+    const drawMinZ = Math.max(visibleMinZ, imageMinZ);
+    const drawMaxZ = Math.min(visibleMaxZ, imageMaxZ);
+    
+    // If no intersection, don't draw
+    if (drawMinX >= drawMaxX || drawMinZ >= drawMaxZ) {
+        return;
+    }
+    
+    // Calculate source rectangle in image coordinates (pixels)
+    const sourceX = ((drawMinX - imageMinX) / imageWidth) * backgroundImage.width;
+    const sourceY = ((imageMaxZ - drawMaxZ) / imageHeight) * backgroundImage.height; // Flip Y
+    const sourceWidth = ((drawMaxX - drawMinX) / imageWidth) * backgroundImage.width;
+    const sourceHeight = ((drawMaxZ - drawMinZ) / imageHeight) * backgroundImage.height;
+    
+    // Calculate destination rectangle in screen coordinates
+    const destTopLeft = worldToScreen(drawMinX, drawMaxZ);
+    const destBottomRight = worldToScreen(drawMaxX, drawMinZ);
+    
+    const destX = destTopLeft.x;
+    const destY = destTopLeft.y;
+    const destWidth = destBottomRight.x - destTopLeft.x;
+    const destHeight = destBottomRight.y - destTopLeft.y;
+    
+    // Only draw the visible portion of the image
     ctx.drawImage(
         backgroundImage,
-        imageScreenX,
-        imageScreenY,
-        imageScreenWidth,
-        imageScreenHeight
+        sourceX, sourceY, sourceWidth, sourceHeight, // Source rectangle
+        destX, destY, destWidth, destHeight // Destination rectangle
     );
-    
-    // Restore context state
-    ctx.restore();
 }
 
 // Draw markers
@@ -383,6 +421,14 @@ function drawMarquee() {
 
 // Main draw function
 function draw() {
+    // Cancel any pending animation frame
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+    
+    // For immediate feedback during pan/zoom, draw synchronously
+    // The clipping optimization in drawBackgroundImage handles performance
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
     // Draw in order: background image, grid, markers, marquee, tooltip
@@ -669,6 +715,7 @@ document.getElementById('backgroundImage').addEventListener('change', (e) => {
             document.getElementById('imageWidth').value = imageWidth;
             document.getElementById('imageHeight').value = imageHeight;
             document.getElementById('imageDimensionsGroup').style.display = 'flex';
+            initBackgroundCache();
             draw();
         };
         img.src = event.target.result;
@@ -686,6 +733,7 @@ function applyImageDimensions() {
 // Clear background image
 function clearBackgroundImage() {
     backgroundImage = null;
+    backgroundCacheValid = false;
     document.getElementById('backgroundImage').value = '';
     document.getElementById('imageDimensionsGroup').style.display = 'none';
     draw();
