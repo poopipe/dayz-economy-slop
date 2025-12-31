@@ -20,6 +20,11 @@ let canvasHeight = 0;
 let hoveredMarkerIndex = -1;
 let tooltipX = 0;
 let tooltipY = 0;
+let isMarqueeSelecting = false;
+let marqueeStartX = 0;
+let marqueeStartY = 0;
+let marqueeCurrentX = 0;
+let marqueeCurrentY = 0;
 
 // Initialize canvas
 function initCanvas() {
@@ -51,8 +56,8 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
-            // Single click selection
-            selectAtPoint(x, y, e.shiftKey);
+            // Call handleMouseDown for selection/marquee logic
+            handleMouseDown(e);
         }
     });
     
@@ -69,6 +74,11 @@ function initCanvas() {
             viewOffsetY = panStartOffsetY + (y - panStartY);
             hoveredMarkerIndex = -1; // Clear hover when panning
             draw();
+        } else if (isMarqueeSelecting) {
+            // Update marquee rectangle
+            marqueeCurrentX = x;
+            marqueeCurrentY = y;
+            draw();
         } else {
             // Check for hover
             updateHoveredMarker(x, y);
@@ -79,6 +89,7 @@ function initCanvas() {
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             isPanning = false;
         }
+        handleMouseUp(e);
     });
     
     // Clear hover when mouse leaves canvas
@@ -258,13 +269,13 @@ function drawMarkers() {
         const isSelected = selectedMarkers.has(index);
         const isHovered = hoveredMarkerIndex === index;
         
-        // Draw marker
+        // Draw marker - same radius for all markers
         ctx.fillStyle = isSelected ? '#ff0000' : (isHovered ? '#00ff00' : '#0066ff');
         ctx.strokeStyle = isSelected ? '#cc0000' : (isHovered ? '#00cc00' : '#0044cc');
         ctx.lineWidth = isSelected ? 3 : (isHovered ? 3 : 2);
         
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, isSelected ? 6 : (isHovered ? 6 : 4), 0, Math.PI * 2);
+        ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
     });
@@ -333,14 +344,38 @@ function drawTooltip() {
     });
 }
 
+// Draw marquee selection rectangle
+function drawMarquee() {
+    if (!isMarqueeSelecting) return;
+    
+    const rectX = Math.min(marqueeStartX, marqueeCurrentX);
+    const rectY = Math.min(marqueeStartY, marqueeCurrentY);
+    const rectWidth = Math.abs(marqueeCurrentX - marqueeStartX);
+    const rectHeight = Math.abs(marqueeCurrentY - marqueeStartY);
+    
+    // Draw selection rectangle
+    ctx.strokeStyle = '#0066ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(rectX, rectY, rectWidth, rectHeight);
+    
+    // Draw semi-transparent fill
+    ctx.fillStyle = 'rgba(0, 102, 255, 0.1)';
+    ctx.fillRect(rectX, rectY, rectWidth, rectHeight);
+    
+    // Reset line dash
+    ctx.setLineDash([]);
+}
+
 // Main draw function
 function draw() {
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw in order: background image, grid, markers, tooltip
+    // Draw in order: background image, grid, markers, marquee, tooltip
     drawBackgroundImage();
     drawGrid();
     drawMarkers();
+    drawMarquee();
     drawTooltip();
 }
 
@@ -351,8 +386,38 @@ function handleMouseDown(e) {
     const y = e.clientY - rect.top;
     
     if (e.button === 0) { // Left click
-        // Single click selection
-        selectAtPoint(x, y, e.shiftKey);
+        // Check if clicking on a marker first
+        // Use screen-space threshold to match marker visual size (4px radius)
+        const screenThreshold = 5; // pixels in screen space
+        let clickedMarker = false;
+        
+        markers.forEach((marker, index) => {
+            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+                return; // Skip hidden markers
+            }
+            const screenPos = worldToScreen(marker.x, marker.z);
+            const dx = screenPos.x - x;
+            const dy = screenPos.y - y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < screenThreshold) {
+                clickedMarker = true;
+            }
+        });
+        
+        if (clickedMarker) {
+            // Single click selection on marker
+            selectAtPoint(x, y, e.altKey);
+        } else {
+            // Start marquee selection
+            // Don't clear selection here - deselection only happens for markers in the marquee
+            isMarqueeSelecting = true;
+            marqueeStartX = x;
+            marqueeStartY = y;
+            marqueeCurrentX = x;
+            marqueeCurrentY = y;
+            draw();
+        }
     }
 }
 
@@ -363,7 +428,60 @@ function handleMouseMove(e) {
 
 // Handle mouse up
 function handleMouseUp(e) {
-    // This function is not used but kept for potential future use
+    if (e.button === 0 && isMarqueeSelecting) {
+        // Finalize marquee selection
+        const rectX = Math.min(marqueeStartX, marqueeCurrentX);
+        const rectY = Math.min(marqueeStartY, marqueeCurrentY);
+        const rectWidth = Math.abs(marqueeCurrentX - marqueeStartX);
+        const rectHeight = Math.abs(marqueeCurrentY - marqueeStartY);
+        
+        // Only select if rectangle is large enough (avoid accidental selection on click)
+        if (rectWidth > 5 && rectHeight > 5) {
+            // Alt key means deselect mode, otherwise add to selection
+            selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, !e.altKey);
+        }
+        
+        isMarqueeSelecting = false;
+        updateSelectedCount();
+        draw();
+    }
+}
+
+// Select markers within rectangle
+function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSelection = true) {
+    // Only clear selection if not adding to selection (deselect mode)
+    if (!addToSelection) {
+        // In deselect mode, we'll remove markers from selection instead of clearing all
+        // Don't clear here - we'll deselect markers in the rectangle
+    }
+    
+    // Convert rectangle bounds to world coordinates
+    const topLeft = screenToWorld(rectX, rectY);
+    const bottomRight = screenToWorld(rectX + rectWidth, rectY + rectHeight);
+    
+    // Get rectangle bounds in world space
+    const minX = Math.min(topLeft.x, bottomRight.x);
+    const maxX = Math.max(topLeft.x, bottomRight.x);
+    const minZ = Math.min(topLeft.z, bottomRight.z);
+    const maxZ = Math.max(topLeft.z, bottomRight.z);
+    
+    // Select or deselect markers within the rectangle
+    markers.forEach((marker, index) => {
+        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+            return; // Skip hidden markers
+        }
+        
+        if (marker.x >= minX && marker.x <= maxX &&
+            marker.z >= minZ && marker.z <= maxZ) {
+            if (addToSelection) {
+                // Add to selection
+                selectedMarkers.add(index);
+            } else {
+                // Remove from selection (deselect mode)
+                selectedMarkers.delete(index);
+            }
+        }
+    });
 }
 
 // Handle wheel (zoom)
@@ -396,30 +514,35 @@ function handleWheel(e) {
 }
 
 // Select marker at point
-function selectAtPoint(screenX, screenY, shiftKey = false) {
-    const worldPos = screenToWorld(screenX, screenY);
-    const threshold = 10 / viewScale; // 10 pixels in world coordinates
+function selectAtPoint(screenX, screenY, altKey = false) {
+    // Use screen-space threshold to match marker visual size (4px radius)
+    const screenThreshold = 5; // pixels in screen space, slightly larger than marker radius (4px)
     
     let found = false;
     markers.forEach((marker, index) => {
-        const dx = marker.x - worldPos.x;
-        const dz = marker.z - worldPos.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+            return; // Skip hidden markers
+        }
         
-        if (distance < threshold) {
-            if (selectedMarkers.has(index)) {
+        const screenPos = worldToScreen(marker.x, marker.z);
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < screenThreshold) {
+            if (altKey) {
+                // Alt key pressed - deselect mode
                 selectedMarkers.delete(index);
             } else {
+                // Normal mode - add to selection
                 selectedMarkers.add(index);
             }
             found = true;
         }
     });
     
-    if (!found && !shiftKey) {
-        // Deselect all if clicking on empty space
-        selectedMarkers.clear();
-    }
+    // Don't clear selection on empty click - only deselect when Alt is pressed
+    // Empty clicks do nothing by default
     
     updateSelectedCount();
     draw();
@@ -427,8 +550,8 @@ function selectAtPoint(screenX, screenY, shiftKey = false) {
 
 // Update hovered marker
 function updateHoveredMarker(screenX, screenY) {
-    const worldPos = screenToWorld(screenX, screenY);
-    const threshold = 10 / viewScale; // 10 pixels in world coordinates
+    // Use screen-space threshold to match marker visual size (4px radius)
+    const screenThreshold = 5; // pixels in screen space, slightly larger than marker radius (4px)
     
     let newHoveredIndex = -1;
     let minDistance = Infinity;
@@ -438,11 +561,12 @@ function updateHoveredMarker(screenX, screenY) {
             return; // Skip hidden markers
         }
         
-        const dx = marker.x - worldPos.x;
-        const dz = marker.z - worldPos.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const screenPos = worldToScreen(marker.x, marker.z);
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
         
-        if (distance < threshold && distance < minDistance) {
+        if (distance < screenThreshold && distance < minDistance) {
             minDistance = distance;
             newHoveredIndex = index;
         }
