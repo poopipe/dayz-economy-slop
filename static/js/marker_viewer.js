@@ -20,6 +20,9 @@ let canvasHeight = 0;
 let hoveredMarkerIndex = -1;
 let tooltipX = 0;
 let tooltipY = 0;
+
+// Consistent threshold for marker interaction (in screen pixels)
+const MARKER_INTERACTION_THRESHOLD = 5; // pixels, slightly larger than marker radius (4px)
 let isMarqueeSelecting = false;
 let marqueeStartX = 0;
 let marqueeStartY = 0;
@@ -60,6 +63,24 @@ function initCanvas() {
     canvas = document.getElementById('markerCanvas');
     ctx = canvas.getContext('2d');
     
+    // Get or create background canvas
+    backgroundCanvas = document.getElementById('backgroundCanvas');
+    if (backgroundCanvas) {
+        // Set pointer-events to none so mouse events pass through to marker canvas
+        backgroundCanvas.style.pointerEvents = 'none';
+        
+        // Try to get WebGL context first
+        gl = backgroundCanvas.getContext('webgl') || backgroundCanvas.getContext('experimental-webgl');
+        if (gl) {
+            useWebGL = true;
+            initWebGL();
+        } else {
+            // Fallback to 2D context
+            backgroundCtx = backgroundCanvas.getContext('2d');
+            useWebGL = false;
+        }
+    }
+    
     // Set canvas size
     resizeCanvas();
     
@@ -72,8 +93,11 @@ function initCanvas() {
     // Event listeners
     canvas.addEventListener('mousedown', (e) => {
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // Account for CSS scaling - convert CSS coordinates to canvas pixel coordinates
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
         
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             // Pan mode
@@ -91,8 +115,11 @@ function initCanvas() {
     
     canvas.addEventListener('mousemove', (e) => {
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // Account for CSS scaling - convert CSS coordinates to canvas pixel coordinates
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
         
         tooltipX = x;
         tooltipY = y;
@@ -236,11 +263,22 @@ function compileShader(type, source) {
 
 // Upload background image to WebGL texture
 function uploadBackgroundToWebGL() {
-    if (!gl || !backgroundImage || !backgroundTexture) return;
+    if (!gl || !backgroundImage || !backgroundTexture) {
+        console.warn('Cannot upload to WebGL:', { gl: !!gl, backgroundImage: !!backgroundImage, backgroundTexture: !!backgroundTexture });
+        return;
+    }
     
     gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, backgroundImage);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    
+    // Force a redraw after texture upload
+    requestDraw();
 }
 
 // Draw background using WebGL (much faster)
@@ -464,8 +502,24 @@ function drawGrid() {
 // Initialize background cache canvas
 function initBackgroundCache() {
     if (!backgroundCanvas) {
-        backgroundCanvas = document.createElement('canvas');
-        backgroundCtx = backgroundCanvas.getContext('2d');
+        backgroundCanvas = document.getElementById('backgroundCanvas');
+        if (!backgroundCanvas) {
+            backgroundCanvas = document.createElement('canvas');
+            backgroundCanvas.id = 'backgroundCanvas';
+            backgroundCanvas.style.position = 'absolute';
+            backgroundCanvas.style.top = '0';
+            backgroundCanvas.style.left = '0';
+            backgroundCanvas.style.zIndex = '0';
+            backgroundCanvas.style.pointerEvents = 'none'; // Allow mouse events to pass through
+            // Insert before marker canvas
+            const container = canvas.parentElement;
+            container.insertBefore(backgroundCanvas, canvas);
+        }
+        // Ensure pointer-events is set
+        backgroundCanvas.style.pointerEvents = 'none';
+        if (!backgroundCtx && !useWebGL) {
+            backgroundCtx = backgroundCanvas.getContext('2d');
+        }
     }
     backgroundCacheValid = false;
 }
@@ -621,16 +675,118 @@ function drawTooltip() {
     lines.push(`Y: ${marker.y.toFixed(2)} m`);
     lines.push(`Z: ${marker.z.toFixed(2)} m`);
     
-    // Support for displaying lists/groups (for future expansion)
-    // This structure allows adding groups of items later
-    // Example: if we want to show proto data, we can add:
-    // lines.push('');
-    // lines.push('Proto Attributes:');
-    // const protoAttrs = formatTooltipValue(marker.proto_attributes);
-    // if (protoAttrs) {
-    //     const attrLines = protoAttrs.split('\n');
-    //     lines.push(...attrLines);
-    // }
+    // Display usage if available
+    // Usage can be a string, array, or in proto_children
+    const usageNames = [];
+    
+    // Check direct usage property (from mapgrouppos.xml)
+    if (marker.usage) {
+        if (Array.isArray(marker.usage)) {
+            marker.usage.forEach(u => {
+                if (typeof u === 'object' && u.name) {
+                    usageNames.push(u.name);
+                } else if (typeof u === 'string' && u.trim()) {
+                    usageNames.push(u.trim());
+                }
+            });
+        } else if (typeof marker.usage === 'object' && marker.usage.name) {
+            usageNames.push(marker.usage.name);
+        } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
+            usageNames.push(marker.usage.trim());
+        }
+    }
+    
+    // Check proto_children for usage (from mapgroupproto.xml)
+    if (marker.proto_children && typeof marker.proto_children === 'object') {
+        if (marker.proto_children.usage) {
+            const usage = marker.proto_children.usage;
+            if (Array.isArray(usage)) {
+                usage.forEach(u => {
+                    if (typeof u === 'object' && u.name) {
+                        usageNames.push(u.name);
+                    } else if (typeof u === 'string' && u.trim()) {
+                        usageNames.push(u.trim());
+                    }
+                });
+            } else if (typeof usage === 'object' && usage.name) {
+                usageNames.push(usage.name);
+            } else if (typeof usage === 'string' && usage.trim()) {
+                usageNames.push(usage.trim());
+            }
+        }
+    }
+    
+    // Remove duplicates and display usage names if found
+    const uniqueUsageNames = [...new Set(usageNames)];
+    if (uniqueUsageNames.length > 0) {
+        lines.push('');
+        lines.push('Usage:');
+        uniqueUsageNames.forEach(name => {
+            lines.push(`  • ${name}`);
+        });
+    }
+    
+    // Display container elements by name
+    const containerNames = [];
+    
+    // Check proto_children for container elements
+    if (marker.proto_children && typeof marker.proto_children === 'object') {
+        // Look for container or containers in proto_children
+        if (marker.proto_children.container) {
+            const container = marker.proto_children.container;
+            if (Array.isArray(container)) {
+                container.forEach(c => {
+                    if (typeof c === 'object' && c.name) {
+                        containerNames.push(c.name);
+                    } else if (typeof c === 'string' && c) {
+                        containerNames.push(c);
+                    }
+                });
+            } else if (typeof container === 'object' && container.name) {
+                containerNames.push(container.name);
+            } else if (typeof container === 'string' && container) {
+                containerNames.push(container);
+            }
+        }
+        if (marker.proto_children.containers) {
+            const containers = marker.proto_children.containers;
+            if (Array.isArray(containers)) {
+                containers.forEach(c => {
+                    if (typeof c === 'object' && c.name) {
+                        containerNames.push(c.name);
+                    } else if (typeof c === 'string' && c) {
+                        containerNames.push(c);
+                    }
+                });
+            }
+        }
+    }
+    
+    // Also check if container is a direct property
+    if (marker.container) {
+        if (Array.isArray(marker.container)) {
+            marker.container.forEach(c => {
+                if (typeof c === 'object' && c.name) {
+                    containerNames.push(c.name);
+                } else if (typeof c === 'string' && c) {
+                    containerNames.push(c);
+                }
+            });
+        } else if (typeof marker.container === 'object' && marker.container.name) {
+            containerNames.push(marker.container.name);
+        } else if (typeof marker.container === 'string' && marker.container) {
+            containerNames.push(marker.container);
+        }
+    }
+    
+    // Display container names if found
+    if (containerNames.length > 0) {
+        lines.push('');
+        lines.push('Containers:');
+        containerNames.forEach(name => {
+            lines.push(`  • ${name}`);
+        });
+    }
     
     if (lines.length === 0) return;
     
@@ -650,16 +806,30 @@ function drawTooltip() {
     const tooltipWidth = maxWidth + padding * 2;
     const tooltipHeight = totalHeight + padding * 2;
     
-    // Position tooltip (offset from mouse, but keep it on screen)
-    let tooltipXPos = tooltipX + 15;
-    let tooltipYPos = tooltipY - tooltipHeight - 15;
+    // Position tooltip relative to cursor center (tooltipX, tooltipY)
+    // This ensures tooltip aligns with where the user is pointing
+    const offsetX = 15;
+    const offsetY = 15;
     
-    // Keep tooltip on screen
+    // Position tooltip to the right and above the cursor by default
+    let tooltipXPos = tooltipX + offsetX;
+    let tooltipYPos = tooltipY - tooltipHeight - offsetY;
+    
+    // Keep tooltip on screen - adjust if it goes off the right edge
     if (tooltipXPos + tooltipWidth > canvasWidth) {
-        tooltipXPos = tooltipX - tooltipWidth - 15;
+        // Position to the left of the cursor instead
+        tooltipXPos = tooltipX - tooltipWidth - offsetX;
     }
+    
+    // Keep tooltip on screen - adjust if it goes off the top edge
     if (tooltipYPos < 0) {
-        tooltipYPos = tooltipY + 15;
+        // Position below the cursor instead
+        tooltipYPos = tooltipY + offsetY;
+    }
+    
+    // Also check bottom edge
+    if (tooltipYPos + tooltipHeight > canvasHeight) {
+        tooltipYPos = canvasHeight - tooltipHeight - padding;
     }
     
     // Draw tooltip background
@@ -714,21 +884,25 @@ function draw() {
     }
     needsRedraw = false;
     
-    // Clear background canvas if using WebGL
-    if (useWebGL && gl && backgroundCanvas) {
+    // Draw background image to background canvas
+    if (useWebGL && gl && backgroundCanvas && backgroundImage) {
+        // Clear and draw background on WebGL canvas
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvasWidth, canvasHeight);
         gl.clearColor(1.0, 1.0, 1.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
-        drawBackgroundImage(); // Draw background on WebGL canvas
+        drawBackgroundImageWebGL(); // Draw background on WebGL canvas
+    } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
+        // Clear and draw background on 2D canvas
+        backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        const oldCtx = ctx;
+        ctx = backgroundCtx; // Temporarily use background context
+        drawBackgroundImage();
+        ctx = oldCtx; // Restore main context
     }
     
     // Clear main canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    
-    // Draw background on 2D canvas if not using WebGL
-    if (!useWebGL) {
-        drawBackgroundImage();
-    }
     
     // Draw grid, markers, marquee on main canvas
     drawGrid();
@@ -740,13 +914,15 @@ function draw() {
 // Handle mouse down
 function handleMouseDown(e) {
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Account for CSS scaling - convert CSS coordinates to canvas pixel coordinates
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     
     if (e.button === 0) { // Left click
         // Check if clicking on a marker first
-        // Use screen-space threshold to match marker visual size (4px radius)
-        const screenThreshold = 5; // pixels in screen space
+        // Use consistent threshold for marker interaction
         let clickedMarker = false;
         
         markers.forEach((marker, index) => {
@@ -758,7 +934,7 @@ function handleMouseDown(e) {
             const dy = screenPos.y - y;
             const distance = Math.sqrt(dx * dx + dy * dy);
             
-            if (distance < screenThreshold) {
+            if (distance < MARKER_INTERACTION_THRESHOLD) {
                 clickedMarker = true;
             }
         });
@@ -847,8 +1023,11 @@ function handleWheel(e) {
     e.preventDefault();
     
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    // Account for CSS scaling - convert CSS coordinates to canvas pixel coordinates
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
     
     // Get world coordinates at mouse position before zoom
     const worldPoint = screenToWorld(mouseX, mouseY);
@@ -870,9 +1049,7 @@ function handleWheel(e) {
 
 // Select marker at point
 function selectAtPoint(screenX, screenY, altKey = false) {
-    // Use screen-space threshold to match marker visual size (4px radius)
-    const screenThreshold = 5; // pixels in screen space, slightly larger than marker radius (4px)
-    
+    // Use consistent threshold for marker interaction
     let found = false;
     markers.forEach((marker, index) => {
         if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
@@ -884,7 +1061,7 @@ function selectAtPoint(screenX, screenY, altKey = false) {
         const dy = screenPos.y - screenY;
         const distance = Math.sqrt(dx * dx + dy * dy);
         
-        if (distance < screenThreshold) {
+        if (distance < MARKER_INTERACTION_THRESHOLD) {
             if (altKey) {
                 // Alt key pressed - deselect mode
                 selectedMarkers.delete(index);
@@ -905,9 +1082,7 @@ function selectAtPoint(screenX, screenY, altKey = false) {
 
 // Update hovered marker
 function updateHoveredMarker(screenX, screenY) {
-    // Use screen-space threshold to match marker visual size (4px radius)
-    const screenThreshold = 5; // pixels in screen space, slightly larger than marker radius (4px)
-    
+    // Use consistent threshold for marker interaction
     let newHoveredIndex = -1;
     let minDistance = Infinity;
     
@@ -921,7 +1096,7 @@ function updateHoveredMarker(screenX, screenY) {
         const dy = screenPos.y - screenY;
         const distance = Math.sqrt(dx * dx + dy * dy);
         
-        if (distance < screenThreshold && distance < minDistance) {
+        if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
             minDistance = distance;
             newHoveredIndex = index;
         }
@@ -1116,6 +1291,11 @@ async function loadBackgroundImageFromServer(imageId) {
             imageHeight = img.height;
             document.getElementById('imageWidth').value = imageWidth;
             document.getElementById('imageHeight').value = imageHeight;
+            
+            // Upload to WebGL texture if using WebGL
+            if (useWebGL && gl) {
+                uploadBackgroundToWebGL();
+            }
             
             // Save dimensions to localStorage
             localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());

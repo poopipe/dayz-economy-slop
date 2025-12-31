@@ -75,18 +75,22 @@ def load_proto_groups(proto_file_path):
                 # Extract all attributes for searching
                 attributes = dict(group.attrib)
                 
-                # Extract all child element text content for searching
+                # Extract all child element data for searching
                 child_data = {}
                 for child in group:
                     tag = child.tag
+                    # For container elements, prefer name attribute, fallback to text
+                    name_attr = child.get('name', '')
                     text = child.text.strip() if child.text else ''
+                    value = name_attr if name_attr else text
+                    
                     # Store as list if multiple children with same tag
                     if tag in child_data:
                         if not isinstance(child_data[tag], list):
                             child_data[tag] = [child_data[tag]]
-                        child_data[tag].append(text)
+                        child_data[tag].append(value)
                     else:
-                        child_data[tag] = text
+                        child_data[tag] = value
                 
                 # Create searchable data structure
                 proto_groups[name] = {
