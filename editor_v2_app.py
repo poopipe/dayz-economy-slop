@@ -351,7 +351,7 @@ def init_database_for_file(db_file_path, mission_dir=None):
 
 def extract_element_data(root, element_type='type'):
     """
-    Extract data from XML elements, matching the logic from editor_app.py.
+    Extract data from XML elements.
     """
     results = []
     

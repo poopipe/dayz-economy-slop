@@ -72,7 +72,6 @@ def create_backup(db_file):
 def save_element_fields_to_normalized(cursor, element_key, data_dict):
     """
     Save element fields to normalized type_element_fields table.
-    This uses the exact same logic as editor_app.py to ensure consistency.
     """
     # Delete existing fields for this element
     cursor.execute('DELETE FROM type_element_fields WHERE element_key = ?', (element_key,))
@@ -319,4 +318,5 @@ Examples:
     
     success = populate_type_element_fields(args.path, force=args.force)
     sys.exit(0 if success else 1)
+
 
