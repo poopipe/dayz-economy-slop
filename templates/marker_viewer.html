@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marker Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/marker_viewer.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Marker Viewer</h1>
+            <p class="status" id="status">Ready</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="missionDir">Mission Directory:</label>
+                <input type="text" id="missionDir" placeholder="Enter mission directory path..." 
+                       class="mission-dir-input" 
+                       value="E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim">
+                <button id="loadDataBtn" class="btn btn-primary">Load Markers</button>
+            </div>
+            
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="showGrid" checked> Show Grid
+                </label>
+                <label>
+                    <input type="checkbox" id="showMarkers" checked> Show Markers
+                </label>
+            </div>
+            
+            <div class="control-group">
+                <label for="backgroundImage">Background Image:</label>
+                <input type="file" id="backgroundImage" accept="image/*" style="display: none;">
+                <button id="loadImageBtn" class="btn">Load Image</button>
+                <button id="clearImageBtn" class="btn">Clear Image</button>
+            </div>
+            
+            <div class="control-group" id="imageDimensionsGroup" style="display: none;">
+                <label for="imageWidth">Image Width (metres):</label>
+                <input type="number" id="imageWidth" value="1000" min="1" class="dimension-input">
+                <label for="imageHeight">Height (metres):</label>
+                <input type="number" id="imageHeight" value="1000" min="1" class="dimension-input">
+                <button id="applyDimensionsBtn" class="btn">Apply Dimensions</button>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="markerCanvas"></canvas>
+        </div>
+        
+        <div class="info-panel" id="infoPanel">
+            <h3>Information</h3>
+            <div id="infoContent">
+                <p>Load markers to begin</p>
+                <p id="selectedCount">Selected: 0</p>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/marker_viewer.js') }}"></script>
+</body>
+</html>
+
