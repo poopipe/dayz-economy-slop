@@ -1347,9 +1347,41 @@ async function saveUsageflags() {
             }
         });
         
-        // Update cell displays immediately
-        updateCellDisplays(elementKeys, '_usageflags');
-        updateCellDisplays(elementKeys, '_usageflag_names');
+        // Update cell displays immediately - update all usageflags-related cells
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (!record) return;
+            
+            // Find all cells with matching element key and usageflags field name
+            const allCells = document.querySelectorAll(`td[data-element-key][data-field-name="usageflags"]`);
+            allCells.forEach(cell => {
+                const cellElementKey = cell.getAttribute('data-element-key');
+                if (cellElementKey === key) {
+                    // Get the column key from the table structure to determine which value to show
+                    const row = cell.parentElement;
+                    const cellIndex = Array.from(row.children).indexOf(cell);
+                    const headerRow = document.querySelector('thead tr');
+                    if (headerRow && headerRow.children[cellIndex]) {
+                        const headerCell = headerRow.children[cellIndex];
+                        const headerText = headerCell.textContent.trim();
+                        
+                        // Determine which value to show - prefer _names for display
+                        let displayValue;
+                        if (headerText === 'Usage Flags' || record._usageflag_names !== undefined) {
+                            displayValue = formatDisplayValue(record._usageflag_names || record._usageflags, '_usageflag_names');
+                        } else {
+                            displayValue = formatDisplayValue(record._usageflags, '_usageflags');
+                        }
+                        
+                        const input = cell.querySelector('input');
+                        if (input) {
+                            cell.removeChild(input);
+                        }
+                        cell.textContent = displayValue;
+                    }
+                }
+            });
+        });
         
         updateStatus(`Usageflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1625,9 +1657,41 @@ async function saveCategories() {
             }
         });
         
-        // Update cell displays immediately
-        updateCellDisplays(elementKeys, '_categories');
-        updateCellDisplays(elementKeys, '_category_names');
+        // Update cell displays immediately - update all categories-related cells
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (!record) return;
+            
+            // Find all cells with matching element key and categories field name
+            const allCells = document.querySelectorAll(`td[data-element-key][data-field-name="categories"]`);
+            allCells.forEach(cell => {
+                const cellElementKey = cell.getAttribute('data-element-key');
+                if (cellElementKey === key) {
+                    // Get the column key from the table structure to determine which value to show
+                    const row = cell.parentElement;
+                    const cellIndex = Array.from(row.children).indexOf(cell);
+                    const headerRow = document.querySelector('thead tr');
+                    if (headerRow && headerRow.children[cellIndex]) {
+                        const headerCell = headerRow.children[cellIndex];
+                        const headerText = headerCell.textContent.trim();
+                        
+                        // Determine which value to show - prefer _names for display
+                        let displayValue;
+                        if (headerText === 'Categories' || record._category_names !== undefined) {
+                            displayValue = formatDisplayValue(record._category_names || record._categories, '_category_names');
+                        } else {
+                            displayValue = formatDisplayValue(record._categories, '_categories');
+                        }
+                        
+                        const input = cell.querySelector('input');
+                        if (input) {
+                            cell.removeChild(input);
+                        }
+                        cell.textContent = displayValue;
+                    }
+                }
+            });
+        });
         
         updateStatus(`Categories updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -2511,8 +2575,26 @@ function updateCellDisplays(elementKeys, fieldName) {
         const record = tableData.find(r => r._element_key === key);
         if (!record) return;
         
-        const value = record[fieldName];
-        const displayValue = formatDisplayValue(value, fieldName);
+        // Map table field names to record field names
+        let recordFieldName = fieldName;
+        if (fieldName === 'usageflags') {
+            // For usageflags, prefer _usageflag_names (string) for display, but also check _usageflags (array)
+            recordFieldName = record._usageflag_names !== undefined ? '_usageflag_names' : '_usageflags';
+        } else if (fieldName === 'categories') {
+            // For categories, prefer _category_names (string) for display, but also check _categories (array)
+            recordFieldName = record._category_names !== undefined ? '_category_names' : '_categories';
+        } else if (fieldName === 'valueflags') {
+            recordFieldName = record._valueflag_names !== undefined ? '_valueflag_names' : '_valueflags';
+        } else if (fieldName === 'flags') {
+            recordFieldName = record._flag_names !== undefined ? '_flag_names' : '_flags';
+        } else if (fieldName === 'itemclass') {
+            recordFieldName = record._itemclass_name !== undefined ? '_itemclass_name' : '_itemclass_id';
+        } else if (fieldName === 'itemtags') {
+            recordFieldName = record._itemtag_names !== undefined ? '_itemtag_names' : '_itemtags';
+        }
+        
+        const value = record[recordFieldName];
+        const displayValue = formatDisplayValue(value, recordFieldName);
         
         // Find all cells with matching element key and field name
         const allCells = document.querySelectorAll(`td[data-element-key][data-field-name]`);

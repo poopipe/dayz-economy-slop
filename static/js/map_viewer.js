@@ -6,6 +6,7 @@ let markers = [];
 let selectedMarkers = new Set();
 let visibleMarkers = new Set(); // For filtering
 let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf'|'isNotOneOf', values: ['name1', 'name2'] }
+let effectAreas = []; // Effect areas from cfgeffectareas.json
 let backgroundImage = null;
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
@@ -599,6 +600,47 @@ function drawBackgroundImage() {
     ctx.restore();
 }
 
+// Draw effect area circles
+function drawEffectAreas() {
+    if (effectAreas.length === 0) {
+        return;
+    }
+    
+    effectAreas.forEach(area => {
+        // Convert world coordinates to screen coordinates
+        // Note: z coordinate needs to be reversed since origin is in lower left
+        const screenPos = worldToScreen(area.x, area.z);
+        
+        // Convert radius from world units (metres) to screen pixels
+        const screenRadius = area.radius * viewScale;
+        
+        // Skip if position is invalid or radius is too small
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y) || !isFinite(screenRadius) || screenRadius < 1) {
+            return;
+        }
+        
+        // Increase visibility when zoomed out - adjust opacity
+        // When zoomed out (viewScale < 1), make circles more visible
+        const baseAlpha = 0.3;
+        const zoomedOutAlpha = Math.min(0.6, baseAlpha + (1.0 - viewScale) * 0.3);
+        const alpha = viewScale < 1.0 ? zoomedOutAlpha : baseAlpha;
+        
+        // Draw circle with orange color and transparency
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#ff8800'; // Orange
+        ctx.strokeStyle = '#ff6600'; // Slightly darker orange for border
+        ctx.lineWidth = 2;
+        
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, screenRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.restore();
+    });
+}
+
 // Draw markers
 function drawMarkers() {
     if (!showMarkers) return;
@@ -913,9 +955,10 @@ function draw() {
     // Clear main canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw grid, markers, marquee on main canvas
+    // Draw grid, markers, effect areas, marquee on main canvas
     drawGrid();
     drawMarkers();
+    drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
     drawMarquee();
     drawTooltip();
 }
@@ -1192,6 +1235,43 @@ function updateStatus(message, isError = false) {
     statusEl.className = isError ? 'status error' : 'status';
 }
 
+// Load effect areas from API
+async function loadEffectAreas() {
+    if (!missionDir) {
+        console.log('No mission directory set, skipping effect areas load');
+        return;
+    }
+    
+    try {
+        console.log(`Loading effect areas from: ${missionDir}`);
+        const response = await fetch(`/api/effect-areas?mission_dir=${encodeURIComponent(missionDir)}`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('Effect areas API response:', data);
+        
+        if (data.success) {
+            effectAreas = data.areas || [];
+            console.log(`Loaded ${effectAreas.length} effect areas:`, effectAreas);
+            if (effectAreas.length > 0) {
+                console.log('First effect area:', effectAreas[0]);
+            } else if (data.message) {
+                console.warn('No areas loaded:', data.message);
+            }
+            draw(); // Redraw to show effect areas
+        } else {
+            console.error('Error loading effect areas:', data.error || data.message);
+            effectAreas = [];
+        }
+    } catch (error) {
+        console.error('Error loading effect areas:', error);
+        effectAreas = [];
+    }
+}
+
 // Load groups from API
 async function loadGroups() {
     const dir = document.getElementById('missionDir').value.trim();
@@ -1219,6 +1299,9 @@ async function loadGroups() {
         
         markers = data.groups || [];
         selectedMarkers.clear();
+        
+        // Load effect areas after loading markers
+        await loadEffectAreas();
         
         // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
@@ -1553,33 +1636,64 @@ function applyFilters() {
         // No filters - show all markers
         markers.forEach((_, index) => visibleMarkers.add(index));
     } else {
-        // Apply filters
+        // Apply filters - use OR logic: marker matches if it matches ANY filter
         markers.forEach((marker, index) => {
-            let matches = true;
+            let matches = false; // Start with false, use OR logic
             
-            // All filters must match (AND logic)
+            // Marker matches if it matches ANY filter (OR logic)
             for (const filter of activeFilters) {
                 let hasMatch = false;
                 
                 if (filter.type === 'usage') {
                     const markerUsageNames = getMarkerUsageNames(marker);
-                    hasMatch = filter.values.some(usageName => 
-                        markerUsageNames.includes(usageName)
-                    );
+                    
+                    // Check if marker has ANY of the filter values (case-insensitive)
+                    if (!filter.values || filter.values.length === 0) {
+                        // Empty filter values - should not match anything
+                        hasMatch = false;
+                    } else {
+                        // Normalize filter values and marker usage names for comparison
+                        const normalizedFilterValues = filter.values
+                            .filter(v => v) // Remove null/undefined/empty
+                            .map(v => String(v).toLowerCase().trim())
+                            .filter(v => v.length > 0); // Remove empty strings after trim
+                        
+                        const normalizedMarkerUsages = markerUsageNames
+                            .filter(u => u) // Remove null/undefined/empty
+                            .map(u => String(u).toLowerCase().trim())
+                            .filter(u => u.length > 0); // Remove empty strings after trim
+                        
+                        // Check if any filter value matches any marker usage
+                        // This means: if marker has "military" OR "lootbox" (or both), it matches
+                        hasMatch = normalizedFilterValues.length > 0 && normalizedMarkerUsages.length > 0 &&
+                            normalizedFilterValues.some(filterUsage => 
+                                normalizedMarkerUsages.includes(filterUsage)
+                            );
+                    }
                 } else if (filter.type === 'groupName') {
                     const markerName = marker.name ? marker.name.trim() : '';
-                    hasMatch = filter.values.some(groupName => 
-                        markerName === groupName
-                    );
+                    if (filter.values && filter.values.length > 0) {
+                        hasMatch = filter.values.some(groupName => 
+                            groupName && markerName === String(groupName).trim()
+                        );
+                    } else {
+                        hasMatch = false;
+                    }
                 }
                 
+                // Apply filter criteria
+                let filterMatches = false;
                 if (filter.criteria === 'isOneOf') {
-                    matches = matches && hasMatch;
+                    filterMatches = hasMatch;
                 } else if (filter.criteria === 'isNotOneOf') {
-                    matches = matches && !hasMatch;
+                    filterMatches = !hasMatch;
                 }
                 
-                if (!matches) break; // Short-circuit if one filter fails
+                // OR logic: marker matches if it matches ANY filter
+                matches = matches || filterMatches;
+                
+                // Short-circuit if we found a match (for OR logic, we can stop early)
+                if (matches) break;
             }
             
             if (matches) {

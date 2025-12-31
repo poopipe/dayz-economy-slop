@@ -281,6 +281,8 @@ def get_groups():
         }), 500
 
 
+
+
 @app.route('/api/upload-background-image', methods=['POST'])
 def upload_background_image():
     """Upload and save background image to server."""
@@ -390,6 +392,140 @@ def delete_background_image(image_id):
         return jsonify({
             'success': True,
             'message': 'Image deleted successfully'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+def load_effect_areas(effect_area_file_path):
+    """
+    Load effect areas from cfgeffectarea.json.
+    Returns list of area dictionaries with position and radius data.
+    """
+    if not effect_area_file_path or not Path(effect_area_file_path).exists():
+        print(f"Effect area JSON file does not exist: {effect_area_file_path}")
+        return []
+    
+    try:
+        with open(effect_area_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        areas = []
+        
+        # Look for "Areas" list in the JSON
+        areas_list = data.get('Areas') or data.get('areas')
+        
+        if areas_list and isinstance(areas_list, list):
+            print(f"Found Areas list with {len(areas_list)} entries")
+            for idx, area_data in enumerate(areas_list):
+                if not isinstance(area_data, dict):
+                    print(f"Skipping area at index {idx}: not a dict")
+                    continue
+                
+                # Get area name
+                area_name = area_data.get('AreaName') or area_data.get('areaName') or area_data.get('Name') or area_data.get('name') or f"Area_{idx}"
+                
+                # Get Data object which contains Pos and Radius
+                data_obj = area_data.get('Data') or area_data.get('data')
+                if not data_obj or not isinstance(data_obj, dict):
+                    print(f"Area '{area_name}' (index {idx}): No Data object found. Keys: {list(area_data.keys())}")
+                    continue
+                
+                # Get position from Data.Pos - expecting [x, y, z] array
+                pos = data_obj.get('Pos') or data_obj.get('pos')
+                
+                if pos is None:
+                    print(f"Area '{area_name}': No Pos found in Data. Data keys: {list(data_obj.keys())}")
+                    continue
+                
+                # Parse position - handle array [x, y, z]
+                if isinstance(pos, list):
+                    if len(pos) >= 3:
+                        x = float(pos[0]) if pos[0] is not None else 0.0
+                        y = float(pos[1]) if pos[1] is not None else 0.0
+                        z = float(pos[2]) if pos[2] is not None else 0.0
+                    else:
+                        print(f"Area '{area_name}': Pos array too short: {pos}")
+                        continue
+                elif isinstance(pos, dict):
+                    x = float(pos.get('x', 0)) if pos.get('x') is not None else 0.0
+                    y = float(pos.get('y', 0)) if pos.get('y') is not None else 0.0
+                    z = float(pos.get('z', 0)) if pos.get('z') is not None else 0.0
+                else:
+                    print(f"Area '{area_name}': invalid Pos format (type: {type(pos)}): {pos}")
+                    continue
+                
+                # Get radius from Data.Radius
+                radius = data_obj.get('Radius') or data_obj.get('radius')
+                if radius is None:
+                    print(f"Area '{area_name}': No Radius found in Data. Data keys: {list(data_obj.keys())}")
+                    continue
+                
+                try:
+                    radius = float(radius)
+                except (ValueError, TypeError) as e:
+                    print(f"Area '{area_name}': invalid Radius '{radius}' (type: {type(radius)}): {e}")
+                    continue
+                
+                area_info = {
+                    'name': area_name,
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'radius': radius
+                }
+                print(f"Added effect area: {area_info}")
+                areas.append(area_info)
+        else:
+            print(f"Areas not found or not a list. Type: {type(areas_list)}")
+        
+        print(f"Successfully loaded {len(areas)} effect areas")
+        return areas
+    except Exception as e:
+        import traceback
+        print(f"Error loading effect areas: {e}")
+        traceback.print_exc()
+        return []
+
+
+@app.route('/api/effect-areas')
+def get_effect_areas():
+    """Get effect area data from cfgeffectarea.json."""
+    try:
+        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        # Look for cfgeffectarea.json
+        effect_area_file = mission_path / 'cfgeffectarea.json'
+        if not effect_area_file.exists():
+            return jsonify({
+                'success': True,
+                'areas': [],
+                'count': 0,
+                'message': f'cfgeffectarea.json not found at: {effect_area_file}'
+            })
+        
+        print(f"Loading effect areas from: {effect_area_file}")
+        areas = load_effect_areas(str(effect_area_file))
+        
+        return jsonify({
+            'success': True,
+            'areas': areas,
+            'count': len(areas)
         })
     except Exception as e:
         import traceback
