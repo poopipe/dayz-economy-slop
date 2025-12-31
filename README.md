@@ -110,6 +110,25 @@ python run_map_viewer.py
 - Marker selection and XML export
 - Grid overlay with 100m and 1km lines
 
+## Distribution
+
+To distribute these applications to other users:
+
+1. **Package the application:**
+   - Include all source files (Python, HTML, CSS, JS, templates)
+   - Include `requirements.txt`, `README.md`, and `SETUP_INSTRUCTIONS.md`
+   - Include `setup.bat` and `start_all_apps.bat`
+   - **Exclude**: `venv/`, `__pycache__/`, `uploads/` (user-generated content)
+   - Create a ZIP archive
+
+2. **Recipient setup:**
+   - Extract the ZIP file
+   - Run `setup.bat` (or follow manual setup in `SETUP_INSTRUCTIONS.md`)
+   - Run `start_all_apps.bat` to start all applications
+   - Open browser to `http://localhost:5000`
+
+See `DISTRIBUTION.md` for detailed distribution instructions and `SETUP_INSTRUCTIONS.md` for end-user setup guide.
+
 ## Development
 
 The applications use:

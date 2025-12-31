@@ -4,12 +4,30 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
+
+# Virtual Environment
 venv/
+env/
 ENV/
-build/
-dist/
-*.egg-info/
+.venv
+
+# Flask
+instance/
+.webassets-cache
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+type-editor-db-v2/
+
+# User uploads (optional - can be included if needed)
+uploads/background_images/*.png
+uploads/background_images/*.jpg
+uploads/background_images/*.jpeg
+uploads/background_images/*.gif
+uploads/background_images/*.bmp
+uploads/background_images/*.webp
 
 # IDE
 .vscode/
@@ -18,25 +36,13 @@ dist/
 *.swo
 *~
 
-# Flask
-instance/
-.webassets-cache
-
-# Environment
-.env
-.venv
-
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Logs
-*.log
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Uploaded files
-uploads/
+# Distribution
+*.zip
+*.tar.gz
+dist/
+build/
