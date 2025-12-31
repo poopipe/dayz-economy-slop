@@ -442,8 +442,6 @@ function fitToView() {
 function drawGrid() {
     if (!showGrid) return;
     
-    // Use a slightly transparent color so background image shows through
-    ctx.strokeStyle = 'rgba(204, 204, 204, 0.6)';
     ctx.lineWidth = 1;
     
     // Calculate grid bounds in world coordinates from all four corners
@@ -467,6 +465,11 @@ function drawGrid() {
     // Draw vertical lines (constant x, varying z)
     // These appear as vertical lines on screen - draw from top to bottom of visible area
     for (let x = startX; x <= endX; x += 100) {
+        // Check if this is a 1km line (divisible by 1000)
+        const isKilometerLine = x % 1000 === 0;
+        // Use full opacity for 1km lines, half opacity for regular 100m lines
+        ctx.strokeStyle = isKilometerLine ? 'rgba(204, 204, 204, 0.6)' : 'rgba(204, 204, 204, 0.3)';
+        
         // Draw line from top of visible area to bottom
         const topPoint = worldToScreen(x, maxZ);
         const bottomPoint = worldToScreen(x, minZ);
@@ -484,6 +487,11 @@ function drawGrid() {
     // Draw horizontal lines (constant z, varying x)
     // These appear as horizontal lines on screen - draw from left to right of visible area
     for (let z = startZ; z <= endZ; z += 100) {
+        // Check if this is a 1km line (divisible by 1000)
+        const isKilometerLine = z % 1000 === 0;
+        // Use full opacity for 1km lines, half opacity for regular 100m lines
+        ctx.strokeStyle = isKilometerLine ? 'rgba(204, 204, 204, 0.6)' : 'rgba(204, 204, 204, 0.3)';
+        
         // Draw line from left to right of visible area
         const leftPoint = worldToScreen(minX, z);
         const rightPoint = worldToScreen(maxX, z);
@@ -1286,9 +1294,24 @@ async function loadBackgroundImageFromServer(imageId) {
         
         img.onload = () => {
             backgroundImage = img;
-            // Set default dimensions based on image size (1 pixel per metre)
-            imageWidth = img.width;
-            imageHeight = img.height;
+            
+            // Check for saved dimensions first, otherwise use image size as default (1 pixel per metre)
+            const savedWidth = localStorage.getItem('marker_viewer_imageWidth');
+            const savedHeight = localStorage.getItem('marker_viewer_imageHeight');
+            
+            if (savedWidth && savedHeight) {
+                // Restore saved dimensions
+                imageWidth = parseFloat(savedWidth);
+                imageHeight = parseFloat(savedHeight);
+            } else {
+                // Use image size as default
+                imageWidth = img.width;
+                imageHeight = img.height;
+                // Save default dimensions to localStorage
+                localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
+                localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
+            }
+            
             document.getElementById('imageWidth').value = imageWidth;
             document.getElementById('imageHeight').value = imageHeight;
             
@@ -1296,10 +1319,6 @@ async function loadBackgroundImageFromServer(imageId) {
             if (useWebGL && gl) {
                 uploadBackgroundToWebGL();
             }
-            
-            // Save dimensions to localStorage
-            localStorage.setItem('marker_viewer_imageWidth', imageWidth.toString());
-            localStorage.setItem('marker_viewer_imageHeight', imageHeight.toString());
             
             document.getElementById('imageDimensionsGroup').style.display = 'flex';
             initBackgroundCache();
