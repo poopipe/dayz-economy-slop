@@ -268,11 +268,27 @@ header h1 {
     border: 1px solid #ddd;
     border-radius: 4px;
     padding: 8px 12px;
+    gap: 10px;
 }
 
 .filter-text {
     flex: 1;
     font-size: 0.9em;
+}
+
+.filter-invert-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.85em;
+    color: #666;
+    white-space: nowrap;
+}
+
+.filter-invert-checkbox input[type="checkbox"] {
+    cursor: pointer;
+    margin: 0;
 }
 
 .btn-remove-filter {

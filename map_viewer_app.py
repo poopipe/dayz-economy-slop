@@ -767,6 +767,335 @@ def get_event_spawns():
         }), 500
 
 
+def make_circle_from_points(points):
+    """
+    Create the smallest circle that passes through 2 or 3 points.
+    Returns (center_x, center_z, radius) or None if points are collinear/invalid.
+    """
+    if len(points) == 0:
+        return None
+    if len(points) == 1:
+        return (points[0][0], points[0][2], 0.0)
+    if len(points) == 2:
+        # Circle with two points: center is midpoint, radius is half the distance
+        p1, p2 = points[0], points[1]
+        center_x = (p1[0] + p2[0]) / 2.0
+        center_z = (p1[2] + p2[2]) / 2.0
+        dx = p1[0] - p2[0]
+        dz = p1[2] - p2[2]
+        radius = ((dx * dx + dz * dz) ** 0.5) / 2.0
+        return (center_x, center_z, radius)
+    
+    # Three points: solve for circle center
+    p1, p2, p3 = points[0], points[1], points[2]
+    x1, z1 = p1[0], p1[2]
+    x2, z2 = p2[0], p2[2]
+    x3, z3 = p3[0], p3[2]
+    
+    # Check if points are collinear
+    if abs((z2 - z1) * (x3 - x1) - (z3 - z1) * (x2 - x1)) < 1e-10:
+        # Collinear, use two-point circle
+        return make_circle_from_points([p1, p2])
+    
+    # Solve for circle center using perpendicular bisectors
+    # Midpoints
+    mx1, mz1 = (x1 + x2) / 2.0, (z1 + z2) / 2.0
+    mx2, mz2 = (x2 + x3) / 2.0, (z2 + z3) / 2.0
+    
+    # Slopes of perpendicular bisectors
+    if abs(z2 - z1) < 1e-10:
+        # First line is horizontal
+        center_x = mx1
+        if abs(z3 - z2) < 1e-10:
+            return make_circle_from_points([p1, p2])
+        center_z = mz2
+    elif abs(z3 - z2) < 1e-10:
+        # Second line is horizontal
+        center_x = mx2
+        center_z = mz1
+    else:
+        # General case
+        slope1 = -(x2 - x1) / (z2 - z1)
+        slope2 = -(x3 - x2) / (z3 - z2)
+        
+        if abs(slope1 - slope2) < 1e-10:
+            return make_circle_from_points([p1, p2])
+        
+        # Intersection of perpendicular bisectors
+        center_x = (mz2 - mz1 + slope1 * mx1 - slope2 * mx2) / (slope1 - slope2)
+        center_z = mz1 + slope1 * (center_x - mx1)
+    
+    # Calculate radius
+    dx = x1 - center_x
+    dz = z1 - center_z
+    radius = (dx * dx + dz * dz) ** 0.5
+    
+    return (center_x, center_z, radius)
+
+
+def is_point_in_circle(point, center_x, center_z, radius):
+    """Check if a point is inside or on the circle."""
+    dx = point[0] - center_x
+    dz = point[2] - center_z
+    distance = (dx * dx + dz * dz) ** 0.5
+    return distance <= radius + 1e-10  # Small epsilon for floating point
+
+
+def calculate_bounding_circle(zone_positions):
+    """
+    Calculate the smallest circle that encompasses all zone positions.
+    Uses Welzl's algorithm approach: find the minimal enclosing circle.
+    Returns (center_x, center_z, radius)
+    """
+    if not zone_positions:
+        return (0.0, 0.0, 0.0)
+    
+    if len(zone_positions) == 1:
+        # Single point - return a small circle around it
+        return (zone_positions[0][0], zone_positions[0][2], 10.0)
+    
+    # Simplified Welzl's algorithm: try all combinations of 2-3 points
+    # and find the smallest circle that contains all points
+    
+    best_circle = None
+    best_radius = float('inf')
+    
+    # Try all pairs of points
+    for i in range(len(zone_positions)):
+        for j in range(i + 1, len(zone_positions)):
+            circle = make_circle_from_points([zone_positions[i], zone_positions[j]])
+            if circle is None:
+                continue
+            
+            center_x, center_z, radius = circle
+            
+            # Check if all points are within this circle
+            all_inside = True
+            for pos in zone_positions:
+                if not is_point_in_circle(pos, center_x, center_z, radius):
+                    all_inside = False
+                    break
+            
+            if all_inside and radius < best_radius:
+                best_radius = radius
+                best_circle = circle
+    
+    # Try all triplets of points
+    for i in range(len(zone_positions)):
+        for j in range(i + 1, len(zone_positions)):
+            for k in range(j + 1, len(zone_positions)):
+                circle = make_circle_from_points([zone_positions[i], zone_positions[j], zone_positions[k]])
+                if circle is None:
+                    continue
+                
+                center_x, center_z, radius = circle
+                
+                # Check if all points are within this circle
+                all_inside = True
+                for pos in zone_positions:
+                    if not is_point_in_circle(pos, center_x, center_z, radius):
+                        all_inside = False
+                        break
+                
+                if all_inside and radius < best_radius:
+                    best_radius = radius
+                    best_circle = circle
+    
+    if best_circle is not None:
+        return best_circle
+    
+    # Fallback: if no circle found (shouldn't happen), use bounding box
+    min_x = min(pos[0] for pos in zone_positions)
+    max_x = max(pos[0] for pos in zone_positions)
+    min_z = min(pos[2] for pos in zone_positions)
+    max_z = max(pos[2] for pos in zone_positions)
+    
+    center_x = (min_x + max_x) / 2.0
+    center_z = (min_z + max_z) / 2.0
+    
+    max_radius = 0.0
+    for pos in zone_positions:
+        dx = pos[0] - center_x
+        dz = pos[2] - center_z
+        distance = (dx * dx + dz * dz) ** 0.5
+        if distance > max_radius:
+            max_radius = distance
+    
+    return (center_x, center_z, max_radius)
+
+
+def load_territories(mission_dir):
+    """
+    Load territory data from XML files in mpmissions/env directory.
+    Returns list of territory data with zones and bounding circles.
+    """
+    mission_path = Path(mission_dir)
+    env_dir = mission_path / 'env'
+    
+    if not env_dir.exists():
+        print(f"Environment directory does not exist: {env_dir}")
+        return []
+    
+    territories = []
+    territory_files = list(env_dir.glob('*.xml'))
+    
+    print(f"Found {len(territory_files)} XML files in {env_dir}")
+    if len(territory_files) == 0:
+        print(f"No XML files found in {env_dir}. Looking for files matching pattern: *.xml")
+    
+    # Color palette for different territory types (files)
+    colors = [
+        '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
+        '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
+        '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
+    ]
+    
+    for file_idx, territory_file in enumerate(territory_files):
+        territory_type = territory_file.stem  # Filename without extension
+        color = colors[file_idx % len(colors)]
+        
+        try:
+            tree = ET.parse(territory_file)
+            root = tree.getroot()
+            
+            # Find all territory elements (they are children of territory-type root)
+            territory_elements = root.findall('.//territory')
+            if len(territory_elements) == 0:
+                territory_elements = root.findall('territory')
+            
+            print(f"Found {len(territory_elements)} territories in {territory_file.name}")
+            
+            for territory_idx, territory in enumerate(territory_elements):
+                # Name territories as: filename_index (e.g., "infected_0", "infected_1")
+                territory_name = f"{territory_type}_{territory_idx}"
+                
+                # Find all zone elements within this territory
+                zone_elements = territory.findall('zone')
+                if len(zone_elements) == 0:
+                    zone_elements = territory.findall('.//zone')
+                
+                if len(zone_elements) == 0:
+                    print(f"Territory {territory_idx} has no zones, skipping")
+                    continue
+                
+                zone_positions = []
+                zones = []
+                
+                for zone_idx, zone in enumerate(zone_elements):
+                    # Zones have x, z attributes directly on the zone element
+                    x_attr = zone.get('x')
+                    z_attr = zone.get('z')
+                    
+                    if x_attr is None or z_attr is None:
+                        print(f"Zone {zone_idx} missing x or z attribute, skipping")
+                        continue
+                    
+                    try:
+                        x = float(x_attr)
+                        z = float(z_attr)
+                        y = 0.0
+                        
+                        # Skip if position is invalid (both zeros)
+                        if x == 0.0 and z == 0.0:
+                            print(f"Zone {zone_idx} has invalid position (0, 0), skipping")
+                            continue
+                        
+                        pos = (x, y, z)
+                        zone_positions.append(pos)
+                        
+                        # Store zone data
+                        zone_xml = ET.tostring(zone, encoding='unicode').strip()
+                        zone_name = zone.get('name', f'Zone_{zone_idx}')
+                        zones.append({
+                            'id': len(zones),
+                            'name': zone_name,
+                            'x': x,
+                            'y': y,
+                            'z': z,
+                            'xml': zone_xml
+                        })
+                    except (ValueError, TypeError) as e:
+                        print(f"Invalid position in zone {zone_idx}: x='{x_attr}', z='{z_attr}', error: {e}")
+                        continue
+                
+                if not zone_positions:
+                    print(f"Territory {territory_idx} has no valid zone positions, skipping")
+                    continue
+                
+                # Calculate bounding circle
+                center_x, center_z, radius = calculate_bounding_circle(zone_positions)
+                
+                # Store territory XML
+                territory_xml = ET.tostring(territory, encoding='unicode').strip()
+                
+                territory_data = {
+                    'id': len(territories),
+                    'name': territory_name,
+                    'territory_type': territory_type,
+                    'color': color,
+                    'center_x': center_x,
+                    'center_z': center_z,
+                    'radius': radius,
+                    'zones': zones,
+                    'xml': territory_xml
+                }
+                
+                territories.append(territory_data)
+        
+        except Exception as e:
+            import traceback
+            print(f"Error loading territory file {territory_file}: {e}")
+            traceback.print_exc()
+            continue
+    
+    print(f"Successfully loaded {len(territories)} territories from {len(territory_files)} files")
+    if len(territories) == 0 and len(territory_files) > 0:
+        print(f"Warning: Found {len(territory_files)} XML files but no territories were parsed. Check XML structure.")
+    return territories
+
+
+@app.route('/api/territories')
+def get_territories():
+    """Get territory data from XML files in mpmissions/env directory."""
+    try:
+        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        print(f"Loading territories from: {mission_path / 'env'}")
+        territories = load_territories(mission_dir)
+        
+        env_dir = mission_path / 'env'
+        diagnostic = {
+            'env_dir_exists': env_dir.exists(),
+            'env_dir_path': str(env_dir),
+            'xml_files_found': len(list(env_dir.glob('*.xml'))) if env_dir.exists() else 0,
+            'territories_loaded': len(territories)
+        }
+        
+        return jsonify({
+            'success': True,
+            'territories': territories,
+            'count': len(territories),
+            'diagnostic': diagnostic
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print(f"Map Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")

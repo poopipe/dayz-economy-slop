@@ -35,6 +35,9 @@
                             <input type="checkbox" id="showEventSpawns" checked> Show Event Spawns
                         </label>
                         <label>
+                            <input type="checkbox" id="showTerritories" checked> Show Territories
+                        </label>
+                        <label>
                             <input type="checkbox" id="showEffectAreas" checked> Show Effect Areas
                         </label>
                         <button id="clearSelectionBtn" class="btn">Clear Selection</button>
@@ -71,10 +74,9 @@
                                 <option value="groupName">Group Name</option>
                             </select>
                             
-                            <label for="filterCriteria">Criteria:</label>
-                            <select id="filterCriteria" class="filter-select">
+                            <label for="filterCriteria" style="display: none;">Criteria:</label>
+                            <select id="filterCriteria" class="filter-select" style="display: none;">
                                 <option value="isOneOf">Is One Of</option>
-                                <option value="isNotOneOf">Is Not One Of</option>
                             </select>
                             
                             <label for="filterUsageSelect" id="filterValueLabel">Usage:</label>
@@ -118,6 +120,41 @@
                     </div>
                     <div id="activeEventSpawnFiltersList" class="active-filters-list">
                         <!-- Active event spawn filters will be displayed here -->
+                    </div>
+                </div>
+                
+                <!-- Territory Filter Section -->
+                <div class="filter-section" id="territoryFilterSection" style="display: none;">
+                    <h3>Territory Filters</h3>
+                    <div class="filter-builder">
+                        <div class="filter-input-group">
+                            <label for="territoryFilterType">Filter Type:</label>
+                            <select id="territoryFilterType" class="filter-select">
+                                <option value="territoryType">Territory Type</option>
+                                <option value="territoryName">Territory Name</option>
+                            </select>
+                            
+                            <label for="territoryFilterCriteria" style="display: none;">Criteria:</label>
+                            <select id="territoryFilterCriteria" class="filter-select" style="display: none;">
+                                <option value="isOneOf">Is One Of</option>
+                            </select>
+                            
+                            <label for="territoryFilterTypeSelect" id="territoryFilterValueLabel">Territory Type:</label>
+                            <select id="territoryFilterTypeSelect" class="filter-select filter-value-select" multiple>
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            
+                            <input type="text" id="territoryFilterNameInput" class="filter-input" placeholder="Search territory names..." style="display: none;">
+                            <select id="territoryFilterNameSelect" class="filter-select filter-value-select" multiple style="display: none;">
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            
+                            <button id="addTerritoryFilterBtn" class="btn btn-small">Add Filter</button>
+                            <button id="clearAllTerritoryFiltersBtn" class="btn btn-small">Clear All</button>
+                        </div>
+                    </div>
+                    <div id="activeTerritoryFiltersList" class="active-filters-list">
+                        <!-- Active territory filters will be displayed here -->
                     </div>
                 </div>
                 

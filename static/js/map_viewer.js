@@ -5,7 +5,7 @@ let ctx;
 let markers = [];
 let selectedMarkers = new Set();
 let visibleMarkers = new Set(); // For filtering
-let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf'|'isNotOneOf', values: ['name1', 'name2'] }
+let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf', values: ['name1', 'name2'] }
 let effectAreas = []; // Effect areas from cfgeffectareas.json
 let eventSpawns = []; // Event spawns from cfgeventspawns.xml
 let visibleEventSpawns = new Set(); // For filtering event spawns
@@ -18,6 +18,10 @@ let showEventSpawns = true;
 let showEffectAreas = true;
 let showBackgroundImage = true;
 let activeEventSpawnFilters = []; // Separate filters for event spawns
+let territories = []; // Territories from env/*.xml files
+let visibleTerritories = new Set(); // For filtering territories
+let activeTerritoryFilters = []; // Separate filters for territories
+let showTerritories = true;
 let missionDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -272,7 +276,6 @@ function compileShader(type, source) {
 // Upload background image to WebGL texture
 function uploadBackgroundToWebGL() {
     if (!gl || !backgroundImage || !backgroundTexture) {
-        console.warn('Cannot upload to WebGL:', { gl: !!gl, backgroundImage: !!backgroundImage, backgroundTexture: !!backgroundTexture });
         return;
     }
     
@@ -678,17 +681,10 @@ function drawMarkers() {
 
 // Draw event spawn markers
 function drawEventSpawns() {
-    if (!showEventSpawns) {
-        console.log('Event spawns hidden (showEventSpawns = false)');
+    if (!showEventSpawns || eventSpawns.length === 0) {
         return;
     }
     
-    if (eventSpawns.length === 0) {
-        console.log('No event spawns to draw');
-        return;
-    }
-    
-    let drawnCount = 0;
     eventSpawns.forEach((spawn, index) => {
         // If filters are active (visibleEventSpawns has items), only show items in the set
         // If no filters (visibleEventSpawns is empty), show all items
@@ -714,12 +710,75 @@ function drawEventSpawns() {
         ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        drawnCount++;
     });
-    
-    if (drawnCount > 0) {
-        console.log(`Drew ${drawnCount} event spawn markers`);
+}
+
+// Draw territory circles and zone markers
+function drawTerritories() {
+    if (!showTerritories) {
+        return;
     }
+    
+    if (territories.length === 0) {
+        return;
+    }
+    
+    let drawnTerritories = 0;
+    let drawnZones = 0;
+    let zoneIndexOffset = markers.length + eventSpawns.length;
+    
+    territories.forEach((territory, territoryIndex) => {
+        // Check if territory is visible (filtered)
+        if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
+            return; // Skip hidden territories
+        }
+        
+        // Draw territory bounding circle (transparent)
+        const centerScreenPos = worldToScreen(territory.center_x, territory.center_z);
+        const screenRadius = territory.radius * viewScale;
+        
+        if (isFinite(centerScreenPos.x) && isFinite(centerScreenPos.y) && isFinite(screenRadius) && screenRadius > 1) {
+            ctx.save();
+            ctx.globalAlpha = 0.2; // Quite transparent
+            ctx.fillStyle = territory.color;
+            ctx.strokeStyle = territory.color;
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.arc(centerScreenPos.x, centerScreenPos.y, screenRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.restore();
+            drawnTerritories++;
+        }
+        
+        // Draw zone markers within territory
+        territory.zones.forEach((zone, zoneIndex) => {
+            const zoneScreenPos = worldToScreen(zone.x, zone.z);
+            
+            if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
+                return;
+            }
+            
+            // Calculate offset for hover detection (markers + event spawns + previous zones)
+            const zoneMarkerIndex = zoneIndexOffset + zoneIndex;
+            const isHovered = hoveredMarkerIndex === zoneMarkerIndex;
+            
+            // Draw zone marker using territory color
+            ctx.fillStyle = territory.color;
+            ctx.strokeStyle = isHovered ? '#ffffff' : territory.color;
+            ctx.lineWidth = isHovered ? 3 : 2;
+            
+            ctx.beginPath();
+            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            drawnZones++;
+        });
+        
+        zoneIndexOffset += territory.zones.length;
+    });
 }
 
 // Format a value for tooltip display (handles arrays/lists)
@@ -759,21 +818,64 @@ function drawTooltip() {
         return;
     }
     
-    // Check if hovering over event spawn (offset by markers.length)
-    let marker, isEventSpawn;
-    if (hoveredMarkerIndex >= markers.length) {
-        const eventSpawnIndex = hoveredMarkerIndex - markers.length;
-        if (eventSpawnIndex >= eventSpawns.length) {
-            return;
+    // Determine what type of marker we're hovering over
+    let marker, isEventSpawn, isZone;
+    const eventSpawnOffset = markers.length;
+    const zoneOffset = eventSpawnOffset + eventSpawns.length;
+    
+    if (hoveredMarkerIndex < eventSpawnOffset) {
+        // Regular marker
+        // Check if markers are enabled and marker is visible
+        if (!showMarkers) {
+            return; // Don't show tooltip if markers are hidden
         }
-        marker = eventSpawns[eventSpawnIndex];
-        isEventSpawn = true;
-    } else {
-        if (hoveredMarkerIndex >= markers.length) {
-            return;
+        if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) {
+            return; // Don't show tooltip for hidden markers
         }
         marker = markers[hoveredMarkerIndex];
         isEventSpawn = false;
+        isZone = false;
+    } else if (hoveredMarkerIndex < zoneOffset) {
+        // Event spawn
+        // Check if event spawns are enabled
+        if (!showEventSpawns) {
+            return; // Don't show tooltip if event spawns are hidden
+        }
+        const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
+        if (eventSpawnIndex >= eventSpawns.length) {
+            return;
+        }
+        // Check if event spawn is visible
+        if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(eventSpawnIndex)) {
+            return; // Don't show tooltip for hidden event spawns
+        }
+        marker = eventSpawns[eventSpawnIndex];
+        isEventSpawn = true;
+        isZone = false;
+    } else {
+        // Zone marker
+        // Check if territories are enabled
+        if (!showTerritories) {
+            return; // Don't show tooltip if territories are hidden
+        }
+        let zoneIndex = hoveredMarkerIndex - zoneOffset;
+        let found = false;
+        for (const territory of territories) {
+            if (visibleTerritories.size > 0 && !visibleTerritories.has(territories.indexOf(territory))) {
+                continue; // Skip hidden territories
+            }
+            if (zoneIndex < territory.zones.length) {
+                marker = territory.zones[zoneIndex];
+                found = true;
+                break;
+            }
+            zoneIndex -= territory.zones.length;
+        }
+        if (!found) {
+            return;
+        }
+        isEventSpawn = false;
+        isZone = true;
     }
     const padding = 8;
     const lineHeight = 18;
@@ -855,6 +957,19 @@ function drawTooltip() {
         marker.categories.forEach(cat => {
             lines.push(`  • ${cat}`);
         });
+    }
+    
+    // Display territory info for zones
+    if (isZone) {
+        // Find which territory this zone belongs to
+        for (const territory of territories) {
+            if (territory.zones.some(z => z === marker)) {
+                lines.push('');
+                lines.push(`Territory: ${territory.name}`);
+                lines.push(`Territory Type: ${territory.territory_type}`);
+                break;
+            }
+        }
     }
     
     // Display container elements by name
@@ -1047,10 +1162,11 @@ function draw() {
     // Clear main canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw grid, markers, event spawns, effect areas, marquee on main canvas
+    // Draw grid, markers, event spawns, territories, effect areas, marquee on main canvas
     drawGrid();
     drawMarkers();
     drawEventSpawns(); // Draw event spawn markers (after regular markers)
+    drawTerritories(); // Draw territory circles and zone markers
     drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
     drawMarquee();
     drawTooltip();
@@ -1231,22 +1347,24 @@ function updateHoveredMarker(screenX, screenY) {
     let newHoveredIndex = -1;
     let minDistance = Infinity;
     
-    // Check regular markers
-    markers.forEach((marker, index) => {
-        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
-            return; // Skip hidden markers
-        }
-        
-        const screenPos = worldToScreen(marker.x, marker.z);
-        const dx = screenPos.x - screenX;
-        const dy = screenPos.y - screenY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-            minDistance = distance;
-            newHoveredIndex = index;
-        }
-    });
+    // Check regular markers (only if showMarkers is true)
+    if (showMarkers) {
+        markers.forEach((marker, index) => {
+            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+                return; // Skip hidden markers
+            }
+            
+            const screenPos = worldToScreen(marker.x, marker.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                minDistance = distance;
+                newHoveredIndex = index;
+            }
+        });
+    }
     
     // Check event spawns (offset index by markers.length)
     if (showEventSpawns) {
@@ -1264,6 +1382,31 @@ function updateHoveredMarker(screenX, screenY) {
                 minDistance = distance;
                 newHoveredIndex = index + markers.length; // Offset by markers length
             }
+        });
+    }
+    
+    // Check zone markers (offset by markers.length + eventSpawns.length)
+    if (showTerritories) {
+        let zoneIndexOffset = markers.length + eventSpawns.length;
+        territories.forEach((territory, territoryIndex) => {
+            if (!visibleTerritories.has(territoryIndex) && visibleTerritories.size > 0) {
+                zoneIndexOffset += territory.zones.length; // Skip zones in hidden territories
+                return;
+            }
+            
+            territory.zones.forEach((zone, zoneIndex) => {
+                const screenPos = worldToScreen(zone.x, zone.z);
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                    minDistance = distance;
+                    newHoveredIndex = zoneIndexOffset + zoneIndex;
+                }
+            });
+            
+            zoneIndexOffset += territory.zones.length;
         });
     }
     
@@ -1297,36 +1440,23 @@ async function copySelectedXml() {
     const selectedIndices = Array.from(selectedMarkers); // Convert Set to Array for clarity
     
     // Verify we're only processing selected markers
-    console.log(`Copying XML for ${selectedIndices.length} selected marker(s):`, selectedIndices);
-    
     for (const index of selectedIndices) {
         // Validate index is within bounds
         if (index < 0 || index >= markers.length) {
-            console.warn(`Invalid marker index: ${index}`);
             continue;
         }
         
         const marker = markers[index];
-        if (!marker) {
-            console.warn(`Marker at index ${index} is undefined`);
+        if (!marker || !marker.xml) {
             continue;
         }
         
-        if (marker.xml) {
-            xmlLines.push(marker.xml);
-        } else {
-            console.warn(`Marker at index ${index} has no XML data`);
-        }
+        xmlLines.push(marker.xml);
     }
     
     if (xmlLines.length === 0) {
         updateStatus('Selected markers have no XML data', true);
         return;
-    }
-    
-    // Verify we only got XML for the selected markers
-    if (xmlLines.length !== selectedIndices.length) {
-        console.warn(`Warning: Expected ${selectedIndices.length} XML elements but got ${xmlLines.length}`);
     }
     
     // Join all XML elements with newlines
@@ -1351,12 +1481,10 @@ function updateStatus(message, isError = false) {
 // Load effect areas from API
 async function loadEffectAreas() {
     if (!missionDir) {
-        console.log('No mission directory set, skipping effect areas load');
         return;
     }
     
     try {
-        console.log(`Loading effect areas from: ${missionDir}`);
         const response = await fetch(`/api/effect-areas?mission_dir=${encodeURIComponent(missionDir)}`);
         
         if (!response.ok) {
@@ -1364,36 +1492,66 @@ async function loadEffectAreas() {
         }
         
         const data = await response.json();
-        console.log('Effect areas API response:', data);
         
         if (data.success) {
             effectAreas = data.areas || [];
-            console.log(`Loaded ${effectAreas.length} effect areas:`, effectAreas);
-            if (effectAreas.length > 0) {
-                console.log('First effect area:', effectAreas[0]);
-            } else if (data.message) {
-                console.warn('No areas loaded:', data.message);
-            }
             draw(); // Redraw to show effect areas
         } else {
-            console.error('Error loading effect areas:', data.error || data.message);
             effectAreas = [];
         }
     } catch (error) {
-        console.error('Error loading effect areas:', error);
         effectAreas = [];
+    }
+}
+
+// Load territories from API
+async function loadTerritories() {
+    if (!missionDir) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/territories?mission_dir=${encodeURIComponent(missionDir)}`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            territories = data.territories || [];
+            // Always show territory filter section (even if empty, so user knows it exists)
+            const territoryFilterSection = document.getElementById('territoryFilterSection');
+            if (territoryFilterSection) {
+                territoryFilterSection.style.display = 'block';
+                if (territories.length > 0) {
+                    populateFilterTerritoryTypeDropdown();
+                }
+            }
+            // Apply filters to territories
+            applyFilters();
+            draw(); // Redraw to show territories
+        } else {
+            territories = [];
+            // Still show the filter section even on error
+            const territoryFilterSection = document.getElementById('territoryFilterSection');
+            if (territoryFilterSection) {
+                territoryFilterSection.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        territories = [];
     }
 }
 
 // Load event spawns from API
 async function loadEventSpawns() {
     if (!missionDir) {
-        console.log('No mission directory set, skipping event spawns load');
         return;
     }
     
     try {
-        console.log(`Loading event spawns from: ${missionDir}`);
         const response = await fetch(`/api/event-spawns?mission_dir=${encodeURIComponent(missionDir)}`);
         
         if (!response.ok) {
@@ -1401,36 +1559,24 @@ async function loadEventSpawns() {
         }
         
         const data = await response.json();
-        console.log('Event spawns API response:', data);
         
         if (data.success) {
             eventSpawns = data.event_spawns || [];
-            console.log(`Loaded ${eventSpawns.length} event spawns:`, eventSpawns);
-            if (data.diagnostic) {
-                console.log('Event spawns diagnostic:', data.diagnostic);
-            }
             if (eventSpawns.length > 0) {
-                console.log('First event spawn:', eventSpawns[0]);
                 // Show event spawn filter section and populate dropdown
                 const eventSpawnFilterSection = document.getElementById('eventSpawnFilterSection');
                 if (eventSpawnFilterSection) {
                     eventSpawnFilterSection.style.display = 'block';
                     populateFilterEventSpawnTypeDropdown();
                 }
-            } else if (data.message) {
-                console.warn('No event spawns loaded:', data.message);
-            } else {
-                console.warn('No event spawns found. Check backend console for details.');
             }
             // Apply filters to event spawns
             applyFilters();
             draw(); // Redraw to show event spawns
         } else {
-            console.error('Error loading event spawns:', data.error || data.message);
             eventSpawns = [];
         }
     } catch (error) {
-        console.error('Error loading event spawns:', error);
         eventSpawns = [];
     }
 }
@@ -1463,9 +1609,10 @@ async function loadGroups() {
         markers = data.groups || [];
         selectedMarkers.clear();
         
-        // Load effect areas and event spawns after loading markers
+        // Load effect areas, event spawns, and territories after loading markers
         await loadEffectAreas();
         await loadEventSpawns();
+        await loadTerritories();
         
         // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
@@ -1485,7 +1632,6 @@ async function loadGroups() {
         } else {
             const warning = data.warning || '';
             updateStatus(`No markers found${warning ? ': ' + warning : ''}`, true);
-            console.warn('No markers loaded:', data);
         }
         
         updateSelectedCount();
@@ -1619,7 +1765,7 @@ async function clearBackgroundImage() {
                 method: 'DELETE'
             });
         } catch (error) {
-            console.warn('Error deleting image from server:', error);
+            // Silently fail - image may already be deleted
         }
     }
     
@@ -1788,7 +1934,6 @@ function getAllEventSpawnTypeNames() {
 function populateFilterEventSpawnTypeDropdown() {
     const select = document.getElementById('eventSpawnFilterTypeSelect');
     if (!select) {
-        console.warn('eventSpawnFilterTypeSelect element not found');
         return;
     }
     
@@ -1801,6 +1946,58 @@ function populateFilterEventSpawnTypeDropdown() {
         option.textContent = typeName;
         select.appendChild(option);
     });
+}
+
+// Get all unique territory type names (file names)
+function getAllTerritoryTypeNames() {
+    const typeNames = new Set();
+    territories.forEach(territory => {
+        if (territory.territory_type) {
+            typeNames.add(territory.territory_type);
+        }
+    });
+    return Array.from(typeNames).sort();
+}
+
+// Get all unique territory names
+function getAllTerritoryNames() {
+    const names = new Set();
+    territories.forEach(territory => {
+        if (territory.name) {
+            names.add(territory.name);
+        }
+    });
+    return Array.from(names).sort();
+}
+
+// Populate filter territory type dropdown
+function populateFilterTerritoryTypeDropdown() {
+    const typeSelect = document.getElementById('territoryFilterTypeSelect');
+    const nameSelect = document.getElementById('territoryFilterNameSelect');
+    
+    if (typeSelect) {
+        typeSelect.innerHTML = '';
+        const typeNames = getAllTerritoryTypeNames();
+        
+        typeNames.forEach(typeName => {
+            const option = document.createElement('option');
+            option.value = typeName;
+            option.textContent = typeName;
+            typeSelect.appendChild(option);
+        });
+    }
+    
+    if (nameSelect) {
+        nameSelect.innerHTML = '';
+        const names = getAllTerritoryNames();
+        
+        names.forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            nameSelect.appendChild(option);
+        });
+    }
 }
 
 // Filter group name dropdown based on search input
@@ -1822,125 +2019,103 @@ function filterGroupNameDropdown() {
     });
 }
 
+// Generic function to extract filterable values from an item based on filter type
+function getFilterableValues(item, filterType) {
+    if (filterType === 'usage') {
+        // For usage, return array of usage names
+        return getMarkerUsageNames(item);
+    } else if (filterType === 'groupName') {
+        // For groupName, return array with single name
+        const name = item.name ? item.name.trim() : '';
+        return name ? [name] : [];
+    } else if (filterType === 'eventSpawnType') {
+        // For eventSpawnType, return array with single name
+        const name = item.name ? item.name.trim() : '';
+        return name ? [name] : [];
+    } else if (filterType === 'territoryType') {
+        // For territoryType, return array with single type
+        const type = item.territory_type ? item.territory_type.trim() : '';
+        return type ? [type] : [];
+    } else if (filterType === 'territoryName') {
+        // For territoryName, return array with single name
+        const name = item.name ? item.name.trim() : '';
+        return name ? [name] : [];
+    }
+    return [];
+}
+
+// Generic function to check if an item matches a filter's values
+function itemMatchesFilterValues(item, filter) {
+    if (!filter.values || filter.values.length === 0) {
+        // Empty filter values - matches nothing
+        return false;
+    }
+    
+    // Get the values to check from the item
+    const itemValues = getFilterableValues(item, filter.type);
+    
+    // Normalize both filter values and item values for comparison
+    const normalizedFilterValues = filter.values
+        .filter(v => v)
+        .map(v => String(v).toLowerCase().trim())
+        .filter(v => v.length > 0);
+    
+    const normalizedItemValues = itemValues
+        .filter(v => v)
+        .map(v => String(v).toLowerCase().trim())
+        .filter(v => v.length > 0);
+    
+    // Check if any filter value matches any item value
+    return normalizedFilterValues.length > 0 && normalizedItemValues.length > 0 &&
+        normalizedFilterValues.some(filterValue => 
+            normalizedItemValues.includes(filterValue)
+        );
+}
+
+// Generic function to apply filters to a collection
+function applyFiltersToCollection(collection, filters, visibleSet) {
+    if (filters.length === 0) {
+        // No filters - show all items
+        collection.forEach((_, index) => visibleSet.add(index));
+        return;
+    }
+    
+    // Separate display and hide filters
+    const displayFilters = filters.filter(f => !f.inverted);
+    const hideFilters = filters.filter(f => f.inverted);
+    
+    collection.forEach((item, index) => {
+        let shouldDisplay = true;
+        
+        // If there are display filters, item must match at least one (OR logic)
+        if (displayFilters.length > 0) {
+            shouldDisplay = displayFilters.some(filter => itemMatchesFilterValues(item, filter));
+        }
+        
+        // If there are hide filters, item must not match any (hide if matches any)
+        if (shouldDisplay && hideFilters.length > 0) {
+            const matchesHideFilter = hideFilters.some(filter => itemMatchesFilterValues(item, filter));
+            if (matchesHideFilter) {
+                shouldDisplay = false;
+            }
+        }
+        
+        if (shouldDisplay) {
+            visibleSet.add(index);
+        }
+    });
+}
+
 // Apply filters to markers
 function applyFilters() {
     visibleMarkers.clear();
     visibleEventSpawns.clear();
+    visibleTerritories.clear();
     
-    // Apply filters to group markers
-    if (activeFilters.length === 0) {
-        // No filters - show all markers
-        markers.forEach((_, index) => visibleMarkers.add(index));
-    } else {
-        // Apply filters - use OR logic: marker matches if it matches ANY filter
-        markers.forEach((marker, index) => {
-            let matches = false; // Start with false, use OR logic
-            
-            // Marker matches if it matches ANY filter (OR logic)
-            for (const filter of activeFilters) {
-                let hasMatch = false;
-                
-                if (filter.type === 'usage') {
-                    const markerUsageNames = getMarkerUsageNames(marker);
-                    
-                    // Check if marker has ANY of the filter values (case-insensitive)
-                    if (!filter.values || filter.values.length === 0) {
-                        // Empty filter values - should not match anything
-                        hasMatch = false;
-                    } else {
-                        // Normalize filter values and marker usage names for comparison
-                        const normalizedFilterValues = filter.values
-                            .filter(v => v) // Remove null/undefined/empty
-                            .map(v => String(v).toLowerCase().trim())
-                            .filter(v => v.length > 0); // Remove empty strings after trim
-                        
-                        const normalizedMarkerUsages = markerUsageNames
-                            .filter(u => u) // Remove null/undefined/empty
-                            .map(u => String(u).toLowerCase().trim())
-                            .filter(u => u.length > 0); // Remove empty strings after trim
-                        
-                        // Check if any filter value matches any marker usage
-                        // This means: if marker has "military" OR "lootbox" (or both), it matches
-                        hasMatch = normalizedFilterValues.length > 0 && normalizedMarkerUsages.length > 0 &&
-                            normalizedFilterValues.some(filterUsage => 
-                                normalizedMarkerUsages.includes(filterUsage)
-                            );
-                    }
-                } else if (filter.type === 'groupName') {
-                    const markerName = marker.name ? marker.name.trim() : '';
-                    if (filter.values && filter.values.length > 0) {
-                        hasMatch = filter.values.some(groupName => 
-                            groupName && markerName === String(groupName).trim()
-                        );
-                    } else {
-                        hasMatch = false;
-                    }
-                }
-                
-                // Apply filter criteria
-                let filterMatches = false;
-                if (filter.criteria === 'isOneOf') {
-                    filterMatches = hasMatch;
-                } else if (filter.criteria === 'isNotOneOf') {
-                    filterMatches = !hasMatch;
-                }
-                
-                // OR logic: marker matches if it matches ANY filter
-                matches = matches || filterMatches;
-                
-                // Short-circuit if we found a match (for OR logic, we can stop early)
-                if (matches) break;
-            }
-            
-            if (matches) {
-                visibleMarkers.add(index);
-            }
-        });
-    }
-    
-    // Apply filters to event spawns (separate from group marker filters)
-    if (activeEventSpawnFilters.length === 0) {
-        // No filters - show all event spawns
-        eventSpawns.forEach((_, index) => visibleEventSpawns.add(index));
-    } else {
-        // Apply filters - use OR logic: event spawn matches if it matches ANY filter
-        eventSpawns.forEach((spawn, index) => {
-            let matches = false; // Start with false, use OR logic
-            
-            // Event spawn matches if it matches ANY filter
-            for (const filter of activeEventSpawnFilters) {
-                let hasMatch = false;
-                
-                if (filter.type === 'eventSpawnType') {
-                    // Filter by event spawn type name
-                    const spawnName = spawn.name ? spawn.name.trim() : '';
-                    if (filter.values && filter.values.length > 0) {
-                        hasMatch = filter.values.some(typeName => 
-                            typeName && spawnName === String(typeName).trim()
-                        );
-                    }
-                }
-                
-                // Apply filter criteria
-                let filterMatches = false;
-                if (filter.criteria === 'isOneOf') {
-                    filterMatches = hasMatch;
-                } else if (filter.criteria === 'isNotOneOf') {
-                    filterMatches = !hasMatch;
-                }
-                
-                // OR logic: event spawn matches if it matches ANY filter
-                matches = matches || filterMatches;
-                
-                // Short-circuit if we found a match
-                if (matches) break;
-            }
-            
-            if (matches) {
-                visibleEventSpawns.add(index);
-            }
-        });
-    }
+    // Apply filters using the generic function
+    applyFiltersToCollection(markers, activeFilters, visibleMarkers);
+    applyFiltersToCollection(eventSpawns, activeEventSpawnFilters, visibleEventSpawns);
+    applyFiltersToCollection(territories, activeTerritoryFilters, visibleTerritories);
     
     draw();
 }
@@ -1954,7 +2129,6 @@ function updateFilterTypeUI() {
     const valueLabel = document.getElementById('filterValueLabel');
     
     if (!usageSelect || !groupNameInput || !groupNameSelect || !valueLabel) {
-        console.warn('Filter UI elements not found');
         return;
     }
     
@@ -1974,12 +2148,6 @@ function updateFilterTypeUI() {
 // Add filter
 function addFilter() {
     const filterType = document.getElementById('filterType').value;
-    const criteria = document.getElementById('filterCriteria').value;
-    
-    if (!criteria) {
-        alert('Please select a criteria');
-        return;
-    }
     
     let values = [];
     
@@ -2007,7 +2175,7 @@ function addFilter() {
     
     // Check if filter already exists
     const exists = activeFilters.some(f => {
-        if (f.type !== filterType || f.criteria !== criteria) return false;
+        if (f.type !== filterType) return false;
         return f.values.length === values.length &&
                f.values.every(name => values.includes(name)) &&
                values.every(name => f.values.includes(name));
@@ -2021,13 +2189,15 @@ function addFilter() {
     // Add filter
     activeFilters.push({
         type: filterType,
-        criteria: criteria,
-        values: values
+        criteria: 'isOneOf',
+        values: values,
+        inverted: false
     });
     
     // Update UI and apply filters
     updateFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
 }
 
 // Remove filter
@@ -2035,6 +2205,7 @@ function removeFilter(index) {
     activeFilters.splice(index, 1);
     updateFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
 }
 
 // Clear all filters
@@ -2042,17 +2213,21 @@ function clearAllFilters() {
     activeFilters = [];
     updateFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+// Toggle filter invert state
+function toggleFilterInvert(index) {
+    if (index >= 0 && index < activeFilters.length) {
+        activeFilters[index].inverted = !activeFilters[index].inverted;
+        updateFilterUI();
+        applyFilters();
+        saveFilterAndDisplaySettings();
+    }
 }
 
 // Add event spawn filter
 function addEventSpawnFilter() {
-    const criteria = document.getElementById('eventSpawnFilterCriteria').value;
-    
-    if (!criteria) {
-        alert('Please select a criteria');
-        return;
-    }
-    
     const select = document.getElementById('eventSpawnFilterTypeSelect');
     const selectedOptions = Array.from(select.selectedOptions);
     if (selectedOptions.length === 0) {
@@ -2065,7 +2240,6 @@ function addEventSpawnFilter() {
     
     // Check if filter already exists
     const exists = activeEventSpawnFilters.some(f => {
-        if (f.criteria !== criteria) return false;
         return f.values.length === values.length &&
                f.values.every(name => values.includes(name)) &&
                values.every(name => f.values.includes(name));
@@ -2079,13 +2253,15 @@ function addEventSpawnFilter() {
     // Add filter
     activeEventSpawnFilters.push({
         type: 'eventSpawnType',
-        criteria: criteria,
-        values: values
+        criteria: 'isOneOf',
+        values: values,
+        inverted: false
     });
     
     // Update UI and apply filters
     updateEventSpawnFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
 }
 
 // Remove event spawn filter
@@ -2093,6 +2269,7 @@ function removeEventSpawnFilter(index) {
     activeEventSpawnFilters.splice(index, 1);
     updateEventSpawnFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
 }
 
 // Clear all event spawn filters
@@ -2100,6 +2277,17 @@ function clearAllEventSpawnFilters() {
     activeEventSpawnFilters = [];
     updateEventSpawnFilterUI();
     applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+// Toggle event spawn filter invert state
+function toggleEventSpawnFilterInvert(index) {
+    if (index >= 0 && index < activeEventSpawnFilters.length) {
+        activeEventSpawnFilters[index].inverted = !activeEventSpawnFilters[index].inverted;
+        updateEventSpawnFilterUI();
+        applyFilters();
+        saveFilterAndDisplaySettings();
+    }
 }
 
 // Update event spawn filter UI
@@ -2118,15 +2306,181 @@ function updateEventSpawnFilterUI() {
         const filterDiv = document.createElement('div');
         filterDiv.className = 'active-filter-item';
         
-        const criteriaText = filter.criteria === 'isOneOf' ? 'Is One Of' : 'Is Not One Of';
+        const criteriaText = filter.inverted ? 'Hide' : 'Display';
         const valuesText = filter.values.join(', ');
         
         filterDiv.innerHTML = `
             <span class="filter-text">Event Spawn Type ${criteriaText}: ${valuesText}</span>
+            <label class="filter-invert-checkbox">
+                <input type="checkbox" ${filter.inverted ? 'checked' : ''} 
+                       onchange="toggleEventSpawnFilterInvert(${index})" 
+                       title="Invert filter">
+                <span>Invert</span>
+            </label>
             <button class="btn-remove-filter" onclick="removeEventSpawnFilter(${index})" title="Remove filter">×</button>
         `;
         
         filtersList.appendChild(filterDiv);
+    });
+}
+
+// Update territory filter UI based on filter type
+function updateTerritoryFilterTypeUI() {
+    const filterType = document.getElementById('territoryFilterType').value;
+    const typeSelect = document.getElementById('territoryFilterTypeSelect');
+    const nameInput = document.getElementById('territoryFilterNameInput');
+    const nameSelect = document.getElementById('territoryFilterNameSelect');
+    const valueLabel = document.getElementById('territoryFilterValueLabel');
+    
+    if (!typeSelect || !nameInput || !nameSelect || !valueLabel) {
+        return;
+    }
+    
+    if (filterType === 'territoryType') {
+        valueLabel.textContent = 'Territory Type:';
+        typeSelect.style.display = 'block';
+        nameInput.style.display = 'none';
+        nameSelect.style.display = 'none';
+    } else if (filterType === 'territoryName') {
+        valueLabel.textContent = 'Territory Name:';
+        typeSelect.style.display = 'none';
+        nameInput.style.display = 'block';
+        nameSelect.style.display = 'block';
+    }
+}
+
+// Add territory filter
+function addTerritoryFilter() {
+    const filterType = document.getElementById('territoryFilterType').value;
+    
+    let values = [];
+    
+    if (filterType === 'territoryType') {
+        const select = document.getElementById('territoryFilterTypeSelect');
+        const selectedOptions = Array.from(select.selectedOptions);
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one territory type');
+            return;
+        }
+        values = selectedOptions.map(opt => opt.value);
+        select.selectedIndex = -1;
+    } else if (filterType === 'territoryName') {
+        const select = document.getElementById('territoryFilterNameSelect');
+        const selectedOptions = Array.from(select.selectedOptions);
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one territory name');
+            return;
+        }
+        values = selectedOptions.map(opt => opt.value);
+        select.selectedIndex = -1;
+        document.getElementById('territoryFilterNameInput').value = '';
+        filterTerritoryNameDropdown(); // Reset filter
+    }
+    
+    // Check if filter already exists
+    const exists = activeTerritoryFilters.some(f => {
+        if (f.type !== filterType) return false;
+        return f.values.length === values.length &&
+               f.values.every(name => values.includes(name)) &&
+               values.every(name => f.values.includes(name));
+    });
+    
+    if (exists) {
+        alert('This filter already exists');
+        return;
+    }
+    
+    // Add filter
+    activeTerritoryFilters.push({
+        type: filterType,
+        criteria: 'isOneOf',
+        values: values,
+        inverted: false
+    });
+    
+    // Update UI and apply filters
+    updateTerritoryFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+// Remove territory filter
+function removeTerritoryFilter(index) {
+    activeTerritoryFilters.splice(index, 1);
+    updateTerritoryFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+// Clear all territory filters
+function clearAllTerritoryFilters() {
+    activeTerritoryFilters = [];
+    updateTerritoryFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+// Toggle territory filter invert state
+function toggleTerritoryFilterInvert(index) {
+    if (index >= 0 && index < activeTerritoryFilters.length) {
+        activeTerritoryFilters[index].inverted = !activeTerritoryFilters[index].inverted;
+        updateTerritoryFilterUI();
+        applyFilters();
+        saveFilterAndDisplaySettings();
+    }
+}
+
+// Update territory filter UI
+function updateTerritoryFilterUI() {
+    const filtersList = document.getElementById('activeTerritoryFiltersList');
+    if (!filtersList) return;
+    
+    filtersList.innerHTML = '';
+    
+    if (activeTerritoryFilters.length === 0) {
+        filtersList.innerHTML = '<p style="color: #666; font-size: 0.9em;">No active filters</p>';
+        return;
+    }
+    
+    activeTerritoryFilters.forEach((filter, index) => {
+        const filterDiv = document.createElement('div');
+        filterDiv.className = 'active-filter-item';
+        
+        const criteriaText = filter.inverted ? 'Hide' : 'Display';
+        const typeText = filter.type === 'territoryType' ? 'Territory Type' : 'Territory Name';
+        const valuesText = filter.values.join(', ');
+        
+        filterDiv.innerHTML = `
+            <span class="filter-text">${typeText} ${criteriaText}: ${valuesText}</span>
+            <label class="filter-invert-checkbox">
+                <input type="checkbox" ${filter.inverted ? 'checked' : ''} 
+                       onchange="toggleTerritoryFilterInvert(${index})" 
+                       title="Invert filter">
+                <span>Invert</span>
+            </label>
+            <button class="btn-remove-filter" onclick="removeTerritoryFilter(${index})" title="Remove filter">×</button>
+        `;
+        
+        filtersList.appendChild(filterDiv);
+    });
+}
+
+// Filter territory name dropdown based on search input
+function filterTerritoryNameDropdown() {
+    const input = document.getElementById('territoryFilterNameInput');
+    const select = document.getElementById('territoryFilterNameSelect');
+    if (!input || !select) return;
+    
+    const searchTerm = input.value.toLowerCase();
+    const options = select.querySelectorAll('option');
+    
+    options.forEach(option => {
+        const text = option.textContent.toLowerCase();
+        if (text.includes(searchTerm)) {
+            option.style.display = '';
+        } else {
+            option.style.display = 'none';
+        }
     });
 }
 
@@ -2146,17 +2500,39 @@ function updateFilterUI() {
         const filterItem = document.createElement('div');
         filterItem.className = 'active-filter-item';
         
-        const criteriaText = filter.criteria === 'isOneOf' ? 'Is One Of' : 'Is Not One Of';
+        const criteriaText = filter.inverted ? 'Hide' : 'Display';
         const typeText = filter.type === 'usage' ? 'Usage' : 'Group Name';
         const valuesText = filter.values.join(', ');
         
         filterItem.innerHTML = `
             <span class="filter-text">${typeText} ${criteriaText}: ${valuesText}</span>
+            <label class="filter-invert-checkbox">
+                <input type="checkbox" ${filter.inverted ? 'checked' : ''} 
+                       onchange="toggleFilterInvert(${index})" 
+                       title="Invert filter">
+                <span>Invert</span>
+            </label>
             <button class="btn-remove-filter" onclick="removeFilter(${index})" title="Remove filter">×</button>
         `;
         
         activeFiltersList.appendChild(filterItem);
     });
+}
+
+// Save all filter and display settings to localStorage
+function saveFilterAndDisplaySettings() {
+    // Save display toggles
+    localStorage.setItem('map_viewer_showGrid', showGrid.toString());
+    localStorage.setItem('map_viewer_showMarkers', showMarkers.toString());
+    localStorage.setItem('map_viewer_showEventSpawns', showEventSpawns.toString());
+    localStorage.setItem('map_viewer_showTerritories', showTerritories.toString());
+    localStorage.setItem('map_viewer_showEffectAreas', showEffectAreas.toString());
+    localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
+    
+    // Save filters
+    localStorage.setItem('map_viewer_activeFilters', JSON.stringify(activeFilters));
+    localStorage.setItem('map_viewer_activeEventSpawnFilters', JSON.stringify(activeEventSpawnFilters));
+    localStorage.setItem('map_viewer_activeTerritoryFilters', JSON.stringify(activeTerritoryFilters));
 }
 
 // Restore saved state from localStorage
@@ -2166,6 +2542,98 @@ async function restoreSavedState() {
     if (savedMissionDir) {
         missionDir = savedMissionDir;
         document.getElementById('missionDir').value = savedMissionDir;
+    }
+    
+    // Restore display toggles
+    const savedShowGrid = localStorage.getItem('map_viewer_showGrid');
+    if (savedShowGrid !== null) {
+        showGrid = savedShowGrid === 'true';
+        const checkbox = document.getElementById('showGrid');
+        if (checkbox) checkbox.checked = showGrid;
+    }
+    
+    const savedShowMarkers = localStorage.getItem('map_viewer_showMarkers');
+    if (savedShowMarkers !== null) {
+        showMarkers = savedShowMarkers === 'true';
+        const checkbox = document.getElementById('showMarkers');
+        if (checkbox) checkbox.checked = showMarkers;
+    }
+    
+    const savedShowEventSpawns = localStorage.getItem('map_viewer_showEventSpawns');
+    if (savedShowEventSpawns !== null) {
+        showEventSpawns = savedShowEventSpawns === 'true';
+        const checkbox = document.getElementById('showEventSpawns');
+        if (checkbox) checkbox.checked = showEventSpawns;
+    }
+    
+    const savedShowTerritories = localStorage.getItem('map_viewer_showTerritories');
+    if (savedShowTerritories !== null) {
+        showTerritories = savedShowTerritories === 'true';
+        const checkbox = document.getElementById('showTerritories');
+        if (checkbox) checkbox.checked = showTerritories;
+    }
+    
+    const savedShowEffectAreas = localStorage.getItem('map_viewer_showEffectAreas');
+    if (savedShowEffectAreas !== null) {
+        showEffectAreas = savedShowEffectAreas === 'true';
+        const checkbox = document.getElementById('showEffectAreas');
+        if (checkbox) checkbox.checked = showEffectAreas;
+    }
+    
+    const savedShowBackgroundImage = localStorage.getItem('map_viewer_showBackgroundImage');
+    if (savedShowBackgroundImage !== null) {
+        showBackgroundImage = savedShowBackgroundImage === 'true';
+        const checkbox = document.getElementById('showBackgroundImage');
+        if (checkbox) checkbox.checked = showBackgroundImage;
+    }
+    
+    // Restore filters
+    const savedActiveFilters = localStorage.getItem('map_viewer_activeFilters');
+    if (savedActiveFilters) {
+        try {
+            activeFilters = JSON.parse(savedActiveFilters);
+            // Ensure backward compatibility: add inverted property if missing
+            activeFilters.forEach(filter => {
+                if (filter.inverted === undefined) {
+                    filter.inverted = false;
+                }
+            });
+            updateFilterUI();
+        } catch (e) {
+            console.error('Error restoring active filters:', e);
+        }
+    }
+    
+    const savedActiveEventSpawnFilters = localStorage.getItem('map_viewer_activeEventSpawnFilters');
+    if (savedActiveEventSpawnFilters) {
+        try {
+            activeEventSpawnFilters = JSON.parse(savedActiveEventSpawnFilters);
+            // Ensure backward compatibility: add inverted property if missing
+            activeEventSpawnFilters.forEach(filter => {
+                if (filter.inverted === undefined) {
+                    filter.inverted = false;
+                }
+            });
+            updateEventSpawnFilterUI();
+        } catch (e) {
+            console.error('Error restoring event spawn filters:', e);
+        }
+    }
+    
+    const savedActiveTerritoryFilters = localStorage.getItem('map_viewer_activeTerritoryFilters');
+    if (savedActiveTerritoryFilters) {
+        try {
+            activeTerritoryFilters = JSON.parse(savedActiveTerritoryFilters);
+            // Ensure backward compatibility: add inverted property if missing
+            activeTerritoryFilters.forEach(filter => {
+                if (filter.inverted === undefined) {
+                    filter.inverted = false;
+                }
+            });
+            updateTerritoryFilterUI();
+        } catch (e) {
+            console.error('Error restoring territory filters:', e);
+        }
     }
     
     // Restore background image - try server first, then fallback to localStorage
@@ -2264,6 +2732,14 @@ document.addEventListener('DOMContentLoaded', () => {
         draw();
     });
     
+    const showTerritoriesCheckbox = document.getElementById('showTerritories');
+    if (showTerritoriesCheckbox) {
+        showTerritoriesCheckbox.addEventListener('change', (e) => {
+            showTerritories = e.target.checked;
+            draw();
+        });
+    }
+    
     document.getElementById('showBackgroundImage').addEventListener('change', (e) => {
         showBackgroundImage = e.target.checked;
         draw();
@@ -2283,6 +2759,25 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clearAllEventSpawnFiltersBtn').addEventListener('click', clearAllEventSpawnFilters);
     document.getElementById('filterType').addEventListener('change', updateFilterTypeUI);
     document.getElementById('filterGroupNameInput').addEventListener('input', filterGroupNameDropdown);
+    
+    // Territory filter buttons
+    const addTerritoryFilterBtn = document.getElementById('addTerritoryFilterBtn');
+    const clearAllTerritoryFiltersBtn = document.getElementById('clearAllTerritoryFiltersBtn');
+    const territoryFilterType = document.getElementById('territoryFilterType');
+    const territoryFilterNameInput = document.getElementById('territoryFilterNameInput');
+    
+    if (addTerritoryFilterBtn) {
+        addTerritoryFilterBtn.addEventListener('click', addTerritoryFilter);
+    }
+    if (clearAllTerritoryFiltersBtn) {
+        clearAllTerritoryFiltersBtn.addEventListener('click', clearAllTerritoryFilters);
+    }
+    if (territoryFilterType) {
+        territoryFilterType.addEventListener('change', updateTerritoryFilterTypeUI);
+    }
+    if (territoryFilterNameInput) {
+        territoryFilterNameInput.addEventListener('input', filterTerritoryNameDropdown);
+    }
     
     // Allow Enter key to trigger load
     document.getElementById('missionDir').addEventListener('keypress', (e) => {
