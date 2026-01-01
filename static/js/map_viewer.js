@@ -1144,12 +1144,15 @@ function draw() {
             // Clear and draw background on WebGL canvas
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, canvasWidth, canvasHeight);
-            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            gl.clearColor(0.18, 0.20, 0.25, 1.0); // nord0: #2E3440 (background when no image)
             gl.clear(gl.COLOR_BUFFER_BIT);
             drawBackgroundImageWebGL(); // Draw background on WebGL canvas
         } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
             // Clear and draw background on 2D canvas
             backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            // Fill with nord0 background first
+            backgroundCtx.fillStyle = '#2E3440'; // nord0
+            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
             const oldCtx = ctx;
             ctx = backgroundCtx; // Temporarily use background context
             drawBackgroundImage();
@@ -1160,14 +1163,16 @@ function draw() {
         if (useWebGL && gl && backgroundCanvas) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, canvasWidth, canvasHeight);
-            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            gl.clearColor(0.18, 0.20, 0.25, 1.0); // nord0: #2E3440
             gl.clear(gl.COLOR_BUFFER_BIT);
         } else if (backgroundCtx && backgroundCanvas) {
             backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            backgroundCtx.fillStyle = '#2E3440'; // nord0
+            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
         }
     }
     
-    // Clear main canvas
+    // Clear main canvas (transparent - background image shows through from background canvas)
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
     // Draw grid, markers, event spawns, territories, effect areas, marquee on main canvas

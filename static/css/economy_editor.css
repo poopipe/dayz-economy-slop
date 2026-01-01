@@ -1,4 +1,24 @@
-/* Economy Editor Styles */
+/* Economy Editor Styles - Nord Theme */
+
+/* Nord Color Palette */
+:root {
+    --nord0: #2E3440;
+    --nord1: #3B4252;
+    --nord2: #434C5E;
+    --nord3: #4C566A;
+    --nord4: #D8DEE9;
+    --nord5: #E5E9F0;
+    --nord6: #ECEFF4;
+    --nord7: #8FBCBB;
+    --nord8: #88C0D0;
+    --nord9: #81A1C1;
+    --nord10: #5E81AC;
+    --nord11: #BF616A;
+    --nord12: #D08770;
+    --nord13: #EBCB8B;
+    --nord14: #A3BE8C;
+    --nord15: #B48EAD;
+}
 
 * {
     margin: 0;
@@ -8,26 +28,28 @@
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: var(--nord0);
     min-height: 100vh;
     padding: 20px;
-    color: #333;
+    color: var(--nord4);
 }
 
 .container {
     max-width: 1800px;
     margin: 0 auto;
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    background: var(--nord1);
+    border-radius: 0;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+    border: 1px solid var(--nord3);
 }
 
 header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: var(--nord1);
+    color: var(--nord6);
     padding: 30px;
     text-align: center;
+    border-bottom: 1px solid var(--nord3);
 }
 
 header h1 {
@@ -38,12 +60,13 @@ header h1 {
 .status {
     font-size: 0.9em;
     opacity: 0.9;
+    color: var(--nord4);
 }
 
 .controls {
     padding: 20px;
-    background: #f5f5f5;
-    border-bottom: 1px solid #ddd;
+    background: var(--nord1);
+    border-bottom: 1px solid var(--nord3);
 }
 
 .control-group {
@@ -57,6 +80,7 @@ header h1 {
 .control-group label {
     font-weight: 500;
     white-space: nowrap;
+    color: var(--nord4);
 }
 
 .mission-dir-input,
@@ -64,55 +88,73 @@ header h1 {
 .db-file-input {
     flex: 1;
     padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-family: 'Courier New', monospace;
     font-size: 0.9em;
     min-width: 300px;
+    background: var(--nord0);
+    color: var(--nord4);
+}
+
+.mission-dir-input:focus,
+.subfolder-input:focus,
+.db-file-input:focus {
+    outline: none;
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
 }
 
 .btn {
     padding: 10px 20px;
-    background: #667eea;
-    color: white;
+    background: var(--nord9);
+    color: var(--nord0);
     border: none;
-    border-radius: 5px;
+    border-radius: 0;
     cursor: pointer;
     font-size: 0.9em;
     font-weight: 500;
     transition: background 0.3s;
+    border: 1px solid var(--nord9);
 }
 
 .btn:hover {
-    background: #5568d3;
+    background: var(--nord10);
+    border-color: var(--nord10);
 }
 
 .btn-primary {
-    background: #28a745;
+    background: var(--nord14);
+    color: var(--nord0);
+    border-color: var(--nord14);
 }
 
 .btn-primary:hover {
-    background: #218838;
+    background: #8fb07a;
+    border-color: #8fb07a;
 }
 
 .btn-success {
-    background: #28a745;
+    background: var(--nord14);
+    color: var(--nord0);
+    border-color: var(--nord14);
 }
 
 .btn-success:hover {
-    background: #218838;
+    background: #8fb07a;
+    border-color: #8fb07a;
 }
 
 /* Filter Section */
 .filter-section {
-    background: #f5f5f5;
-    border-bottom: 1px solid #ddd;
+    background: var(--nord1);
+    border-bottom: 1px solid var(--nord3);
     padding: 20px;
 }
 
 .filter-section h3 {
     margin: 0 0 15px 0;
-    color: #667eea;
+    color: var(--nord9);
     font-size: 1.2em;
 }
 
@@ -130,14 +172,17 @@ header h1 {
 .filter-input-group label {
     font-weight: 500;
     white-space: nowrap;
+    color: var(--nord4);
 }
 
 .filter-select,
 .filter-input {
     padding: 6px 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 0.9em;
+    background: var(--nord0);
+    color: var(--nord4);
 }
 
 .filter-select {
@@ -155,12 +200,20 @@ header h1 {
     min-width: 200px;
 }
 
+.filter-input:focus,
+.filter-select:focus {
+    outline: none;
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
+}
+
 .filter-include-label {
     display: flex;
     align-items: center;
     gap: 5px;
     cursor: pointer;
     white-space: nowrap;
+    color: var(--nord4);
 }
 
 .active-filters-list {
@@ -174,22 +227,23 @@ header h1 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    background: var(--nord2);
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 8px 12px;
 }
 
 .filter-text {
     flex: 1;
     font-size: 0.9em;
+    color: var(--nord4);
 }
 
 .btn-remove-filter {
-    background: #dc3545;
-    color: white;
+    background: var(--nord11);
+    color: var(--nord6);
     border: none;
-    border-radius: 3px;
+    border-radius: 0;
     width: 24px;
     height: 24px;
     cursor: pointer;
@@ -202,11 +256,11 @@ header h1 {
 }
 
 .btn-remove-filter:hover {
-    background: #c82333;
+    background: #a8555a;
 }
 
 .no-filters-message {
-    color: #999;
+    color: var(--nord3);
     font-style: italic;
     padding: 10px;
     text-align: center;
@@ -214,14 +268,15 @@ header h1 {
 
 .main-content {
     padding: 20px;
+    background: var(--nord0);
 }
 
 .table-container {
     overflow-x: auto;
     overflow-y: auto;
     max-height: calc(100vh - 300px);
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
 }
 
 .data-table {
@@ -233,10 +288,10 @@ header h1 {
 .data-table th {
     padding: 12px 15px;
     text-align: left;
-    border-bottom: 2px solid #5568d3;
+    border-bottom: 2px solid var(--nord3);
     white-space: nowrap;
-    background: #667eea;
-    color: white;
+    background: var(--nord1);
+    color: var(--nord6);
     font-weight: 600;
     position: sticky;
     top: 0;
@@ -250,7 +305,7 @@ header h1 {
 }
 
 .data-table th.sortable:hover {
-    background: #5568d3;
+    background: var(--nord2);
 }
 
 .sort-indicator {
@@ -266,10 +321,12 @@ header h1 {
 .data-table td {
     padding: 10px 15px;
     text-align: left;
-    border-bottom: 1px solid #ddd;
+    border-bottom: 1px solid var(--nord3);
     white-space: normal;
     word-wrap: break-word;
     vertical-align: top;
+    background: var(--nord0);
+    color: var(--nord4);
 }
 
 /* Checkbox column */
@@ -289,17 +346,16 @@ header h1 {
 
 /* Selected row styling */
 .data-table tbody tr.selected-row {
-    background-color: #e3f2fd !important;
+    background-color: var(--nord2) !important;
 }
 
 .data-table tbody tr.selected-row:hover {
-    background-color: #bbdefb !important;
+    background-color: var(--nord2) !important;
 }
 
 .data-table tr.selected-row td:first-child {
-    background: #e3f2fd;
+    background: var(--nord2);
 }
-
 
 .data-table th:nth-child(1),
 .data-table td:nth-child(1) {
@@ -320,37 +376,40 @@ header h1 {
 }
 
 .data-table tr:hover {
-    background: #f5f5f5;
+    background: var(--nord1);
 }
 
 .data-table td.editable-cell {
     cursor: pointer;
     position: relative;
-    background: #fff9e6;
+    background: var(--nord2);
 }
 
 .data-table td.editable-cell:hover {
-    background: #ffe6cc;
+    background: var(--nord3);
 }
 
 .data-table th.editable-column-header {
-    background: #ffd700;
-    color: #333;
+    background: var(--nord13);
+    color: var(--nord0);
 }
 
 .data-table th.editable-column-header:hover {
-    background: #ffed4e;
+    background: var(--nord12);
 }
 
 .cell-input {
     font-family: inherit;
     font-size: inherit;
+    background: var(--nord0);
+    color: var(--nord4);
+    border: 1px solid var(--nord9);
 }
 
 .no-data {
     padding: 40px;
     text-align: center;
-    color: #666;
+    color: var(--nord3);
 }
 
 /* Column Visibility Modal */
@@ -362,18 +421,20 @@ header h1 {
     top: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.7);
     overflow-y: auto;
 }
 
 .modal-content {
-    background: white;
+    background: var(--nord1);
     margin: 5% auto;
     padding: 20px;
-    border-radius: 10px;
+    border-radius: 0;
     width: 90%;
     max-width: 600px;
     position: relative;
+    border: 1px solid var(--nord3);
+    color: var(--nord4);
 }
 
 .close-modal {
@@ -381,12 +442,12 @@ header h1 {
     font-size: 28px;
     font-weight: bold;
     cursor: pointer;
-    color: #aaa;
+    color: var(--nord4);
     line-height: 20px;
 }
 
 .close-modal:hover {
-    color: #667eea;
+    color: var(--nord9);
 }
 
 .column-visibility-controls {
@@ -402,9 +463,10 @@ header h1 {
 .column-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .column-checkbox-item {
@@ -415,7 +477,7 @@ header h1 {
 }
 
 .column-checkbox-item:hover {
-    background: #f5f5f5;
+    background: var(--nord2);
 }
 
 .column-checkbox-item input[type="checkbox"] {
@@ -427,6 +489,7 @@ header h1 {
     cursor: pointer;
     flex: 1;
     user-select: none;
+    color: var(--nord4);
 }
 
 .modal-actions {
@@ -444,9 +507,10 @@ header h1 {
 .valueflags-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .valueflag-checkbox-item {
@@ -457,7 +521,7 @@ header h1 {
 }
 
 .valueflag-checkbox-item:hover {
-    background: #f5f5f5;
+    background: var(--nord2);
 }
 
 .valueflag-checkbox-item input[type="checkbox"] {
@@ -469,6 +533,7 @@ header h1 {
     cursor: pointer;
     flex: 1;
     user-select: none;
+    color: var(--nord4);
 }
 
 /* Usageflags Editor */
@@ -479,9 +544,10 @@ header h1 {
 .usageflags-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .usageflag-checkbox-item {
@@ -492,7 +558,7 @@ header h1 {
 }
 
 .usageflag-checkbox-item:hover {
-    background: #f5f5f5;
+    background: var(--nord2);
 }
 
 .usageflag-checkbox-item input[type="checkbox"] {
@@ -504,6 +570,7 @@ header h1 {
     cursor: pointer;
     flex: 1;
     user-select: none;
+    color: var(--nord4);
 }
 
 /* Flags Editor */
@@ -514,9 +581,10 @@ header h1 {
 .flags-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .flag-checkbox-item {
@@ -527,7 +595,7 @@ header h1 {
 }
 
 .flag-checkbox-item:hover {
-    background: #f5f5f5;
+    background: var(--nord2);
 }
 
 .flag-checkbox-item input[type="checkbox"] {
@@ -539,6 +607,7 @@ header h1 {
     cursor: pointer;
     flex: 1;
     user-select: none;
+    color: var(--nord4);
 }
 
 /* Categories Editor */
@@ -549,9 +618,10 @@ header h1 {
 .categories-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .category-checkbox-item {
@@ -562,7 +632,7 @@ header h1 {
 }
 
 .category-checkbox-item:hover {
-    background: #f5f5f5;
+    background: var(--nord2);
 }
 
 .category-checkbox-item input[type="checkbox"] {
@@ -574,6 +644,7 @@ header h1 {
     cursor: pointer;
     flex: 1;
     user-select: none;
+    color: var(--nord4);
 }
 
 /* Itemclass Editor */
@@ -584,19 +655,20 @@ header h1 {
 .itemclass-select {
     width: 100%;
     padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 1em;
     font-family: inherit;
-    background: white;
+    background: var(--nord0);
+    color: var(--nord4);
     cursor: pointer;
     margin-top: 10px;
 }
 
 .itemclass-select:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
 }
 
 /* Itemtags Editor */
@@ -607,10 +679,11 @@ header h1 {
 .itemtags-checkboxes {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
     margin-top: 10px;
+    background: var(--nord0);
 }
 
 /* Itemclasses/Itemtags Management */
@@ -621,12 +694,12 @@ header h1 {
 .add-section {
     margin-bottom: 30px;
     padding-bottom: 20px;
-    border-bottom: 2px solid #ddd;
+    border-bottom: 2px solid var(--nord3);
 }
 
 .add-section h3 {
     margin-bottom: 15px;
-    color: #333;
+    color: var(--nord4);
     font-size: 1.1em;
 }
 
@@ -639,16 +712,18 @@ header h1 {
 .name-input {
     flex: 1;
     padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 1em;
     font-family: inherit;
+    background: var(--nord0);
+    color: var(--nord4);
 }
 
 .name-input:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
 }
 
 .list-section {
@@ -657,16 +732,17 @@ header h1 {
 
 .list-section h3 {
     margin-bottom: 15px;
-    color: #333;
+    color: var(--nord4);
     font-size: 1.1em;
 }
 
 .items-list {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
+    background: var(--nord0);
 }
 
 .item-row {
@@ -675,25 +751,25 @@ header h1 {
     align-items: center;
     padding: 10px;
     margin-bottom: 8px;
-    background: #f9f9f9;
-    border-radius: 5px;
-    border: 1px solid #e0e0e0;
+    background: var(--nord2);
+    border-radius: 0;
+    border: 1px solid var(--nord3);
 }
 
 .item-row:hover {
-    background: #f0f0f0;
+    background: var(--nord3);
 }
 
 .item-name {
     font-weight: 500;
-    color: #333;
+    color: var(--nord4);
     flex: 1;
 }
 
 .no-items {
     padding: 20px;
     text-align: center;
-    color: #666;
+    color: var(--nord3);
     font-style: italic;
 }
 
@@ -703,17 +779,20 @@ header h1 {
 }
 
 .btn-danger {
-    background: #dc3545;
+    background: var(--nord11);
+    color: var(--nord6);
+    border-color: var(--nord11);
 }
 
 .btn-danger:hover {
-    background: #c82333;
+    background: #a8555a;
+    border-color: #a8555a;
 }
 
 /* Filter Row */
 .filter-row {
-    background: #f8f9fa;
-    border-top: 2px solid #ddd;
+    background: var(--nord1);
+    border-top: 2px solid var(--nord3);
 }
 
 .filter-cell {
@@ -725,17 +804,19 @@ header h1 {
 .filter-select {
     width: 100%;
     padding: 5px;
-    border: 1px solid #ccc;
-    border-radius: 3px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 0.85em;
     font-family: inherit;
+    background: var(--nord0);
+    color: var(--nord4);
 }
 
 .filter-input:focus,
 .filter-select:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
 }
 
 .filter-select {
@@ -751,17 +832,18 @@ header h1 {
 .numeric-filter .filter-op {
     flex-shrink: 0;
     padding: 5px;
-    border: 1px solid #ccc;
-    border-radius: 3px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 0.85em;
-    background: white;
+    background: var(--nord0);
+    color: var(--nord4);
     cursor: pointer;
 }
 
 /* File name display */
 .file-name-display {
     margin-left: 10px;
-    color: #666;
+    color: var(--nord3);
     font-style: italic;
 }
 
@@ -769,9 +851,9 @@ header h1 {
 .duplicate-item {
     margin: 20px 0;
     padding: 15px;
-    background: #f9f9f9;
-    border-radius: 5px;
-    border-left: 4px solid #667eea;
+    background: var(--nord2);
+    border-radius: 0;
+    border-left: 4px solid var(--nord9);
 }
 
 .duplicate-actions {
@@ -789,10 +871,10 @@ header h1 {
 .duplicate-progress {
     margin-top: 15px;
     padding: 10px;
-    background: #e0e7ff;
-    border-radius: 5px;
+    background: var(--nord2);
+    border-radius: 0;
     text-align: center;
-    color: #4338ca;
+    color: var(--nord9);
     font-weight: 500;
 }
 
@@ -812,7 +894,7 @@ header h1 {
 .form-section {
     margin-bottom: 30px;
     padding-bottom: 20px;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--nord3);
 }
 
 .form-section:last-child {
@@ -821,7 +903,7 @@ header h1 {
 
 .form-section h3 {
     margin-bottom: 15px;
-    color: #667eea;
+    color: var(--nord9);
     font-size: 1.2em;
 }
 
@@ -833,11 +915,11 @@ header h1 {
     display: block;
     margin-bottom: 8px;
     font-weight: 500;
-    color: #333;
+    color: var(--nord4);
 }
 
 .form-group .required {
-    color: #e74c3c;
+    color: var(--nord11);
 }
 
 .form-input,
@@ -845,18 +927,20 @@ header h1 {
 .form-textarea {
     width: 100%;
     padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     font-size: 0.9em;
     font-family: inherit;
+    background: var(--nord0);
+    color: var(--nord4);
 }
 
 .form-input:focus,
 .form-select:focus,
 .form-textarea:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+    border-color: var(--nord9);
+    box-shadow: 0 0 0 2px rgba(129, 161, 193, 0.2);
 }
 
 .form-textarea {
@@ -868,17 +952,17 @@ header h1 {
     display: block;
     margin-top: 5px;
     font-size: 0.85em;
-    color: #666;
+    color: var(--nord3);
     font-style: italic;
 }
 
 .checkboxes-group {
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    border: 1px solid var(--nord3);
+    border-radius: 0;
     padding: 10px;
-    background: #f9f9f9;
+    background: var(--nord0);
 }
 
 .checkbox-item {
@@ -886,12 +970,12 @@ header h1 {
     align-items: center;
     padding: 8px;
     margin-bottom: 5px;
-    background: white;
-    border-radius: 3px;
+    background: var(--nord2);
+    border-radius: 0;
 }
 
 .checkbox-item:hover {
-    background: #f0f0f0;
+    background: var(--nord3);
 }
 
 .checkbox-item input[type="checkbox"] {
@@ -905,5 +989,5 @@ header h1 {
     user-select: none;
     margin: 0;
     font-weight: normal;
+    color: var(--nord4);
 }
-

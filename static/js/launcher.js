@@ -41,14 +41,20 @@ function loadApp(appName) {
         // Check if iframe actually loaded
         try {
             iframe.contentWindow.location;
-        } catch (e) {
-            // Cross-origin or loaded - check if we can see content
-            // If still showing loading after timeout, mark as error
+            // Same origin - check if still loading
             if (loadingEl && loadingEl.style.display !== 'none') {
                 showError(appName);
             }
+        } catch (e) {
+            // Cross-origin error typically means the iframe loaded successfully
+            // Only show error if loading indicator is still visible after timeout
+            if (loadingEl && loadingEl.style.display !== 'none') {
+                // Try to check if the iframe actually loaded by checking its readyState
+                // For cross-origin, we can't check directly, so assume it loaded if timeout passed
+                // The error will be shown by the error event handler if it truly failed
+            }
         }
-    }, 10000); // 10 second timeout
+    }, 15000); // 15 second timeout (increased for slower connections)
     
     // Set the src to actually load the iframe
     iframe.src = url;
@@ -56,18 +62,22 @@ function loadApp(appName) {
     // Mark as loaded (will be set to true when load event fires)
     iframe.addEventListener('load', () => {
         clearTimeout(loadTimeout);
-        if (loadingEl) {
-            loadingEl.style.display = 'none';
-        }
-        if (errorEl) {
-            errorEl.style.display = 'none';
-        }
-        loadedApps.add(appName);
-        updateStatus(`${appName === 'economy-editor' ? 'economy' : 'map'}-status`, 'online');
+        // Small delay to ensure content is actually rendered
+        setTimeout(() => {
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+            }
+            if (errorEl) {
+                errorEl.style.display = 'none';
+            }
+            loadedApps.add(appName);
+            updateStatus(`${appName === 'economy-editor' ? 'economy' : 'map'}-status`, 'online');
+        }, 100);
     }, { once: true });
     
     iframe.addEventListener('error', () => {
         clearTimeout(loadTimeout);
+        console.error(`Failed to load ${appName} from ${url}`);
         showError(appName);
     }, { once: true });
 }

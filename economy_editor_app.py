@@ -20,7 +20,21 @@ app = Flask(__name__)
 def set_frame_options(response):
     # Remove X-Frame-Options to allow embedding from launcher
     response.headers.pop('X-Frame-Options', None)
+    # Add CORS headers to allow cross-origin requests from launcher
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
+
+# Handle CORS preflight requests
+@app.before_request
+def handle_options():
+    if request.method == 'OPTIONS':
+        response = jsonify({})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
 
 # Default mission directory
 DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim20_Server\mpmissions\empty.nyheim"
