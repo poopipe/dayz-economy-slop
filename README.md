@@ -2,6 +2,104 @@
 
 A comprehensive web-based toolkit for managing and visualizing DayZ server mission file data. Features a database-backed XML editor and an interactive 2D map viewer with advanced filtering capabilities.
 
+This application was written by an LLM in Cursor, an AI-powered code editor. The codebase was developed through iterative conversation and refinement, with the AI assistant handling implementation, debugging, and feature additions based on user requirements.
+
+## Installation
+
+### Prerequisites
+
+- **Python 3.13 or higher** - Download from [python.org](https://www.python.org/downloads/)
+  - During installation, ensure "Add Python to PATH" is checked
+- **Windows 10/11** (for batch scripts) or any OS with Python support
+- **Internet connection** (for initial package installation)
+
+### Quick Setup (Windows)
+
+1. **Extract the application** to your desired location
+
+2. **Run the setup script:**
+   ```cmd
+   setup.bat
+   ```
+   This will:
+   - Check Python installation
+   - Create a virtual environment
+   - Install all required dependencies
+
+3. **Start all applications:**
+   ```cmd
+   start_all_apps.bat
+   ```
+   This will launch all three applications in separate windows/tabs.
+
+4. **Open your browser** to:
+   ```
+   http://localhost:5000
+   ```
+
+### Manual Setup
+
+1. **Create virtual environment:**
+   ```cmd
+   python -m venv venv
+   ```
+
+2. **Activate virtual environment:**
+   ```cmd
+   venv\Scripts\activate
+   ```
+   (On Linux/Mac: `source venv/bin/activate`)
+
+3. **Install dependencies:**
+   ```cmd
+   pip install -r requirements.txt
+   ```
+
+4. **Start applications:**
+   
+   **Option A: Use startup script**
+   ```cmd
+   start_all_apps.bat
+   ```
+   
+   **Option B: Run manually (3 separate terminals)**
+   ```cmd
+   # Terminal 1 - Economy Editor
+   python run_economy_editor.py
+   
+   # Terminal 2 - Map Viewer
+   python run_map_viewer.py
+   
+   # Terminal 3 - Launcher (optional)
+   python run_launcher.py
+   ```
+
+## Startup Instructions
+
+### Using the Launcher (Recommended)
+
+1. Start all three applications using `start_all_apps.bat` or manually
+2. Open browser to `http://localhost:5000`
+3. Use the tabs to switch between Economy Editor and Map Viewer
+4. Check status indicators at the bottom to verify all apps are online
+
+### Direct Access
+
+You can also access applications directly:
+
+- **Economy Editor**: `http://localhost:5004`
+- **Map Viewer**: `http://localhost:5003`
+- **Launcher**: `http://localhost:5000`
+
+### Port Configuration
+
+Default ports:
+- Launcher: `5000`
+- Economy Editor: `5004`
+- Map Viewer: `5003`
+
+To change ports, edit the `run_*.py` files and modify the `port` parameter in `app.run()`.
+
 ## Overview
 
 Economy Editor consists of three integrated applications:
@@ -111,102 +209,6 @@ Economy Editor consists of three integrated applications:
   - Automatic connection checking
   - Retry functionality for failed connections
 
-## Installation
-
-### Prerequisites
-
-- **Python 3.13 or higher** - Download from [python.org](https://www.python.org/downloads/)
-  - During installation, ensure "Add Python to PATH" is checked
-- **Windows 10/11** (for batch scripts) or any OS with Python support
-- **Internet connection** (for initial package installation)
-
-### Quick Setup (Windows)
-
-1. **Extract the application** to your desired location
-
-2. **Run the setup script:**
-   ```cmd
-   setup.bat
-   ```
-   This will:
-   - Check Python installation
-   - Create a virtual environment
-   - Install all required dependencies
-
-3. **Start all applications:**
-   ```cmd
-   start_all_apps.bat
-   ```
-   This will launch all three applications in separate windows/tabs.
-
-4. **Open your browser** to:
-   ```
-   http://localhost:5000
-   ```
-
-### Manual Setup
-
-1. **Create virtual environment:**
-   ```cmd
-   python -m venv venv
-   ```
-
-2. **Activate virtual environment:**
-   ```cmd
-   venv\Scripts\activate
-   ```
-   (On Linux/Mac: `source venv/bin/activate`)
-
-3. **Install dependencies:**
-   ```cmd
-   pip install -r requirements.txt
-   ```
-
-4. **Start applications:**
-   
-   **Option A: Use startup script**
-   ```cmd
-   start_all_apps.bat
-   ```
-   
-   **Option B: Run manually (3 separate terminals)**
-   ```cmd
-   # Terminal 1 - Economy Editor
-   python run_economy_editor.py
-   
-   # Terminal 2 - Map Viewer
-   python run_map_viewer.py
-   
-   # Terminal 3 - Launcher (optional)
-   python run_launcher.py
-   ```
-
-## Startup Instructions
-
-### Using the Launcher (Recommended)
-
-1. Start all three applications using `start_all_apps.bat` or manually
-2. Open browser to `http://localhost:5000`
-3. Use the tabs to switch between Economy Editor and Map Viewer
-4. Check status indicators at the bottom to verify all apps are online
-
-### Direct Access
-
-You can also access applications directly:
-
-- **Economy Editor**: `http://localhost:5004`
-- **Map Viewer**: `http://localhost:5003`
-- **Launcher**: `http://localhost:5000`
-
-### Port Configuration
-
-Default ports:
-- Launcher: `5000`
-- Economy Editor: `5004`
-- Map Viewer: `5003`
-
-To change ports, edit the `run_*.py` files and modify the `port` parameter in `app.run()`.
-
 ## Usage
 
 ### Economy Editor
@@ -267,7 +269,7 @@ To change ports, edit the `run_*.py` files and modify the `port` parameter in `a
 ├── run_launcher.py            # Launcher startup script
 ├── setup.bat                  # Automated setup script
 ├── start_all_apps.bat         # Startup script for all apps
-├── requirements.txt           # Python dependencies
+├── requirements.txt          # Python dependencies
 ├── static/
 │   ├── css/
 │   │   ├── economy_editor.css # Economy Editor styles (Nord theme)
