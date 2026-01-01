@@ -17,6 +17,7 @@ let showMarkers = true;
 let showEventSpawns = true;
 let showEffectAreas = true;
 let showBackgroundImage = true;
+let backgroundImageOpacity = 1.0; // Opacity for background image (0.0 to 1.0)
 let activeEventSpawnFilters = []; // Separate filters for event spawns
 let territories = []; // Territories from env/*.xml files
 let visibleTerritories = new Set(); // For filtering territories
@@ -217,14 +218,16 @@ function initWebGL() {
         }
     `;
     
-    // Fragment shader - texture sampling
+    // Fragment shader - texture sampling with opacity
     const fragmentShaderSource = `
         precision mediump float;
         uniform sampler2D u_texture;
+        uniform float u_opacity;
         varying vec2 v_texCoord;
         
         void main() {
-            gl_FragColor = texture2D(u_texture, v_texCoord);
+            vec4 texColor = texture2D(u_texture, v_texCoord);
+            gl_FragColor = vec4(texColor.rgb, texColor.a * u_opacity);
         }
     `;
     
@@ -376,6 +379,10 @@ function drawBackgroundImageWebGL() {
     gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
     const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
     gl.uniform1i(textureLocation, 0);
+    
+    // Set opacity uniform
+    const opacityLocation = gl.getUniformLocation(glProgram, 'u_opacity');
+    gl.uniform1f(opacityLocation, backgroundImageOpacity);
     
     // Enable blending for transparency
     gl.enable(gl.BLEND);
@@ -598,9 +605,10 @@ function drawBackgroundImage() {
     const destWidth = destBottomRight.x - destTopLeft.x;
     const destHeight = destBottomRight.y - destTopLeft.y;
     
-    // Draw directly to main canvas
+    // Draw directly to main canvas with opacity
     ctx.save();
     ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = backgroundImageOpacity;
     ctx.drawImage(
         backgroundImage,
         sourceX, sourceY, sourceWidth, sourceHeight, // Source rectangle
@@ -1726,6 +1734,10 @@ async function loadBackgroundImageFromServer(imageId) {
             }
             
             document.getElementById('imageDimensionsGroup').style.display = 'flex';
+            const opacityGroup = document.getElementById('imageOpacityGroup');
+            if (opacityGroup) {
+                opacityGroup.style.display = 'flex';
+            }
             initBackgroundCache();
             draw();
         };
@@ -1773,6 +1785,10 @@ async function clearBackgroundImage() {
     backgroundCacheValid = false;
     document.getElementById('backgroundImage').value = '';
     document.getElementById('imageDimensionsGroup').style.display = 'none';
+    const opacityGroup = document.getElementById('imageOpacityGroup');
+    if (opacityGroup) {
+        opacityGroup.style.display = 'none';
+    }
     
     // Remove from localStorage
     localStorage.removeItem('map_viewer_backgroundImage');
@@ -2528,6 +2544,7 @@ function saveFilterAndDisplaySettings() {
     localStorage.setItem('map_viewer_showTerritories', showTerritories.toString());
     localStorage.setItem('map_viewer_showEffectAreas', showEffectAreas.toString());
     localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
+    localStorage.setItem('map_viewer_backgroundImageOpacity', backgroundImageOpacity.toString());
     
     // Save filters
     localStorage.setItem('map_viewer_activeFilters', JSON.stringify(activeFilters));
@@ -2585,6 +2602,19 @@ async function restoreSavedState() {
         showBackgroundImage = savedShowBackgroundImage === 'true';
         const checkbox = document.getElementById('showBackgroundImage');
         if (checkbox) checkbox.checked = showBackgroundImage;
+    }
+    
+    const savedBackgroundImageOpacity = localStorage.getItem('map_viewer_backgroundImageOpacity');
+    if (savedBackgroundImageOpacity !== null) {
+        backgroundImageOpacity = parseFloat(savedBackgroundImageOpacity);
+        const slider = document.getElementById('backgroundImageOpacity');
+        const valueDisplay = document.getElementById('backgroundImageOpacityValue');
+        if (slider) {
+            slider.value = Math.round(backgroundImageOpacity * 100);
+            if (valueDisplay) {
+                valueDisplay.textContent = Math.round(backgroundImageOpacity * 100) + '%';
+            }
+        }
     }
     
     // Restore filters
@@ -2744,6 +2774,17 @@ document.addEventListener('DOMContentLoaded', () => {
         showBackgroundImage = e.target.checked;
         draw();
     });
+    
+    const backgroundImageOpacitySlider = document.getElementById('backgroundImageOpacity');
+    const backgroundImageOpacityValue = document.getElementById('backgroundImageOpacityValue');
+    if (backgroundImageOpacitySlider && backgroundImageOpacityValue) {
+        backgroundImageOpacitySlider.addEventListener('input', (e) => {
+            backgroundImageOpacity = parseFloat(e.target.value) / 100;
+            backgroundImageOpacityValue.textContent = Math.round(backgroundImageOpacity * 100) + '%';
+            draw();
+            saveFilterAndDisplaySettings();
+        });
+    }
     document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
     document.getElementById('copySelectedXmlBtn').addEventListener('click', copySelectedXml);
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
