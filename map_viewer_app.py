@@ -536,6 +536,237 @@ def get_effect_areas():
         }), 500
 
 
+def load_type_categories(economycore_file_path):
+    """
+    Load type categories from cfgeconomycore.xml.
+    Returns a dictionary mapping type names to their categories.
+    """
+    type_categories = {}
+    
+    if not economycore_file_path or not Path(economycore_file_path).exists():
+        print(f"Economy core XML file does not exist: {economycore_file_path}")
+        return type_categories
+    
+    try:
+        tree = ET.parse(economycore_file_path)
+        root = tree.getroot()
+        
+        # Find all type files referenced in ce elements
+        mission_path = Path(economycore_file_path).parent
+        
+        for ce_element in root.findall('.//ce'):
+            ce_folder_attr = ce_element.get('folder')
+            if not ce_folder_attr:
+                continue
+            
+            ce_folder_attr = ce_folder_attr.replace('\\', '/').strip('/')
+            ce_folder_path = mission_path / ce_folder_attr
+            
+            for file_element in ce_element.findall('.//file'):
+                file_type = file_element.get('type')
+                file_name = file_element.get('name')
+                if file_type == 'types' and file_name:
+                    full_file_path = ce_folder_path / file_name
+                    if full_file_path.exists():
+                        try:
+                            type_tree = ET.parse(full_file_path)
+                            type_root = type_tree.getroot()
+                            
+                            # Find all type elements
+                            for type_elem in type_root.findall('.//type'):
+                                type_name = type_elem.get('name')
+                                if not type_name:
+                                    continue
+                                
+                                # Find category elements
+                                categories = []
+                                for cat_elem in type_elem.findall('category'):
+                                    cat_name = cat_elem.get('name')
+                                    if cat_name:
+                                        categories.append(cat_name)
+                                
+                                if categories:
+                                    type_categories[type_name] = categories
+                        except Exception as e:
+                            print(f"Error parsing type file {full_file_path}: {e}")
+                            continue
+        
+        print(f"Loaded categories for {len(type_categories)} types")
+    except Exception as e:
+        import traceback
+        print(f"Error loading type categories: {e}")
+        traceback.print_exc()
+    
+    return type_categories
+
+
+def load_event_spawns(event_spawns_file_path, economycore_file_path):
+    """
+    Load event spawns from cfgeventspawns.xml and match with categories from cfgeconomycore.xml.
+    Returns list of event spawn dictionaries with position and category data.
+    """
+    if not event_spawns_file_path or not Path(event_spawns_file_path).exists():
+        print(f"Event spawns XML file does not exist: {event_spawns_file_path}")
+        return []
+    
+    # Load type categories
+    type_categories = load_type_categories(economycore_file_path)
+    
+    try:
+        tree = ET.parse(event_spawns_file_path)
+        root = tree.getroot()
+        
+        print(f"Root element: {root.tag}")
+        print(f"Root attributes: {root.attrib}")
+        print(f"Root children: {[child.tag for child in root]}")
+        
+        event_spawns = []
+        
+        # Find all event elements - try multiple approaches
+        event_elements = root.findall('.//event')
+        if len(event_elements) == 0:
+            event_elements = root.findall('//event')
+        if len(event_elements) == 0:
+            event_elements = root.findall('event')
+        if len(event_elements) == 0:
+            # Try case-insensitive search
+            for elem in root.iter():
+                if elem.tag.lower() == 'event':
+                    event_elements.append(elem)
+        
+        print(f"Found {len(event_elements)} event elements")
+        
+        # If still no events found, print all element tags for debugging
+        if len(event_elements) == 0:
+            print("No event elements found. All element tags in file:")
+            for elem in root.iter():
+                print(f"  - {elem.tag} (attributes: {elem.attrib})")
+        
+        for event in event_elements:
+            event_name = event.get('name', '')
+            if not event_name:
+                print(f"Skipping event: no name attribute")
+                continue
+            
+            # Match event name with type name to get category (do this once per event)
+            categories = type_categories.get(event_name, [])
+            
+            # Find ALL pos elements for this event - each pos is a separate spawn location
+            all_pos_elems = event.findall('pos')
+            
+            if len(all_pos_elems) == 0:
+                print(f"Event '{event_name}': no pos elements found")
+                continue
+            
+            # Process each pos element as a separate spawn location
+            for pos_idx, pos_elem in enumerate(all_pos_elems):
+                # Valid pos elements have x, z, and a attributes (no text content)
+                x_attr = pos_elem.get('x')
+                z_attr = pos_elem.get('z')
+                a_attr = pos_elem.get('a')  # Angle attribute (not used for position, but part of valid format)
+                
+                # Skip if required attributes are missing
+                if x_attr is None or z_attr is None:
+                    print(f"Event '{event_name}' pos[{pos_idx}]: missing required x or z attribute, skipping")
+                    continue
+                
+                try:
+                    x = float(x_attr)
+                    z = float(z_attr)
+                    y = 0.0  # Y coordinate is not provided in pos elements, default to 0
+                except (ValueError, TypeError):
+                    print(f"Event '{event_name}' pos[{pos_idx}]: invalid x or z value (x='{x_attr}', z='{z_attr}'), skipping")
+                    continue
+                
+                # Skip if position is invalid (all zeros)
+                if x == 0.0 and z == 0.0:
+                    print(f"Event '{event_name}' pos[{pos_idx}]: invalid position (x and z are both zero), skipping")
+                    continue
+                
+                # Store the pos element XML (not the entire event) for this specific location
+                pos_xml_string = ET.tostring(pos_elem, encoding='unicode')
+                pos_xml_string = pos_xml_string.strip()
+                
+                event_data = {
+                    'id': len(event_spawns),
+                    'name': event_name,
+                    'x': x,
+                    'y': y,
+                    'z': z,  # Frontend will reverse this
+                    'categories': categories,
+                    'xml': pos_xml_string  # Store just the pos element XML
+                }
+                
+                event_spawns.append(event_data)
+        
+        print(f"Successfully loaded {len(event_spawns)} event spawns")
+        matched_count = sum(1 for e in event_spawns if e.get('categories'))
+        print(f"Matched {matched_count} event spawns with categories")
+        return event_spawns
+    except Exception as e:
+        import traceback
+        print(f"Error loading event spawns: {e}")
+        traceback.print_exc()
+        return []
+
+
+@app.route('/api/event-spawns')
+def get_event_spawns():
+    """Get event spawn data from cfgeventspawns.xml."""
+    try:
+        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        # Look for cfgeventspawns.xml
+        event_spawns_file = mission_path / 'cfgeventspawns.xml'
+        if not event_spawns_file.exists():
+            return jsonify({
+                'success': True,
+                'event_spawns': [],
+                'count': 0,
+                'message': f'cfgeventspawns.xml not found at: {event_spawns_file}'
+            })
+        
+        # Look for cfgeconomycore.xml for category matching
+        economycore_file = mission_path / 'cfgeconomycore.xml'
+        economycore_file_path = str(economycore_file) if economycore_file.exists() else None
+        
+        print(f"Loading event spawns from: {event_spawns_file}")
+        event_spawns = load_event_spawns(str(event_spawns_file), economycore_file_path)
+        
+        # Add diagnostic information
+        diagnostic = {
+            'file_path': str(event_spawns_file),
+            'file_exists': event_spawns_file.exists(),
+            'economycore_file_path': economycore_file_path,
+            'economycore_exists': economycore_file.exists() if economycore_file else False,
+            'event_spawns_count': len(event_spawns)
+        }
+        
+        return jsonify({
+            'success': True,
+            'event_spawns': event_spawns,
+            'count': len(event_spawns),
+            'diagnostic': diagnostic
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print(f"Map Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")

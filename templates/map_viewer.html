@@ -31,6 +31,12 @@
                         <label>
                             <input type="checkbox" id="showMarkers" checked> Show Markers
                         </label>
+                        <label>
+                            <input type="checkbox" id="showEventSpawns" checked> Show Event Spawns
+                        </label>
+                        <label>
+                            <input type="checkbox" id="showEffectAreas" checked> Show Effect Areas
+                        </label>
                         <button id="clearSelectionBtn" class="btn">Clear Selection</button>
                         <button id="copySelectedXmlBtn" class="btn btn-primary">Copy Selected XML</button>
                     </div>
@@ -40,6 +46,9 @@
                         <input type="file" id="backgroundImage" accept="image/*" style="display: none;">
                         <button id="loadImageBtn" class="btn">Load Image</button>
                         <button id="clearImageBtn" class="btn">Clear Image</button>
+                        <label>
+                            <input type="checkbox" id="showBackgroundImage" checked> Show Background Image
+                        </label>
                     </div>
                     
                     <div class="control-group" id="imageDimensionsGroup" style="display: none;">
@@ -84,6 +93,31 @@
                     </div>
                     <div id="activeFiltersList" class="active-filters-list">
                         <!-- Active filters will be displayed here -->
+                    </div>
+                </div>
+                
+                <!-- Event Spawn Filter Section -->
+                <div class="filter-section" id="eventSpawnFilterSection" style="display: none;">
+                    <h3>Event Spawn Filters</h3>
+                    <div class="filter-builder">
+                        <div class="filter-input-group">
+                            <label for="eventSpawnFilterCriteria">Criteria:</label>
+                            <select id="eventSpawnFilterCriteria" class="filter-select">
+                                <option value="isOneOf">Is One Of</option>
+                                <option value="isNotOneOf">Is Not One Of</option>
+                            </select>
+                            
+                            <label for="eventSpawnFilterTypeSelect">Event Spawn Type:</label>
+                            <select id="eventSpawnFilterTypeSelect" class="filter-select filter-value-select" multiple>
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            
+                            <button id="addEventSpawnFilterBtn" class="btn btn-small">Add Filter</button>
+                            <button id="clearAllEventSpawnFiltersBtn" class="btn btn-small">Clear All</button>
+                        </div>
+                    </div>
+                    <div id="activeEventSpawnFiltersList" class="active-filters-list">
+                        <!-- Active event spawn filters will be displayed here -->
                     </div>
                 </div>
                 

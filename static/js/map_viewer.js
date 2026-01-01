@@ -7,11 +7,17 @@ let selectedMarkers = new Set();
 let visibleMarkers = new Set(); // For filtering
 let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf'|'isNotOneOf', values: ['name1', 'name2'] }
 let effectAreas = []; // Effect areas from cfgeffectareas.json
+let eventSpawns = []; // Event spawns from cfgeventspawns.xml
+let visibleEventSpawns = new Set(); // For filtering event spawns
 let backgroundImage = null;
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
 let showGrid = true;
 let showMarkers = true;
+let showEventSpawns = true;
+let showEffectAreas = true;
+let showBackgroundImage = true;
+let activeEventSpawnFilters = []; // Separate filters for event spawns
 let missionDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -602,6 +608,10 @@ function drawBackgroundImage() {
 
 // Draw effect area circles
 function drawEffectAreas() {
+    if (!showEffectAreas) {
+        return;
+    }
+    
     if (effectAreas.length === 0) {
         return;
     }
@@ -666,6 +676,52 @@ function drawMarkers() {
     });
 }
 
+// Draw event spawn markers
+function drawEventSpawns() {
+    if (!showEventSpawns) {
+        console.log('Event spawns hidden (showEventSpawns = false)');
+        return;
+    }
+    
+    if (eventSpawns.length === 0) {
+        console.log('No event spawns to draw');
+        return;
+    }
+    
+    let drawnCount = 0;
+    eventSpawns.forEach((spawn, index) => {
+        // If filters are active (visibleEventSpawns has items), only show items in the set
+        // If no filters (visibleEventSpawns is empty), show all items
+        if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(index)) {
+            return; // Skip hidden event spawns
+        }
+        
+        const screenPos = worldToScreen(spawn.x, spawn.z);
+        
+        // Skip if position is invalid
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
+            return;
+        }
+        
+        const isHovered = hoveredMarkerIndex === index + markers.length; // Offset by markers length
+        
+        // Draw event spawn marker in purple color to distinguish from regular markers
+        ctx.fillStyle = isHovered ? '#ff00ff' : '#9900cc';
+        ctx.strokeStyle = isHovered ? '#cc00cc' : '#7700aa';
+        ctx.lineWidth = isHovered ? 3 : 2;
+        
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        drawnCount++;
+    });
+    
+    if (drawnCount > 0) {
+        console.log(`Drew ${drawnCount} event spawn markers`);
+    }
+}
+
 // Format a value for tooltip display (handles arrays/lists)
 function formatTooltipValue(value) {
     if (value === null || value === undefined) {
@@ -699,11 +755,26 @@ function formatTooltipValue(value) {
 
 // Draw tooltip
 function drawTooltip() {
-    if (hoveredMarkerIndex < 0 || hoveredMarkerIndex >= markers.length) {
+    if (hoveredMarkerIndex < 0) {
         return;
     }
     
-    const marker = markers[hoveredMarkerIndex];
+    // Check if hovering over event spawn (offset by markers.length)
+    let marker, isEventSpawn;
+    if (hoveredMarkerIndex >= markers.length) {
+        const eventSpawnIndex = hoveredMarkerIndex - markers.length;
+        if (eventSpawnIndex >= eventSpawns.length) {
+            return;
+        }
+        marker = eventSpawns[eventSpawnIndex];
+        isEventSpawn = true;
+    } else {
+        if (hoveredMarkerIndex >= markers.length) {
+            return;
+        }
+        marker = markers[hoveredMarkerIndex];
+        isEventSpawn = false;
+    }
     const padding = 8;
     const lineHeight = 18;
     const fontSize = 12;
@@ -774,6 +845,15 @@ function drawTooltip() {
         lines.push('Usage:');
         uniqueUsageNames.forEach(name => {
             lines.push(`  • ${name}`);
+        });
+    }
+    
+    // Display categories for event spawns
+    if (isEventSpawn && marker.categories && Array.isArray(marker.categories) && marker.categories.length > 0) {
+        lines.push('');
+        lines.push('Category:');
+        marker.categories.forEach(cat => {
+            lines.push(`  • ${cat}`);
         });
     }
     
@@ -935,29 +1015,42 @@ function draw() {
     }
     needsRedraw = false;
     
-    // Draw background image to background canvas
-    if (useWebGL && gl && backgroundCanvas && backgroundImage) {
-        // Clear and draw background on WebGL canvas
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, canvasWidth, canvasHeight);
-        gl.clearColor(1.0, 1.0, 1.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        drawBackgroundImageWebGL(); // Draw background on WebGL canvas
-    } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
-        // Clear and draw background on 2D canvas
-        backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-        const oldCtx = ctx;
-        ctx = backgroundCtx; // Temporarily use background context
-        drawBackgroundImage();
-        ctx = oldCtx; // Restore main context
+    // Draw background image to background canvas (only if showBackgroundImage is true)
+    if (showBackgroundImage) {
+        if (useWebGL && gl && backgroundCanvas && backgroundImage) {
+            // Clear and draw background on WebGL canvas
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            drawBackgroundImageWebGL(); // Draw background on WebGL canvas
+        } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
+            // Clear and draw background on 2D canvas
+            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            const oldCtx = ctx;
+            ctx = backgroundCtx; // Temporarily use background context
+            drawBackgroundImage();
+            ctx = oldCtx; // Restore main context
+        }
+    } else {
+        // Hide background image by clearing the background canvas
+        if (useWebGL && gl && backgroundCanvas) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        } else if (backgroundCtx && backgroundCanvas) {
+            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        }
     }
     
     // Clear main canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw grid, markers, effect areas, marquee on main canvas
+    // Draw grid, markers, event spawns, effect areas, marquee on main canvas
     drawGrid();
     drawMarkers();
+    drawEventSpawns(); // Draw event spawn markers (after regular markers)
     drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
     drawMarquee();
     drawTooltip();
@@ -1138,6 +1231,7 @@ function updateHoveredMarker(screenX, screenY) {
     let newHoveredIndex = -1;
     let minDistance = Infinity;
     
+    // Check regular markers
     markers.forEach((marker, index) => {
         if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
             return; // Skip hidden markers
@@ -1153,6 +1247,25 @@ function updateHoveredMarker(screenX, screenY) {
             newHoveredIndex = index;
         }
     });
+    
+    // Check event spawns (offset index by markers.length)
+    if (showEventSpawns) {
+        eventSpawns.forEach((spawn, index) => {
+            if (!visibleEventSpawns.has(index) && visibleEventSpawns.size > 0) {
+                return; // Skip hidden event spawns
+            }
+            
+            const screenPos = worldToScreen(spawn.x, spawn.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                minDistance = distance;
+                newHoveredIndex = index + markers.length; // Offset by markers length
+            }
+        });
+    }
     
     if (hoveredMarkerIndex !== newHoveredIndex) {
         hoveredMarkerIndex = newHoveredIndex;
@@ -1272,6 +1385,56 @@ async function loadEffectAreas() {
     }
 }
 
+// Load event spawns from API
+async function loadEventSpawns() {
+    if (!missionDir) {
+        console.log('No mission directory set, skipping event spawns load');
+        return;
+    }
+    
+    try {
+        console.log(`Loading event spawns from: ${missionDir}`);
+        const response = await fetch(`/api/event-spawns?mission_dir=${encodeURIComponent(missionDir)}`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('Event spawns API response:', data);
+        
+        if (data.success) {
+            eventSpawns = data.event_spawns || [];
+            console.log(`Loaded ${eventSpawns.length} event spawns:`, eventSpawns);
+            if (data.diagnostic) {
+                console.log('Event spawns diagnostic:', data.diagnostic);
+            }
+            if (eventSpawns.length > 0) {
+                console.log('First event spawn:', eventSpawns[0]);
+                // Show event spawn filter section and populate dropdown
+                const eventSpawnFilterSection = document.getElementById('eventSpawnFilterSection');
+                if (eventSpawnFilterSection) {
+                    eventSpawnFilterSection.style.display = 'block';
+                    populateFilterEventSpawnTypeDropdown();
+                }
+            } else if (data.message) {
+                console.warn('No event spawns loaded:', data.message);
+            } else {
+                console.warn('No event spawns found. Check backend console for details.');
+            }
+            // Apply filters to event spawns
+            applyFilters();
+            draw(); // Redraw to show event spawns
+        } else {
+            console.error('Error loading event spawns:', data.error || data.message);
+            eventSpawns = [];
+        }
+    } catch (error) {
+        console.error('Error loading event spawns:', error);
+        eventSpawns = [];
+    }
+}
+
 // Load groups from API
 async function loadGroups() {
     const dir = document.getElementById('missionDir').value.trim();
@@ -1300,8 +1463,9 @@ async function loadGroups() {
         markers = data.groups || [];
         selectedMarkers.clear();
         
-        // Load effect areas after loading markers
+        // Load effect areas and event spawns after loading markers
         await loadEffectAreas();
+        await loadEventSpawns();
         
         // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
@@ -1609,6 +1773,36 @@ function populateFilterGroupNameDropdown() {
     });
 }
 
+// Get all unique event spawn type names
+function getAllEventSpawnTypeNames() {
+    const typeNames = new Set();
+    eventSpawns.forEach(spawn => {
+        if (spawn.name) {
+            typeNames.add(spawn.name);
+        }
+    });
+    return Array.from(typeNames).sort();
+}
+
+// Populate filter event spawn type dropdown
+function populateFilterEventSpawnTypeDropdown() {
+    const select = document.getElementById('eventSpawnFilterTypeSelect');
+    if (!select) {
+        console.warn('eventSpawnFilterTypeSelect element not found');
+        return;
+    }
+    
+    select.innerHTML = '';
+    const typeNames = getAllEventSpawnTypeNames();
+    
+    typeNames.forEach(typeName => {
+        const option = document.createElement('option');
+        option.value = typeName;
+        option.textContent = typeName;
+        select.appendChild(option);
+    });
+}
+
 // Filter group name dropdown based on search input
 function filterGroupNameDropdown() {
     const input = document.getElementById('filterGroupNameInput');
@@ -1631,7 +1825,9 @@ function filterGroupNameDropdown() {
 // Apply filters to markers
 function applyFilters() {
     visibleMarkers.clear();
+    visibleEventSpawns.clear();
     
+    // Apply filters to group markers
     if (activeFilters.length === 0) {
         // No filters - show all markers
         markers.forEach((_, index) => visibleMarkers.add(index));
@@ -1702,6 +1898,50 @@ function applyFilters() {
         });
     }
     
+    // Apply filters to event spawns (separate from group marker filters)
+    if (activeEventSpawnFilters.length === 0) {
+        // No filters - show all event spawns
+        eventSpawns.forEach((_, index) => visibleEventSpawns.add(index));
+    } else {
+        // Apply filters - use OR logic: event spawn matches if it matches ANY filter
+        eventSpawns.forEach((spawn, index) => {
+            let matches = false; // Start with false, use OR logic
+            
+            // Event spawn matches if it matches ANY filter
+            for (const filter of activeEventSpawnFilters) {
+                let hasMatch = false;
+                
+                if (filter.type === 'eventSpawnType') {
+                    // Filter by event spawn type name
+                    const spawnName = spawn.name ? spawn.name.trim() : '';
+                    if (filter.values && filter.values.length > 0) {
+                        hasMatch = filter.values.some(typeName => 
+                            typeName && spawnName === String(typeName).trim()
+                        );
+                    }
+                }
+                
+                // Apply filter criteria
+                let filterMatches = false;
+                if (filter.criteria === 'isOneOf') {
+                    filterMatches = hasMatch;
+                } else if (filter.criteria === 'isNotOneOf') {
+                    filterMatches = !hasMatch;
+                }
+                
+                // OR logic: event spawn matches if it matches ANY filter
+                matches = matches || filterMatches;
+                
+                // Short-circuit if we found a match
+                if (matches) break;
+            }
+            
+            if (matches) {
+                visibleEventSpawns.add(index);
+            }
+        });
+    }
+    
     draw();
 }
 
@@ -1712,6 +1952,11 @@ function updateFilterTypeUI() {
     const groupNameInput = document.getElementById('filterGroupNameInput');
     const groupNameSelect = document.getElementById('filterGroupNameSelect');
     const valueLabel = document.getElementById('filterValueLabel');
+    
+    if (!usageSelect || !groupNameInput || !groupNameSelect || !valueLabel) {
+        console.warn('Filter UI elements not found');
+        return;
+    }
     
     if (filterType === 'usage') {
         valueLabel.textContent = 'Usage:';
@@ -1797,6 +2042,92 @@ function clearAllFilters() {
     activeFilters = [];
     updateFilterUI();
     applyFilters();
+}
+
+// Add event spawn filter
+function addEventSpawnFilter() {
+    const criteria = document.getElementById('eventSpawnFilterCriteria').value;
+    
+    if (!criteria) {
+        alert('Please select a criteria');
+        return;
+    }
+    
+    const select = document.getElementById('eventSpawnFilterTypeSelect');
+    const selectedOptions = Array.from(select.selectedOptions);
+    if (selectedOptions.length === 0) {
+        alert('Please select at least one event spawn type');
+        return;
+    }
+    
+    const values = selectedOptions.map(opt => opt.value);
+    select.selectedIndex = -1;
+    
+    // Check if filter already exists
+    const exists = activeEventSpawnFilters.some(f => {
+        if (f.criteria !== criteria) return false;
+        return f.values.length === values.length &&
+               f.values.every(name => values.includes(name)) &&
+               values.every(name => f.values.includes(name));
+    });
+    
+    if (exists) {
+        alert('This filter already exists');
+        return;
+    }
+    
+    // Add filter
+    activeEventSpawnFilters.push({
+        type: 'eventSpawnType',
+        criteria: criteria,
+        values: values
+    });
+    
+    // Update UI and apply filters
+    updateEventSpawnFilterUI();
+    applyFilters();
+}
+
+// Remove event spawn filter
+function removeEventSpawnFilter(index) {
+    activeEventSpawnFilters.splice(index, 1);
+    updateEventSpawnFilterUI();
+    applyFilters();
+}
+
+// Clear all event spawn filters
+function clearAllEventSpawnFilters() {
+    activeEventSpawnFilters = [];
+    updateEventSpawnFilterUI();
+    applyFilters();
+}
+
+// Update event spawn filter UI
+function updateEventSpawnFilterUI() {
+    const filtersList = document.getElementById('activeEventSpawnFiltersList');
+    if (!filtersList) return;
+    
+    filtersList.innerHTML = '';
+    
+    if (activeEventSpawnFilters.length === 0) {
+        filtersList.innerHTML = '<p style="color: #666; font-size: 0.9em;">No active filters</p>';
+        return;
+    }
+    
+    activeEventSpawnFilters.forEach((filter, index) => {
+        const filterDiv = document.createElement('div');
+        filterDiv.className = 'active-filter-item';
+        
+        const criteriaText = filter.criteria === 'isOneOf' ? 'Is One Of' : 'Is Not One Of';
+        const valuesText = filter.values.join(', ');
+        
+        filterDiv.innerHTML = `
+            <span class="filter-text">Event Spawn Type ${criteriaText}: ${valuesText}</span>
+            <button class="btn-remove-filter" onclick="removeEventSpawnFilter(${index})" title="Remove filter">×</button>
+        `;
+        
+        filtersList.appendChild(filterDiv);
+    });
 }
 
 // Update filter UI
@@ -1922,6 +2253,21 @@ document.addEventListener('DOMContentLoaded', () => {
         showMarkers = e.target.checked;
         draw();
     });
+    
+    document.getElementById('showEventSpawns').addEventListener('change', (e) => {
+        showEventSpawns = e.target.checked;
+        draw();
+    });
+    
+    document.getElementById('showEffectAreas').addEventListener('change', (e) => {
+        showEffectAreas = e.target.checked;
+        draw();
+    });
+    
+    document.getElementById('showBackgroundImage').addEventListener('change', (e) => {
+        showBackgroundImage = e.target.checked;
+        draw();
+    });
     document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
     document.getElementById('copySelectedXmlBtn').addEventListener('click', copySelectedXml);
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
@@ -1931,6 +2277,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Filter event listeners
     document.getElementById('addFilterBtn').addEventListener('click', addFilter);
     document.getElementById('clearAllFiltersBtn').addEventListener('click', clearAllFilters);
+    
+    // Event spawn filter buttons
+    document.getElementById('addEventSpawnFilterBtn').addEventListener('click', addEventSpawnFilter);
+    document.getElementById('clearAllEventSpawnFiltersBtn').addEventListener('click', clearAllEventSpawnFilters);
     document.getElementById('filterType').addEventListener('change', updateFilterTypeUI);
     document.getElementById('filterGroupNameInput').addEventListener('input', filterGroupNameDropdown);
     
