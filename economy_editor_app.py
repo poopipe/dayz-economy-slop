@@ -2157,6 +2157,29 @@ def get_reference_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/cfglimitsdefinition/save', methods=['POST'])
+def save_cfglimitsdefinition():
+    """Save cfglimitsdefinition.xml file with current database state."""
+    try:
+        data = request.json
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'mission_dir is required'}), 400
+        
+        result = update_cfglimitsdefinition_xml(mission_dir, db_file_path)
+        
+        if result.get('success'):
+            return jsonify({'success': True, 'message': 'cfglimitsdefinition.xml updated successfully'})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', 'Failed to update cfglimitsdefinition.xml')}), 500
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 def reconstruct_xml_element(data_dict, element_tag='type'):
     """Reconstruct an XML element from normalized data."""
     # Set name as attribute if present
@@ -2416,6 +2439,7 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
     exported_count = 0
     error_count = 0
     errors = []
+    exported_files = []
     
     try:
         root = ET.Element('types')
@@ -2431,6 +2455,7 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
             tree.write(f, encoding='utf-8', xml_declaration=False)
         
         exported_count = 1
+        exported_files.append('db/types.xml')
     except Exception as e:
         error_count = 1
         errors.append({'file': str(xml_file), 'error': str(e)})
@@ -2439,7 +2464,8 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         'success': True,
         'exported_count': exported_count,
         'error_count': error_count,
-        'errors': errors
+        'errors': errors,
+        'exported_files': exported_files
     }
 
 
@@ -2645,7 +2671,8 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
         'exported_count': exported_count,
         'error_count': error_count,
         'errors': errors,
-        'cfgeconomycore_updated': cfgeconomycore_updated
+        'cfgeconomycore_updated': cfgeconomycore_updated,
+        'exported_files': exported_files
     }
 
 
@@ -3331,10 +3358,13 @@ def export_to_xml():
     """Export database to XML files."""
     try:
         data = request.json
-        mission_dir = data.get('mission_dir', current_mission_dir)
+        mission_dir = data.get('mission_dir')
         export_by_itemclass = data.get('export_by_itemclass', False)
         export_subfolder = data.get('export_subfolder', 'exported-types')
         db_file_path = data.get('db_file_path')
+        
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
         
         result = export_database_to_xml(mission_dir, export_by_itemclass, export_subfolder, db_file_path)
         

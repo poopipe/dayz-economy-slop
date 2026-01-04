@@ -93,12 +93,18 @@ function setupEventListeners() {
     document.getElementById('closeItemtagsBtn').addEventListener('click', closeItemtagsModal);
     const closeCategoriesBtn = document.getElementById('closeCategoriesBtn');
     if (closeCategoriesBtn) closeCategoriesBtn.addEventListener('click', closeCategoriesManagementModal);
+    const saveCategoriesToFileBtn = document.getElementById('saveCategoriesToFileBtn');
+    if (saveCategoriesToFileBtn) saveCategoriesToFileBtn.addEventListener('click', saveCategoriesToFile);
     
     const closeUsageflagsBtn = document.getElementById('closeUsageflagsBtn');
     if (closeUsageflagsBtn) closeUsageflagsBtn.addEventListener('click', closeUsageflagsManagementModal);
+    const saveUsageflagsToFileBtn = document.getElementById('saveUsageflagsToFileBtn');
+    if (saveUsageflagsToFileBtn) saveUsageflagsToFileBtn.addEventListener('click', saveUsageflagsToFile);
     
     const closeValueflagsBtn = document.getElementById('closeValueflagsBtn');
     if (closeValueflagsBtn) closeValueflagsBtn.addEventListener('click', closeValueflagsManagementModal);
+    const saveValueflagsToFileBtn = document.getElementById('saveValueflagsToFileBtn');
+    if (saveValueflagsToFileBtn) saveValueflagsToFileBtn.addEventListener('click', saveValueflagsToFile);
     document.getElementById('applyColumnVisibilityBtn').addEventListener('click', applyColumnVisibility);
     document.getElementById('cancelColumnVisibilityBtn').addEventListener('click', closeColumnVisibilityModal);
     document.getElementById('showAllColumnsBtn').addEventListener('click', showAllColumns);
@@ -1211,9 +1217,8 @@ async function saveValueflags() {
             }
         });
         
-        // Update cell displays immediately
-        updateCellDisplays(elementKeys, '_valueflags');
-        updateCellDisplays(elementKeys, '_valueflag_names');
+        // Update cell displays immediately - use the table field name
+        updateCellDisplays(elementKeys, 'valueflags');
         
         updateStatus(`Valueflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1347,41 +1352,8 @@ async function saveUsageflags() {
             }
         });
         
-        // Update cell displays immediately - update all usageflags-related cells
-        elementKeys.forEach(key => {
-            const record = tableData.find(r => r._element_key === key);
-            if (!record) return;
-            
-            // Find all cells with matching element key and usageflags field name
-            const allCells = document.querySelectorAll(`td[data-element-key][data-field-name="usageflags"]`);
-            allCells.forEach(cell => {
-                const cellElementKey = cell.getAttribute('data-element-key');
-                if (cellElementKey === key) {
-                    // Get the column key from the table structure to determine which value to show
-                    const row = cell.parentElement;
-                    const cellIndex = Array.from(row.children).indexOf(cell);
-                    const headerRow = document.querySelector('thead tr');
-                    if (headerRow && headerRow.children[cellIndex]) {
-                        const headerCell = headerRow.children[cellIndex];
-                        const headerText = headerCell.textContent.trim();
-                        
-                        // Determine which value to show - prefer _names for display
-                        let displayValue;
-                        if (headerText === 'Usage Flags' || record._usageflag_names !== undefined) {
-                            displayValue = formatDisplayValue(record._usageflag_names || record._usageflags, '_usageflag_names');
-                        } else {
-                            displayValue = formatDisplayValue(record._usageflags, '_usageflags');
-                        }
-                        
-                        const input = cell.querySelector('input');
-                        if (input) {
-                            cell.removeChild(input);
-                        }
-                        cell.textContent = displayValue;
-                    }
-                }
-            });
-        });
+        // Update cell displays immediately - use the table field name
+        updateCellDisplays(elementKeys, 'usageflags');
         
         updateStatus(`Usageflags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1520,10 +1492,8 @@ async function saveFlags() {
             }
         });
         
-        // Update cell displays immediately
+        // Update cell displays immediately - use the table field name
         updateCellDisplays(elementKeys, 'flags');
-        updateCellDisplays(elementKeys, '_flags');
-        updateCellDisplays(elementKeys, '_flag_names');
         
         updateStatus(`Flags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1657,41 +1627,8 @@ async function saveCategories() {
             }
         });
         
-        // Update cell displays immediately - update all categories-related cells
-        elementKeys.forEach(key => {
-            const record = tableData.find(r => r._element_key === key);
-            if (!record) return;
-            
-            // Find all cells with matching element key and categories field name
-            const allCells = document.querySelectorAll(`td[data-element-key][data-field-name="categories"]`);
-            allCells.forEach(cell => {
-                const cellElementKey = cell.getAttribute('data-element-key');
-                if (cellElementKey === key) {
-                    // Get the column key from the table structure to determine which value to show
-                    const row = cell.parentElement;
-                    const cellIndex = Array.from(row.children).indexOf(cell);
-                    const headerRow = document.querySelector('thead tr');
-                    if (headerRow && headerRow.children[cellIndex]) {
-                        const headerCell = headerRow.children[cellIndex];
-                        const headerText = headerCell.textContent.trim();
-                        
-                        // Determine which value to show - prefer _names for display
-                        let displayValue;
-                        if (headerText === 'Categories' || record._category_names !== undefined) {
-                            displayValue = formatDisplayValue(record._category_names || record._categories, '_category_names');
-                        } else {
-                            displayValue = formatDisplayValue(record._categories, '_categories');
-                        }
-                        
-                        const input = cell.querySelector('input');
-                        if (input) {
-                            cell.removeChild(input);
-                        }
-                        cell.textContent = displayValue;
-                    }
-                }
-            });
-        });
+        // Update cell displays immediately - use the table field name
+        updateCellDisplays(elementKeys, 'categories');
         
         updateStatus(`Categories updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1814,9 +1751,8 @@ async function saveItemclass() {
             }
         });
         
-        // Update cell displays immediately
-        updateCellDisplays(elementKeys, '_itemclass_id');
-        updateCellDisplays(elementKeys, '_itemclass_name');
+        // Update cell displays immediately - use the table field name
+        updateCellDisplays(elementKeys, 'itemclass');
         
         updateStatus(`Itemclass updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -1950,9 +1886,8 @@ async function saveItemtags() {
             }
         });
         
-        // Update cell displays immediately
-        updateCellDisplays(elementKeys, '_itemtags');
-        updateCellDisplays(elementKeys, '_itemtag_names');
+        // Update cell displays immediately - use the table field name
+        updateCellDisplays(elementKeys, 'itemtags');
         
         updateStatus(`Itemtags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
     } catch (error) {
@@ -2575,33 +2510,52 @@ function updateCellDisplays(elementKeys, fieldName) {
         const record = tableData.find(r => r._element_key === key);
         if (!record) return;
         
-        // Map table field names to record field names
+        // Map table field names to record field names and determine which columns to update
         let recordFieldName = fieldName;
+        let columnsToUpdate = [fieldName]; // Default: update the specified field name
+        
         if (fieldName === 'usageflags') {
             // For usageflags, prefer _usageflag_names (string) for display, but also check _usageflags (array)
             recordFieldName = record._usageflag_names !== undefined ? '_usageflag_names' : '_usageflags';
+            // Update both the simplified field name and any column keys that match
+            columnsToUpdate = ['usageflags', '_usageflag_names', '_usageflags'];
         } else if (fieldName === 'categories') {
             // For categories, prefer _category_names (string) for display, but also check _categories (array)
             recordFieldName = record._category_names !== undefined ? '_category_names' : '_categories';
+            columnsToUpdate = ['categories', '_category_names', '_categories'];
         } else if (fieldName === 'valueflags') {
             recordFieldName = record._valueflag_names !== undefined ? '_valueflag_names' : '_valueflags';
+            columnsToUpdate = ['valueflags', '_valueflag_names', '_valueflags'];
         } else if (fieldName === 'flags') {
             recordFieldName = record._flag_names !== undefined ? '_flag_names' : '_flags';
+            columnsToUpdate = ['flags', '_flag_names', '_flags'];
         } else if (fieldName === 'itemclass') {
             recordFieldName = record._itemclass_name !== undefined ? '_itemclass_name' : '_itemclass_id';
+            columnsToUpdate = ['itemclass', '_itemclass_name', '_itemclass_id'];
         } else if (fieldName === 'itemtags') {
             recordFieldName = record._itemtag_names !== undefined ? '_itemtag_names' : '_itemtags';
+            columnsToUpdate = ['itemtags', '_itemtag_names', '_itemtags'];
         }
         
         const value = record[recordFieldName];
-        const displayValue = formatDisplayValue(value, recordFieldName);
         
-        // Find all cells with matching element key and field name
+        // Find all cells with matching element key and update all related columns
         const allCells = document.querySelectorAll(`td[data-element-key][data-field-name]`);
         allCells.forEach(cell => {
             const cellElementKey = cell.getAttribute('data-element-key');
             const cellFieldName = cell.getAttribute('data-field-name');
-            if (cellElementKey === key && cellFieldName === fieldName) {
+            if (cellElementKey === key && columnsToUpdate.includes(cellFieldName)) {
+                // Determine the correct display value for this specific column
+                let displayValue;
+                if (cellFieldName === fieldName || cellFieldName.startsWith('_')) {
+                    // For column keys (like '_valueflag_names'), use the record field that matches
+                    const columnRecordField = cellFieldName.startsWith('_') ? cellFieldName : recordFieldName;
+                    displayValue = formatDisplayValue(record[columnRecordField] !== undefined ? record[columnRecordField] : value, columnRecordField);
+                } else {
+                    // For simplified field names (like 'valueflags'), use the mapped record field
+                    displayValue = formatDisplayValue(value, recordFieldName);
+                }
+                
                 // Remove input field if present
                 const input = cell.querySelector('input');
                 if (input) {
@@ -2616,6 +2570,18 @@ function updateCellDisplays(elementKeys, fieldName) {
 async function exportToXML() {
     const exportByItemclass = document.getElementById('exportByItemclass')?.checked || false;
     const exportSubfolder = document.getElementById('exportSubfolder')?.value || 'exported-types';
+    
+    // Get mission_dir from the Mission Directory field
+    const missionDirInput = document.getElementById('missionDir');
+    const missionDir = missionDirInput ? missionDirInput.value.trim() : '';
+    
+    if (!missionDir) {
+        alert('Please fill in the Mission Directory field before exporting.');
+        if (missionDirInput) {
+            missionDirInput.focus();
+        }
+        return;
+    }
     
     let confirmMsg = 'This will export data from the database to XML files.';
     if (exportByItemclass) {
@@ -2637,7 +2603,7 @@ async function exportToXML() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                mission_dir: currentMissionDir || '',
+                mission_dir: missionDir,
                 db_file_path: currentDbFilePath || '',
                 export_by_itemclass: exportByItemclass,
                 export_subfolder: exportSubfolder
@@ -2655,7 +2621,29 @@ async function exportToXML() {
                 statusMsg += ` (${data.error_count} error(s))`;
             }
             updateStatus(statusMsg);
-            alert(`Export complete!\nExported: ${data.exported_count} file(s)`);
+            
+            // Build alert message with file names
+            let alertMsg = `Export complete!\n\nExported ${data.exported_count} file(s):\n`;
+            if (data.exported_files && data.exported_files.length > 0) {
+                data.exported_files.forEach((filename, index) => {
+                    alertMsg += `${index + 1}. ${filename}\n`;
+                });
+            } else {
+                alertMsg += 'No files listed';
+            }
+            
+            if (data.cfgeconomycore_updated) {
+                alertMsg += '\n(cfgeconomycore.xml updated)';
+            }
+            
+            if (data.error_count > 0 && data.errors && data.errors.length > 0) {
+                alertMsg += `\n\nErrors:\n`;
+                data.errors.forEach((error, index) => {
+                    alertMsg += `${index + 1}. ${error.file || 'Unknown'}: ${error.error || 'Unknown error'}\n`;
+                });
+            }
+            
+            alert(alertMsg);
         } else {
             updateStatus('Export failed');
             alert(data.error || 'Failed to export to XML files');
@@ -2958,6 +2946,54 @@ function closeUsageflagsManagementModal() {
     }
 }
 
+async function saveUsageflagsToFile() {
+    try {
+        // Get mission_dir from the Mission Directory field
+        const missionDirInput = document.getElementById('missionDir');
+        const missionDir = missionDirInput ? missionDirInput.value.trim() : '';
+        
+        if (!missionDir) {
+            alert('Please fill in the Mission Directory field before saving.');
+            if (missionDirInput) {
+                missionDirInput.focus();
+            }
+            return;
+        }
+        
+        updateStatus('Saving cfglimitsdefinition.xml...');
+        
+        const response = await fetch('/api/cfglimitsdefinition/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            updateStatus('cfglimitsdefinition.xml saved successfully');
+            alert('cfglimitsdefinition.xml saved successfully');
+        } else {
+            updateStatus('Failed to save cfglimitsdefinition.xml');
+            alert(data.error || 'Failed to save cfglimitsdefinition.xml');
+        }
+    } catch (error) {
+        updateStatus('Failed to save cfglimitsdefinition.xml');
+        console.error('Error saving cfglimitsdefinition.xml:', error);
+        alert(`Error saving cfglimitsdefinition.xml: ${error.message}`);
+    }
+}
+
 async function loadUsageflags() {
     try {
         let url;
@@ -3097,6 +3133,54 @@ function closeValueflagsManagementModal() {
     }
 }
 
+async function saveValueflagsToFile() {
+    try {
+        // Get mission_dir from the Mission Directory field
+        const missionDirInput = document.getElementById('missionDir');
+        const missionDir = missionDirInput ? missionDirInput.value.trim() : '';
+        
+        if (!missionDir) {
+            alert('Please fill in the Mission Directory field before saving.');
+            if (missionDirInput) {
+                missionDirInput.focus();
+            }
+            return;
+        }
+        
+        updateStatus('Saving cfglimitsdefinition.xml...');
+        
+        const response = await fetch('/api/cfglimitsdefinition/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            updateStatus('cfglimitsdefinition.xml saved successfully');
+            alert('cfglimitsdefinition.xml saved successfully');
+        } else {
+            updateStatus('Failed to save cfglimitsdefinition.xml');
+            alert(data.error || 'Failed to save cfglimitsdefinition.xml');
+        }
+    } catch (error) {
+        updateStatus('Failed to save cfglimitsdefinition.xml');
+        console.error('Error saving cfglimitsdefinition.xml:', error);
+        alert(`Error saving cfglimitsdefinition.xml: ${error.message}`);
+    }
+}
+
 async function loadValueflags() {
     try {
         let url;
@@ -3233,6 +3317,54 @@ function closeCategoriesManagementModal() {
     const modal = document.getElementById('categoriesManagementModal');
     if (modal) {
         modal.style.display = 'none';
+    }
+}
+
+async function saveCategoriesToFile() {
+    try {
+        // Get mission_dir from the Mission Directory field
+        const missionDirInput = document.getElementById('missionDir');
+        const missionDir = missionDirInput ? missionDirInput.value.trim() : '';
+        
+        if (!missionDir) {
+            alert('Please fill in the Mission Directory field before saving.');
+            if (missionDirInput) {
+                missionDirInput.focus();
+            }
+            return;
+        }
+        
+        updateStatus('Saving cfglimitsdefinition.xml...');
+        
+        const response = await fetch('/api/cfglimitsdefinition/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                db_file_path: currentDbFilePath || ''
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            updateStatus('cfglimitsdefinition.xml saved successfully');
+            alert('cfglimitsdefinition.xml saved successfully');
+        } else {
+            updateStatus('Failed to save cfglimitsdefinition.xml');
+            alert(data.error || 'Failed to save cfglimitsdefinition.xml');
+        }
+    } catch (error) {
+        updateStatus('Failed to save cfglimitsdefinition.xml');
+        console.error('Error saving cfglimitsdefinition.xml:', error);
+        alert(`Error saving cfglimitsdefinition.xml: ${error.message}`);
     }
 }
 
