@@ -975,26 +975,42 @@ function displayTable() {
         });
     });
     
-    // Add click handlers to editable cells
+    // Use event delegation for editable cells - attach listener to container
+    // This ensures cells remain editable after content updates
+    // Remove any existing listener first to avoid duplicates
+    const existingHandler = container._dblclickHandler;
+    if (existingHandler) {
+        container.removeEventListener('dblclick', existingHandler);
+    }
+    
+    const dblclickHandler = (e) => {
+        const cell = e.target.closest('.editable-cell');
+        if (!cell) return;
+        
+        e.preventDefault();
+        if (cell.classList.contains('valueflags-cell')) {
+            openValueflagsEditor(cell);
+        } else if (cell.classList.contains('usageflags-cell')) {
+            openUsageflagsEditor(cell);
+        } else if (cell.classList.contains('flags-cell')) {
+            openFlagsEditor(cell);
+        } else if (cell.classList.contains('categories-cell')) {
+            openCategoriesEditor(cell);
+        } else if (cell.classList.contains('itemclass-cell')) {
+            openItemclassEditor(cell);
+        } else if (cell.classList.contains('itemtags-cell')) {
+            openItemtagsEditor(cell);
+        } else {
+            makeCellEditable(cell);
+        }
+    };
+    
+    container.addEventListener('dblclick', dblclickHandler);
+    container._dblclickHandler = dblclickHandler; // Store reference for cleanup
+    
+    // Set styling for all editable cells
     const editableCells = container.querySelectorAll('.editable-cell');
     editableCells.forEach(cell => {
-        cell.addEventListener('dblclick', () => {
-            if (cell.classList.contains('valueflags-cell')) {
-                openValueflagsEditor(cell);
-            } else if (cell.classList.contains('usageflags-cell')) {
-                openUsageflagsEditor(cell);
-            } else if (cell.classList.contains('flags-cell')) {
-                openFlagsEditor(cell);
-            } else if (cell.classList.contains('categories-cell')) {
-                openCategoriesEditor(cell);
-            } else if (cell.classList.contains('itemclass-cell')) {
-                openItemclassEditor(cell);
-            } else if (cell.classList.contains('itemtags-cell')) {
-                openItemtagsEditor(cell);
-            } else {
-                makeCellEditable(cell);
-            }
-        });
         cell.style.cursor = 'pointer';
         cell.title = 'Double-click to edit';
     });
@@ -1382,11 +1398,37 @@ function openFlagsEditor(cell) {
     }
     
     // Get current flags - for bulk edit, show intersection of all selected
+    // Flags can be stored as an array of objects with id properties, or as a dictionary
+    const getFlagIdsFromRecord = (record) => {
+        if (!record || !record._flags) return [];
+        
+        // Check if _flags is an array (from database)
+        if (Array.isArray(record._flags)) {
+            return record._flags.map(f => f.id || f);
+        }
+        
+        // Check if _flags is a dictionary/object (from saveFlags)
+        if (typeof record._flags === 'object') {
+            // Convert dictionary to array of flag IDs
+            // Find flags where value is '1' or 1
+            const activeFlagNames = Object.entries(record._flags)
+                .filter(([name, value]) => value === '1' || value === 1)
+                .map(([name]) => name);
+            
+            // Find matching flag IDs from availableFlags
+            return availableFlags
+                .filter(flag => activeFlagNames.includes(flag.name))
+                .map(flag => flag.id);
+        }
+        
+        return [];
+    };
+    
     let currentFlagIds = [];
     if (isBulkEdit) {
         const allFlagIds = selectedKeys.map(key => {
             const record = tableData.find(r => r._element_key === key);
-            return record?._flags?.map(f => f.id) || [];
+            return getFlagIdsFromRecord(record);
         });
         if (allFlagIds.length > 0) {
             currentFlagIds = allFlagIds[0];
@@ -1396,7 +1438,7 @@ function openFlagsEditor(cell) {
         }
     } else {
         const record = tableData.find(r => r._element_key === elementKey);
-        currentFlagIds = record?._flags?.map(f => f.id) || [];
+        currentFlagIds = getFlagIdsFromRecord(record);
     }
     
     const modal = document.getElementById('flagsModal');
@@ -2009,7 +2051,20 @@ function applyDefinedValueFilter(record, column, filterValueIds, criteria, colum
     } else if (columnType === 'usageflags') {
         recordIds = (record._usageflags || []).map(u => u.id);
     } else if (columnType === 'flags') {
-        recordIds = (record._flags || []).map(f => f.id);
+        // Flags can be stored as an array or as a dictionary
+        if (Array.isArray(record._flags)) {
+            recordIds = record._flags.map(f => f.id || f);
+        } else if (record._flags && typeof record._flags === 'object') {
+            // Convert dictionary to array of flag IDs
+            const activeFlagNames = Object.entries(record._flags)
+                .filter(([name, value]) => value === '1' || value === 1)
+                .map(([name]) => name);
+            recordIds = availableFlags
+                .filter(flag => activeFlagNames.includes(flag.name))
+                .map(flag => flag.id);
+        } else {
+            recordIds = [];
+        }
     } else if (columnType === 'categories') {
         recordIds = (record._categories || []).map(c => c.id);
     } else if (columnType === 'tags') {
@@ -2386,14 +2441,19 @@ function makeCellEditable(cell) {
             }
             
             // Update the data in memory for all affected elements
+            // Note: For complex fields (flags, categories, etc.), the backend handles the update
+            // and we should reload the data. For simple text fields, we can update directly.
             elementKeys.forEach(key => {
                 const record = tableData.find(r => r._element_key === key);
                 if (record) {
+                    // Update the field directly - this works for simple text fields
+                    // For complex fields, the backend API will handle the proper structure
                     record[fieldName] = newValue;
                 }
             });
             
             // Update all affected cells in the display immediately
+            // This will find all cells with matching field names and update them
             updateCellDisplays(elementKeys, fieldName);
             
             updateStatus(`Field updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
@@ -2504,64 +2564,137 @@ function formatDisplayValue(value, fieldName) {
 
 /**
  * Update cell displays immediately after data change
+ * This function ensures the table UI reflects the current state of tableData
+ * 
+ * @param {string[]} elementKeys - Array of element keys to update
+ * @param {string} fieldName - The field name that was changed (can be a column key like '_valueflag_names' or simplified like 'valueflags')
  */
 function updateCellDisplays(elementKeys, fieldName) {
+    if (!elementKeys || elementKeys.length === 0) return;
+    
+    // Check if any updated records no longer match the current filters
+    // If so, we need to re-render the table to properly apply filters
+    let needsFullRefresh = false;
+    const filteredData = applyFilters(tableData);
+    const filteredElementKeys = new Set(filteredData.map(r => r._element_key));
+    
+    for (const key of elementKeys) {
+        if (!filteredElementKeys.has(key)) {
+            // This element no longer matches filters - need full refresh
+            needsFullRefresh = true;
+            break;
+        }
+    }
+    
+    // If any element was filtered out, re-render the entire table
+    if (needsFullRefresh) {
+        displayTable();
+        return;
+    }
+    
+    // Map field names to their related column keys
+    // This handles both simplified names (like 'valueflags') and column keys (like '_valueflag_names')
+    const getColumnsToUpdate = (fieldName) => {
+        // If it's already a column key (starts with _), include it and related columns
+        if (fieldName.startsWith('_')) {
+            if (fieldName === '_usageflag_names' || fieldName === '_usageflags') {
+                return ['usageflags', '_usageflag_names', '_usageflags'];
+            } else if (fieldName === '_category_names' || fieldName === '_categories') {
+                return ['categories', '_category_names', '_categories'];
+            } else if (fieldName === '_valueflag_names' || fieldName === '_valueflags') {
+                return ['valueflags', '_valueflag_names', '_valueflags'];
+            } else if (fieldName === '_flag_names' || fieldName === '_flags') {
+                return ['flags', '_flag_names', '_flags'];
+            } else if (fieldName === '_itemclass_name' || fieldName === '_itemclass_id') {
+                return ['itemclass', '_itemclass_name', '_itemclass_id'];
+            } else if (fieldName === '_itemtag_names' || fieldName === '_itemtags') {
+                return ['itemtags', '_itemtag_names', '_itemtags'];
+            } else {
+                // For other column keys, just update that specific column
+                return [fieldName];
+            }
+        } else {
+            // Simplified field names
+            if (fieldName === 'usageflags') {
+                return ['usageflags', '_usageflag_names', '_usageflags'];
+            } else if (fieldName === 'categories') {
+                return ['categories', '_category_names', '_categories'];
+            } else if (fieldName === 'valueflags') {
+                return ['valueflags', '_valueflag_names', '_valueflags'];
+            } else if (fieldName === 'flags') {
+                return ['flags', '_flag_names', '_flags'];
+            } else if (fieldName === 'itemclass') {
+                return ['itemclass', '_itemclass_name', '_itemclass_id'];
+            } else if (fieldName === 'itemtags') {
+                return ['itemtags', '_itemtag_names', '_itemtags'];
+            } else {
+                // For regular fields, update the field itself
+                return [fieldName];
+            }
+        }
+    };
+    
+    const columnsToUpdate = getColumnsToUpdate(fieldName);
+    
+    // Update each element
     elementKeys.forEach(key => {
         const record = tableData.find(r => r._element_key === key);
         if (!record) return;
         
-        // Map table field names to record field names and determine which columns to update
-        let recordFieldName = fieldName;
-        let columnsToUpdate = [fieldName]; // Default: update the specified field name
+        // Find all cells for this element key
+        // Use a general selector and filter by attribute to avoid escaping issues
+        const allCells = document.querySelectorAll('td[data-element-key][data-field-name]');
         
-        if (fieldName === 'usageflags') {
-            // For usageflags, prefer _usageflag_names (string) for display, but also check _usageflags (array)
-            recordFieldName = record._usageflag_names !== undefined ? '_usageflag_names' : '_usageflags';
-            // Update both the simplified field name and any column keys that match
-            columnsToUpdate = ['usageflags', '_usageflag_names', '_usageflags'];
-        } else if (fieldName === 'categories') {
-            // For categories, prefer _category_names (string) for display, but also check _categories (array)
-            recordFieldName = record._category_names !== undefined ? '_category_names' : '_categories';
-            columnsToUpdate = ['categories', '_category_names', '_categories'];
-        } else if (fieldName === 'valueflags') {
-            recordFieldName = record._valueflag_names !== undefined ? '_valueflag_names' : '_valueflags';
-            columnsToUpdate = ['valueflags', '_valueflag_names', '_valueflags'];
-        } else if (fieldName === 'flags') {
-            recordFieldName = record._flag_names !== undefined ? '_flag_names' : '_flags';
-            columnsToUpdate = ['flags', '_flag_names', '_flags'];
-        } else if (fieldName === 'itemclass') {
-            recordFieldName = record._itemclass_name !== undefined ? '_itemclass_name' : '_itemclass_id';
-            columnsToUpdate = ['itemclass', '_itemclass_name', '_itemclass_id'];
-        } else if (fieldName === 'itemtags') {
-            recordFieldName = record._itemtag_names !== undefined ? '_itemtag_names' : '_itemtags';
-            columnsToUpdate = ['itemtags', '_itemtag_names', '_itemtags'];
-        }
-        
-        const value = record[recordFieldName];
-        
-        // Find all cells with matching element key and update all related columns
-        const allCells = document.querySelectorAll(`td[data-element-key][data-field-name]`);
         allCells.forEach(cell => {
             const cellElementKey = cell.getAttribute('data-element-key');
             const cellFieldName = cell.getAttribute('data-field-name');
-            if (cellElementKey === key && columnsToUpdate.includes(cellFieldName)) {
-                // Determine the correct display value for this specific column
-                let displayValue;
-                if (cellFieldName === fieldName || cellFieldName.startsWith('_')) {
-                    // For column keys (like '_valueflag_names'), use the record field that matches
-                    const columnRecordField = cellFieldName.startsWith('_') ? cellFieldName : recordFieldName;
-                    displayValue = formatDisplayValue(record[columnRecordField] !== undefined ? record[columnRecordField] : value, columnRecordField);
-                } else {
-                    // For simplified field names (like 'valueflags'), use the mapped record field
-                    displayValue = formatDisplayValue(value, recordFieldName);
+            
+            // Must match both element key and field name
+            if (cellElementKey !== key || !cellFieldName) return;
+            
+            // Check if this cell should be updated
+            if (columnsToUpdate.includes(cellFieldName)) {
+                // Determine which record field to use for this cell
+                let recordFieldName = cellFieldName;
+                
+                // Map simplified names to actual record fields
+                if (cellFieldName === 'usageflags' || cellFieldName === '_usageflag_names' || cellFieldName === '_usageflags') {
+                    recordFieldName = record._usageflag_names !== undefined ? '_usageflag_names' : '_usageflags';
+                } else if (cellFieldName === 'categories' || cellFieldName === '_category_names' || cellFieldName === '_categories') {
+                    recordFieldName = record._category_names !== undefined ? '_category_names' : '_categories';
+                } else if (cellFieldName === 'valueflags' || cellFieldName === '_valueflag_names' || cellFieldName === '_valueflags') {
+                    recordFieldName = record._valueflag_names !== undefined ? '_valueflag_names' : '_valueflags';
+                } else if (cellFieldName === 'flags' || cellFieldName === '_flag_names' || cellFieldName === '_flags') {
+                    recordFieldName = record._flag_names !== undefined ? '_flag_names' : '_flags';
+                } else if (cellFieldName === 'itemclass' || cellFieldName === '_itemclass_name' || cellFieldName === '_itemclass_id') {
+                    recordFieldName = record._itemclass_name !== undefined ? '_itemclass_name' : '_itemclass_id';
+                } else if (cellFieldName === 'itemtags' || cellFieldName === '_itemtag_names' || cellFieldName === '_itemtags') {
+                    recordFieldName = record._itemtag_names !== undefined ? '_itemtag_names' : '_itemtags';
+                } else if (cellFieldName.startsWith('_')) {
+                    // For other column keys, use the column key directly
+                    recordFieldName = cellFieldName;
                 }
                 
-                // Remove input field if present
+                // Get the value from the record
+                const value = record[recordFieldName];
+                
+                // Format the display value
+                const displayValue = formatDisplayValue(value, recordFieldName);
+                
+                // Remove input field if present (in case edit is still in progress)
                 const input = cell.querySelector('input');
                 if (input) {
-                    cell.removeChild(input);
+                    input.remove();
                 }
+                
+                // Update the cell content
                 cell.textContent = displayValue;
+                
+                // Ensure cell styling is maintained
+                if (cell.classList.contains('editable-cell')) {
+                    cell.style.cursor = 'pointer';
+                    cell.title = 'Double-click to edit';
+                }
             }
         });
     });
