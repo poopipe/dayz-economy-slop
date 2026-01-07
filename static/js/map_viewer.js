@@ -4,6 +4,7 @@ let canvas;
 let ctx;
 let markers = [];
 let selectedMarkers = new Set();
+let selectedPlayerSpawnPoints = new Set(); // Selected player spawn points (when editing)
 let visibleMarkers = new Set(); // For filtering
 let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf', values: ['name1', 'name2'] }
 let effectAreas = []; // Effect areas from cfgeffectareas.json
@@ -67,6 +68,7 @@ let dragStartX = 0;
 let dragStartY = 0;
 let dragStartWorldX = 0;
 let dragStartWorldZ = 0;
+let draggedSelectedSpawnPoints = new Map(); // Map<index, {offsetX, offsetZ}> for multi-marker drag
 
 // WebGL for background image rendering
 let gl = null;
@@ -144,10 +146,42 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
-            // Check if we should start dragging a marker
-            if (tryStartDrag(x, y)) {
-                e.preventDefault();
-                return;
+            // In edit mode, check for selection/drag first
+            if (editingEnabled.playerSpawnPoints) {
+                // Check if clicking on a selected spawn point to drag
+                if (tryStartDrag(x, y)) {
+                    e.preventDefault();
+                    return;
+                }
+                // Check if clicking on a marker to select it
+                let clickedOnMarker = false;
+                for (let index = 0; index < playerSpawnPoints.length; index++) {
+                    const spawnPoint = playerSpawnPoints[index];
+                    const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+                    const dx = screenPos.x - x;
+                    const dy = screenPos.y - y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < MARKER_INTERACTION_THRESHOLD) {
+                        clickedOnMarker = true;
+                        break;
+                    }
+                }
+                
+                if (clickedOnMarker) {
+                    // Clicked on a marker - select it
+                    selectAtPoint(x, y, e.altKey);
+                    e.preventDefault();
+                    return;
+                }
+                // No marker clicked - allow marquee selection to start
+                // Don't prevent default, let handleMouseDown handle it
+            } else {
+                // Not in edit mode - check if we should start dragging a marker
+                if (tryStartDrag(x, y)) {
+                    e.preventDefault();
+                    return;
+                }
             }
             // Call handleMouseDown for selection/marquee logic
             handleMouseDown(e);
@@ -855,7 +889,8 @@ function drawPlayerSpawnPoints() {
         }
         
         const isHovered = hoveredMarkerIndex === spawnPointOffset + index;
-        const isBeingDragged = isDraggingThisType && draggedMarkerIndex === index;
+        const isBeingDragged = isDraggingThisType && (draggedMarkerIndex === index || draggedSelectedSpawnPoints.has(index));
+        const isSelected = selectedPlayerSpawnPoints.has(index);
         const hasUnsavedChanges = originalPositions.playerSpawnPoints.has(index);
         
         // Draw rectangle (more transparent)
@@ -878,15 +913,20 @@ function drawPlayerSpawnPoints() {
         ctx.restore();
         
         // Draw marker (more visible)
-        // Use different color if editing and has unsaved changes
-        if (isEditing && hasUnsavedChanges) {
-            ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
-            ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+        // Use different color if editing and has unsaved changes or if selected
+        if (isEditing && (hasUnsavedChanges || isSelected)) {
+            if (isSelected) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800'; // Yellow/Orange for selected
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+            } else {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+            }
         } else {
             ctx.fillStyle = isHovered ? '#00ffff' : '#00aaaa';
             ctx.strokeStyle = isHovered ? '#ffffff' : '#008888';
         }
-        ctx.lineWidth = isHovered || isBeingDragged ? 3 : 2;
+        ctx.lineWidth = isHovered || isBeingDragged || isSelected ? 3 : 2;
         
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, isHovered || isBeingDragged ? 6 : 4, 0, Math.PI * 2);
@@ -1424,6 +1464,20 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
             }
         }
     });
+    
+    // Also select player spawn points if editing is enabled
+    if (editingEnabled.playerSpawnPoints && showPlayerSpawnPoints) {
+        playerSpawnPoints.forEach((spawnPoint, index) => {
+            if (spawnPoint.x >= minX && spawnPoint.x <= maxX &&
+                spawnPoint.z >= minZ && spawnPoint.z <= maxZ) {
+                if (addToSelection) {
+                    selectedPlayerSpawnPoints.add(index);
+                } else {
+                    selectedPlayerSpawnPoints.delete(index);
+                }
+            }
+        });
+    }
 }
 
 // Handle wheel (zoom)
@@ -1459,27 +1513,57 @@ function handleWheel(e) {
 function selectAtPoint(screenX, screenY, altKey = false) {
     // Use consistent threshold for marker interaction
     let found = false;
-    markers.forEach((marker, index) => {
-        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
-            return; // Skip hidden markers
-        }
+    
+    // Check player spawn points first if editing is enabled
+    if (editingEnabled.playerSpawnPoints && showPlayerSpawnPoints) {
+        const spawnPointOffset = markers.length + eventSpawns.length + 
+            territories.reduce((sum, t) => sum + t.zones.length, 0);
         
-        const screenPos = worldToScreen(marker.x, marker.z);
-        const dx = screenPos.x - screenX;
-        const dy = screenPos.y - screenY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (distance < MARKER_INTERACTION_THRESHOLD) {
-            if (altKey) {
-                // Alt key pressed - deselect mode
-                selectedMarkers.delete(index);
-            } else {
-                // Normal mode - add to selection
-                selectedMarkers.add(index);
+        for (let index = 0; index < playerSpawnPoints.length; index++) {
+            const spawnPoint = playerSpawnPoints[index];
+            const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD) {
+                if (altKey) {
+                    // Alt key pressed - deselect mode
+                    selectedPlayerSpawnPoints.delete(index);
+                } else {
+                    // Normal mode - add to selection
+                    selectedPlayerSpawnPoints.add(index);
+                }
+                found = true;
+                break; // Only select one at a time
             }
-            found = true;
         }
-    });
+    }
+    
+    // Check regular markers if no spawn point was clicked
+    if (!found) {
+        markers.forEach((marker, index) => {
+            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+                return; // Skip hidden markers
+            }
+            
+            const screenPos = worldToScreen(marker.x, marker.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD) {
+                if (altKey) {
+                    // Alt key pressed - deselect mode
+                    selectedMarkers.delete(index);
+                } else {
+                    // Normal mode - add to selection
+                    selectedMarkers.add(index);
+                }
+                found = true;
+            }
+        });
+    }
     
     // Don't clear selection on empty click - only deselect when Alt is pressed
     // Empty clicks do nothing by default
@@ -1718,32 +1802,81 @@ function tryStartDrag(screenX, screenY) {
         const spawnPointOffset = markers.length + eventSpawns.length + 
             territories.reduce((sum, t) => sum + t.zones.length, 0);
         
-        for (let index = 0; index < playerSpawnPoints.length; index++) {
-            const spawnPoint = playerSpawnPoints[index];
-            const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
-            const dx = screenPos.x - screenX;
-            const dy = screenPos.y - screenY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < MARKER_INTERACTION_THRESHOLD) {
-                // Save original position if not already saved
-                if (!originalPositions.playerSpawnPoints.has(index)) {
-                    originalPositions.playerSpawnPoints.set(index, {
-                        x: spawnPoint.x,
-                        y: spawnPoint.y,
-                        z: spawnPoint.z
-                    });
+        // Check if we have selected spawn points - if so, drag all selected ones
+        if (selectedPlayerSpawnPoints.size > 0) {
+            // Check if clicking on a selected spawn point
+            for (const index of selectedPlayerSpawnPoints) {
+                if (index >= playerSpawnPoints.length) continue;
+                const spawnPoint = playerSpawnPoints[index];
+                const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < MARKER_INTERACTION_THRESHOLD) {
+                    // Save original positions for all selected spawn points if not already saved
+                    for (const selectedIndex of selectedPlayerSpawnPoints) {
+                        if (!originalPositions.playerSpawnPoints.has(selectedIndex)) {
+                            const sp = playerSpawnPoints[selectedIndex];
+                            originalPositions.playerSpawnPoints.set(selectedIndex, {
+                                x: sp.x,
+                                y: sp.y,
+                                z: sp.z
+                            });
+                        }
+                    }
+                    
+                    // Store the relative positions of all selected markers
+                    draggedSelectedSpawnPoints.clear();
+                    const clickedWorld = screenToWorld(screenX, screenY);
+                    for (const selectedIndex of selectedPlayerSpawnPoints) {
+                        const sp = playerSpawnPoints[selectedIndex];
+                        draggedSelectedSpawnPoints.set(selectedIndex, {
+                            offsetX: sp.x - clickedWorld.x,
+                            offsetZ: sp.z - clickedWorld.z
+                        });
+                    }
+                    
+                    isDragging = true;
+                    draggedMarkerType = 'playerSpawnPoints';
+                    draggedMarkerIndex = index; // The one that was clicked
+                    dragStartX = screenX;
+                    dragStartY = screenY;
+                    dragStartWorldX = clickedWorld.x;
+                    dragStartWorldZ = clickedWorld.z;
+                    
+                    return true;
                 }
+            }
+        } else {
+            // No selection - check if clicking on any spawn point
+            for (let index = 0; index < playerSpawnPoints.length; index++) {
+                const spawnPoint = playerSpawnPoints[index];
+                const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
                 
-                isDragging = true;
-                draggedMarkerType = 'playerSpawnPoints';
-                draggedMarkerIndex = index;
-                dragStartX = screenX;
-                dragStartY = screenY;
-                dragStartWorldX = spawnPoint.x;
-                dragStartWorldZ = spawnPoint.z;
-                
-                return true;
+                if (distance < MARKER_INTERACTION_THRESHOLD) {
+                    // Save original position if not already saved
+                    if (!originalPositions.playerSpawnPoints.has(index)) {
+                        originalPositions.playerSpawnPoints.set(index, {
+                            x: spawnPoint.x,
+                            y: spawnPoint.y,
+                            z: spawnPoint.z
+                        });
+                    }
+                    
+                    isDragging = true;
+                    draggedMarkerType = 'playerSpawnPoints';
+                    draggedMarkerIndex = index;
+                    dragStartX = screenX;
+                    dragStartY = screenY;
+                    dragStartWorldX = spawnPoint.x;
+                    dragStartWorldZ = spawnPoint.z;
+                    
+                    return true;
+                }
             }
         }
     }
@@ -1762,11 +1895,26 @@ function handleDrag(screenX, screenY) {
     const deltaX = currentWorld.x - startWorld.x;
     const deltaZ = currentWorld.z - startWorld.z;
     
-    // Update marker position
-    if (draggedMarkerType === 'playerSpawnPoints' && draggedMarkerIndex >= 0) {
-        const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
-        spawnPoint.x = dragStartWorldX + deltaX;
-        spawnPoint.z = dragStartWorldZ + deltaZ;
+    // Update marker position(s)
+    if (draggedMarkerType === 'playerSpawnPoints') {
+        if (draggedSelectedSpawnPoints.size > 0) {
+            // Move all selected spawn points, maintaining relative positions
+            const newCenterX = dragStartWorldX + deltaX;
+            const newCenterZ = dragStartWorldZ + deltaZ;
+            
+            draggedSelectedSpawnPoints.forEach((offset, index) => {
+                if (index < playerSpawnPoints.length) {
+                    const spawnPoint = playerSpawnPoints[index];
+                    spawnPoint.x = newCenterX + offset.offsetX;
+                    spawnPoint.z = newCenterZ + offset.offsetZ;
+                }
+            });
+        } else if (draggedMarkerIndex >= 0) {
+            // Single marker drag
+            const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
+            spawnPoint.x = dragStartWorldX + deltaX;
+            spawnPoint.z = dragStartWorldZ + deltaZ;
+        }
     }
     
     requestDraw();
@@ -1776,17 +1924,31 @@ function handleDrag(screenX, screenY) {
 function handleDragEnd() {
     if (!isDragging) return;
     
-    // Round position to 2 decimal places when placing the marker
-    if (draggedMarkerType === 'playerSpawnPoints' && draggedMarkerIndex >= 0) {
-        const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
-        spawnPoint.x = Math.round(spawnPoint.x * 100) / 100;
-        spawnPoint.y = Math.round(spawnPoint.y * 100) / 100;
-        spawnPoint.z = Math.round(spawnPoint.z * 100) / 100;
+    // Round positions to 2 decimal places when placing the marker(s)
+    if (draggedMarkerType === 'playerSpawnPoints') {
+        if (draggedSelectedSpawnPoints.size > 0) {
+            // Round all selected spawn points
+            draggedSelectedSpawnPoints.forEach((offset, index) => {
+                if (index < playerSpawnPoints.length) {
+                    const spawnPoint = playerSpawnPoints[index];
+                    spawnPoint.x = Math.round(spawnPoint.x * 100) / 100;
+                    spawnPoint.y = Math.round(spawnPoint.y * 100) / 100;
+                    spawnPoint.z = Math.round(spawnPoint.z * 100) / 100;
+                }
+            });
+        } else if (draggedMarkerIndex >= 0) {
+            // Single marker
+            const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
+            spawnPoint.x = Math.round(spawnPoint.x * 100) / 100;
+            spawnPoint.y = Math.round(spawnPoint.y * 100) / 100;
+            spawnPoint.z = Math.round(spawnPoint.z * 100) / 100;
+        }
     }
     
     isDragging = false;
     draggedMarkerType = null;
     draggedMarkerIndex = -1;
+    draggedSelectedSpawnPoints.clear();
     requestDraw();
 }
 
@@ -1894,6 +2056,10 @@ async function handleEditingToggle(markerType, enabled) {
                 const result = await saveMarkerChanges(markerType);
                 if (result.success) {
                     updateStatus(result.message);
+                    // Clear selection after successful save
+                    if (markerType === 'playerSpawnPoints') {
+                        selectedPlayerSpawnPoints.clear();
+                    }
                 } else {
                     updateStatus(`Error saving: ${result.message}`, true);
                     // Don't disable editing if save failed
@@ -1909,8 +2075,21 @@ async function handleEditingToggle(markerType, enabled) {
             } else {
                 // Restore original positions
                 restoreMarkerPositions(markerType);
+                // Clear selection after restore
+                if (markerType === 'playerSpawnPoints') {
+                    selectedPlayerSpawnPoints.clear();
+                }
+            }
+        } else {
+            // No changes, but clear selection when disabling editing
+            if (markerType === 'playerSpawnPoints') {
+                selectedPlayerSpawnPoints.clear();
             }
         }
+        
+        // Update display after clearing selection
+        updateSelectedCount();
+        draw();
     }
 }
 
