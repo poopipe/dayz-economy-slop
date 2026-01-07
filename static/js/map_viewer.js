@@ -51,6 +51,23 @@ let isPanning = false;
 let isZooming = false;
 let needsRedraw = false;
 
+// Marker editing state
+let editingEnabled = {
+    playerSpawnPoints: false,
+    // Add other marker types here as needed
+};
+let originalPositions = {
+    playerSpawnPoints: new Map(), // Map<index, {x, y, z}>
+    // Add other marker types here as needed
+};
+let isDragging = false;
+let draggedMarkerType = null;
+let draggedMarkerIndex = -1;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragStartWorldX = 0;
+let dragStartWorldZ = 0;
+
 // WebGL for background image rendering
 let gl = null;
 let glProgram = null;
@@ -127,6 +144,11 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
+            // Check if we should start dragging a marker
+            if (tryStartDrag(x, y)) {
+                e.preventDefault();
+                return;
+            }
             // Call handleMouseDown for selection/marquee logic
             handleMouseDown(e);
         }
@@ -143,7 +165,11 @@ function initCanvas() {
         tooltipX = x;
         tooltipY = y;
         
-        if (isPanning) {
+        if (isDragging) {
+            // Update marker position during drag
+            handleDrag(x, y);
+            e.preventDefault();
+        } else if (isPanning) {
             viewOffsetX = panStartOffsetX + (x - panStartX);
             viewOffsetY = panStartOffsetY + (y - panStartY);
             hoveredMarkerIndex = -1; // Clear hover when panning
@@ -160,12 +186,24 @@ function initCanvas() {
     });
     
     canvas.addEventListener('mouseup', (e) => {
-        if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+        if (isDragging && e.button === 0) {
+            // End drag on left mouse button release
+            handleDragEnd();
+            e.preventDefault();
+            return;
+        } else if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             isPanning = false;
             // Force a full redraw after panning ends
             draw();
         }
         handleMouseUp(e);
+    });
+    
+    // Also handle mouseup on window to catch cases where mouse leaves canvas during drag
+    window.addEventListener('mouseup', (e) => {
+        if (isDragging && e.button === 0) {
+            handleDragEnd();
+        }
     });
     
     // Clear hover when mouse leaves canvas
@@ -805,6 +843,9 @@ function drawPlayerSpawnPoints() {
     const spawnPointOffset = markers.length + eventSpawns.length + 
         territories.reduce((sum, t) => sum + t.zones.length, 0);
     
+    const isEditing = editingEnabled.playerSpawnPoints;
+    const isDraggingThisType = isDragging && draggedMarkerType === 'playerSpawnPoints';
+    
     playerSpawnPoints.forEach((spawnPoint, index) => {
         const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
         
@@ -814,6 +855,8 @@ function drawPlayerSpawnPoints() {
         }
         
         const isHovered = hoveredMarkerIndex === spawnPointOffset + index;
+        const isBeingDragged = isDraggingThisType && draggedMarkerIndex === index;
+        const hasUnsavedChanges = originalPositions.playerSpawnPoints.has(index);
         
         // Draw rectangle (more transparent)
         const screenWidth = spawnPoint.width * viewScale;
@@ -835,12 +878,18 @@ function drawPlayerSpawnPoints() {
         ctx.restore();
         
         // Draw marker (more visible)
-        ctx.fillStyle = isHovered ? '#00ffff' : '#00aaaa';
-        ctx.strokeStyle = isHovered ? '#ffffff' : '#008888';
-        ctx.lineWidth = isHovered ? 3 : 2;
+        // Use different color if editing and has unsaved changes
+        if (isEditing && hasUnsavedChanges) {
+            ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
+            ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+        } else {
+            ctx.fillStyle = isHovered ? '#00ffff' : '#00aaaa';
+            ctx.strokeStyle = isHovered ? '#ffffff' : '#008888';
+        }
+        ctx.lineWidth = isHovered || isBeingDragged ? 3 : 2;
         
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
+        ctx.arc(screenPos.x, screenPos.y, isHovered || isBeingDragged ? 6 : 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
     });
@@ -1509,7 +1558,8 @@ function updateHoveredMarker(screenX, screenY) {
     }
     
     // Check player spawn points (offset by markers + event spawns + zones)
-    if (showPlayerSpawnPoints) {
+    // Only check if not currently dragging (to avoid hover conflicts during drag)
+    if (showPlayerSpawnPoints && !isDragging) {
         const spawnPointOffset = markers.length + eventSpawns.length + 
             territories.reduce((sum, t) => sum + t.zones.length, 0);
         
@@ -1653,6 +1703,214 @@ async function handleRightClick(screenX, screenY) {
     } catch (error) {
         // Silently fail - the location is already in the text field
         // User can manually copy from there if clipboard access is blocked
+    }
+}
+
+// Try to start dragging a marker
+function tryStartDrag(screenX, screenY) {
+    // Check if editing is enabled for any marker type
+    if (!editingEnabled.playerSpawnPoints) {
+        return false;
+    }
+    
+    // Check if clicking on a player spawn point
+    if (editingEnabled.playerSpawnPoints && showPlayerSpawnPoints) {
+        const spawnPointOffset = markers.length + eventSpawns.length + 
+            territories.reduce((sum, t) => sum + t.zones.length, 0);
+        
+        for (let index = 0; index < playerSpawnPoints.length; index++) {
+            const spawnPoint = playerSpawnPoints[index];
+            const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD) {
+                // Save original position if not already saved
+                if (!originalPositions.playerSpawnPoints.has(index)) {
+                    originalPositions.playerSpawnPoints.set(index, {
+                        x: spawnPoint.x,
+                        y: spawnPoint.y,
+                        z: spawnPoint.z
+                    });
+                }
+                
+                isDragging = true;
+                draggedMarkerType = 'playerSpawnPoints';
+                draggedMarkerIndex = index;
+                dragStartX = screenX;
+                dragStartY = screenY;
+                dragStartWorldX = spawnPoint.x;
+                dragStartWorldZ = spawnPoint.z;
+                
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+// Handle drag update
+function handleDrag(screenX, screenY) {
+    if (!isDragging) return;
+    
+    // Calculate world position delta
+    const startWorld = screenToWorld(dragStartX, dragStartY);
+    const currentWorld = screenToWorld(screenX, screenY);
+    
+    const deltaX = currentWorld.x - startWorld.x;
+    const deltaZ = currentWorld.z - startWorld.z;
+    
+    // Update marker position
+    if (draggedMarkerType === 'playerSpawnPoints' && draggedMarkerIndex >= 0) {
+        const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
+        spawnPoint.x = dragStartWorldX + deltaX;
+        spawnPoint.z = dragStartWorldZ + deltaZ;
+    }
+    
+    requestDraw();
+}
+
+// Handle drag end
+function handleDragEnd() {
+    if (!isDragging) return;
+    
+    // Round position to 2 decimal places when placing the marker
+    if (draggedMarkerType === 'playerSpawnPoints' && draggedMarkerIndex >= 0) {
+        const spawnPoint = playerSpawnPoints[draggedMarkerIndex];
+        spawnPoint.x = Math.round(spawnPoint.x * 100) / 100;
+        spawnPoint.y = Math.round(spawnPoint.y * 100) / 100;
+        spawnPoint.z = Math.round(spawnPoint.z * 100) / 100;
+    }
+    
+    isDragging = false;
+    draggedMarkerType = null;
+    draggedMarkerIndex = -1;
+    requestDraw();
+}
+
+// Save marker changes to file
+async function saveMarkerChanges(markerType) {
+    if (markerType === 'playerSpawnPoints') {
+        // Get all modified spawn points
+        const modifiedSpawnPoints = [];
+        for (let i = 0; i < playerSpawnPoints.length; i++) {
+            if (originalPositions.playerSpawnPoints.has(i)) {
+                const original = originalPositions.playerSpawnPoints.get(i);
+                const current = playerSpawnPoints[i];
+                
+                // Check if position changed
+                if (original.x !== current.x || original.y !== current.y || original.z !== current.z) {
+                    modifiedSpawnPoints.push({
+                        index: i,
+                        original: original,
+                        current: { x: current.x, y: current.y, z: current.z },
+                        xml: current.xml
+                    });
+                }
+            }
+        }
+        
+        if (modifiedSpawnPoints.length === 0) {
+            return { success: true, message: 'No changes to save' };
+        }
+        
+        try {
+            const response = await fetch('/api/player-spawn-points/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    mission_dir: missionDir,
+                    spawn_points: playerSpawnPoints.map((sp, idx) => ({
+                        index: idx,
+                        x: sp.x,
+                        y: sp.y,
+                        z: sp.z,
+                        width: sp.width,
+                        height: sp.height,
+                        xml: sp.xml
+                    }))
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Clear original positions after successful save
+                originalPositions.playerSpawnPoints.clear();
+                return { success: true, message: `Saved ${modifiedSpawnPoints.length} spawn point(s)` };
+            } else {
+                return { success: false, message: data.error || 'Failed to save' };
+            }
+        } catch (error) {
+            return { success: false, message: error.message };
+        }
+    }
+    
+    return { success: false, message: 'Unknown marker type' };
+}
+
+// Restore marker positions
+function restoreMarkerPositions(markerType) {
+    if (markerType === 'playerSpawnPoints') {
+        originalPositions.playerSpawnPoints.forEach((original, index) => {
+            if (index < playerSpawnPoints.length) {
+                playerSpawnPoints[index].x = original.x;
+                playerSpawnPoints[index].y = original.y;
+                playerSpawnPoints[index].z = original.z;
+            }
+        });
+        originalPositions.playerSpawnPoints.clear();
+    }
+    
+    requestDraw();
+}
+
+// Handle editing toggle change
+async function handleEditingToggle(markerType, enabled) {
+    editingEnabled[markerType] = enabled;
+    
+    // Update canvas cursor style
+    const anyEditingEnabled = Object.values(editingEnabled).some(v => v === true);
+    if (anyEditingEnabled) {
+        canvas.classList.add('editing-enabled');
+    } else {
+        canvas.classList.remove('editing-enabled');
+    }
+    
+    if (!enabled) {
+        // Check if there are unsaved changes
+        let hasChanges = false;
+        if (markerType === 'playerSpawnPoints') {
+            hasChanges = originalPositions.playerSpawnPoints.size > 0;
+        }
+        
+        if (hasChanges) {
+            const save = confirm('You have unsaved changes. Do you want to save them?');
+            if (save) {
+                const result = await saveMarkerChanges(markerType);
+                if (result.success) {
+                    updateStatus(result.message);
+                } else {
+                    updateStatus(`Error saving: ${result.message}`, true);
+                    // Don't disable editing if save failed
+                    editingEnabled[markerType] = true;
+                    const checkboxId = markerType === 'playerSpawnPoints' ? 'editPlayerSpawnPoints' : 
+                        `edit${markerType.charAt(0).toUpperCase() + markerType.slice(1)}`;
+                    const checkbox = document.getElementById(checkboxId);
+                    if (checkbox) checkbox.checked = true;
+                    // Re-add cursor class since we're keeping editing enabled
+                    canvas.classList.add('editing-enabled');
+                    return;
+                }
+            } else {
+                // Restore original positions
+                restoreMarkerPositions(markerType);
+            }
+        }
     }
 }
 
@@ -3035,6 +3293,15 @@ document.addEventListener('DOMContentLoaded', () => {
         draw();
         saveFilterAndDisplaySettings();
     });
+    
+    // Editing toggle
+    const editPlayerSpawnPointsCheckbox = document.getElementById('editPlayerSpawnPoints');
+    if (editPlayerSpawnPointsCheckbox) {
+        editPlayerSpawnPointsCheckbox.addEventListener('change', async (e) => {
+            await handleEditingToggle('playerSpawnPoints', e.target.checked);
+            draw();
+        });
+    }
     
     const showTerritoriesCheckbox = document.getElementById('showTerritories');
     if (showTerritoriesCheckbox) {

@@ -1124,26 +1124,31 @@ def load_player_spawn_points(spawn_points_file_path):
             print("No <fresh> element found in cfgplayerspawnpoints.xml")
             return []
         
-        # Get generator_params for width and height
+        # Get generator_params for width and height from grid_width and grid_height elements
         generator_params = fresh_elem.find('generator_params')
         width = 100.0  # Default width
         height = 100.0  # Default height
         
         if generator_params is not None:
-            width_attr = generator_params.get('width')
-            height_attr = generator_params.get('height')
+            # Look for grid_width and grid_height child elements
+            grid_width_elem = generator_params.find('grid_width')
+            grid_height_elem = generator_params.find('grid_height')
             
-            if width_attr:
-                try:
-                    width = float(width_attr)
-                except (ValueError, TypeError):
-                    print(f"Invalid width value: {width_attr}, using default 100.0")
+            if grid_width_elem is not None:
+                width_text = grid_width_elem.text
+                if width_text:
+                    try:
+                        width = float(width_text.strip())
+                    except (ValueError, TypeError):
+                        print(f"Invalid grid_width value: {width_text}, using default 100.0")
             
-            if height_attr:
-                try:
-                    height = float(height_attr)
-                except (ValueError, TypeError):
-                    print(f"Invalid height value: {height_attr}, using default 100.0")
+            if grid_height_elem is not None:
+                height_text = grid_height_elem.text
+                if height_text:
+                    try:
+                        height = float(height_text.strip())
+                    except (ValueError, TypeError):
+                        print(f"Invalid grid_height value: {height_text}, using default 100.0")
         
         # Find all generator_posbubbles elements
         posbubbles = fresh_elem.findall('generator_posbubbles')
@@ -1245,6 +1250,141 @@ def get_player_spawn_points():
             'spawn_points': spawn_points,
             'count': len(spawn_points)
         })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+def save_player_spawn_points(spawn_points_file_path, spawn_points_data):
+    """
+    Save player spawn points to cfgplayerspawnpoints.xml.
+    spawn_points_data is a list of {x, y, z, width, height, xml} objects.
+    """
+    if not spawn_points_file_path or not Path(spawn_points_file_path).exists():
+        return {'success': False, 'error': f'File does not exist: {spawn_points_file_path}'}
+    
+    try:
+        tree = ET.parse(spawn_points_file_path)
+        root = tree.getroot()
+        
+        # Find the <fresh> element
+        fresh_elem = root.find('fresh')
+        if fresh_elem is None:
+            # Try case-insensitive search
+            for elem in root:
+                if elem.tag.lower() == 'fresh':
+                    fresh_elem = elem
+                    break
+        
+        if fresh_elem is None:
+            return {'success': False, 'error': 'No <fresh> element found in cfgplayerspawnpoints.xml'}
+        
+        # Find all generator_posbubbles elements
+        posbubbles = fresh_elem.findall('generator_posbubbles')
+        if len(posbubbles) == 0:
+            posbubbles = fresh_elem.findall('.//generator_posbubbles')
+        
+        # Create a mapping of positions to find which pos element to update
+        # We'll match by parsing the XML and comparing positions
+        spawn_point_index = 0
+        
+        for posbubble in posbubbles:
+            pos_elements = posbubble.findall('pos')
+            if len(pos_elements) == 0:
+                pos_elements = posbubble.findall('.//pos')
+            
+            for pos_elem in pos_elements:
+                if spawn_point_index >= len(spawn_points_data):
+                    break
+                
+                spawn_data = spawn_points_data[spawn_point_index]
+                
+                # Round to 2 decimal places
+                x = round(float(spawn_data['x']), 2)
+                y = round(float(spawn_data.get('y', 0)), 2)
+                z = round(float(spawn_data['z']), 2)
+                
+                # Update position attributes or text
+                if pos_elem.get('x') is not None or pos_elem.get('z') is not None:
+                    # Update attributes
+                    pos_elem.set('x', str(x))
+                    pos_elem.set('z', str(z))
+                elif pos_elem.text:
+                    # Update text content
+                    pos_elem.text = f"{x} {y} {z}"
+                else:
+                    # Set attributes if neither exists
+                    pos_elem.set('x', str(x))
+                    pos_elem.set('z', str(z))
+                
+                spawn_point_index += 1
+            
+            if spawn_point_index >= len(spawn_points_data):
+                break
+        
+        # Write back to file
+        tree.write(spawn_points_file_path, encoding='utf-8', xml_declaration=True)
+        
+        print(f"Successfully saved {spawn_point_index} player spawn points to {spawn_points_file_path}")
+        return {'success': True, 'count': spawn_point_index}
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/player-spawn-points/save', methods=['POST'])
+def save_player_spawn_points_endpoint():
+    """Save player spawn point data to cfgplayerspawnpoints.xml."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        spawn_points_data = data.get('spawn_points', [])
+        if not spawn_points_data:
+            return jsonify({'success': False, 'error': 'No spawn points data provided'}), 400
+        
+        # Look for cfgplayerspawnpoints.xml
+        spawn_points_file = mission_path / 'cfgplayerspawnpoints.xml'
+        if not spawn_points_file.exists():
+            return jsonify({
+                'success': False,
+                'error': f'cfgplayerspawnpoints.xml not found at: {spawn_points_file}'
+            }), 404
+        
+        print(f"Saving player spawn points to: {spawn_points_file}")
+        result = save_player_spawn_points(str(spawn_points_file), spawn_points_data)
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'count': result['count'],
+                'message': f'Saved {result["count"]} spawn point(s)'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Unknown error')
+            }), 500
+            
     except Exception as e:
         import traceback
         traceback.print_exc()
