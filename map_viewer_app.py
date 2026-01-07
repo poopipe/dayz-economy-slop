@@ -1096,6 +1096,164 @@ def get_territories():
         }), 500
 
 
+def load_player_spawn_points(spawn_points_file_path):
+    """
+    Load player spawn points from cfgplayerspawnpoints.xml.
+    Returns list of spawn point dictionaries with position and rectangle data.
+    """
+    if not spawn_points_file_path or not Path(spawn_points_file_path).exists():
+        print(f"Player spawn points XML file does not exist: {spawn_points_file_path}")
+        return []
+    
+    try:
+        tree = ET.parse(spawn_points_file_path)
+        root = tree.getroot()
+        
+        spawn_points = []
+        
+        # Find the <fresh> element
+        fresh_elem = root.find('fresh')
+        if fresh_elem is None:
+            # Try case-insensitive search
+            for elem in root:
+                if elem.tag.lower() == 'fresh':
+                    fresh_elem = elem
+                    break
+        
+        if fresh_elem is None:
+            print("No <fresh> element found in cfgplayerspawnpoints.xml")
+            return []
+        
+        # Get generator_params for width and height
+        generator_params = fresh_elem.find('generator_params')
+        width = 100.0  # Default width
+        height = 100.0  # Default height
+        
+        if generator_params is not None:
+            width_attr = generator_params.get('width')
+            height_attr = generator_params.get('height')
+            
+            if width_attr:
+                try:
+                    width = float(width_attr)
+                except (ValueError, TypeError):
+                    print(f"Invalid width value: {width_attr}, using default 100.0")
+            
+            if height_attr:
+                try:
+                    height = float(height_attr)
+                except (ValueError, TypeError):
+                    print(f"Invalid height value: {height_attr}, using default 100.0")
+        
+        # Find all generator_posbubbles elements
+        posbubbles = fresh_elem.findall('generator_posbubbles')
+        if len(posbubbles) == 0:
+            posbubbles = fresh_elem.findall('.//generator_posbubbles')
+        
+        print(f"Found {len(posbubbles)} generator_posbubbles elements")
+        
+        for posbubble_idx, posbubble in enumerate(posbubbles):
+            # Find all <pos> elements within this generator_posbubbles
+            pos_elements = posbubble.findall('pos')
+            if len(pos_elements) == 0:
+                pos_elements = posbubble.findall('.//pos')
+            
+            print(f"Found {len(pos_elements)} pos elements in generator_posbubbles[{posbubble_idx}]")
+            
+            for pos_idx, pos_elem in enumerate(pos_elements):
+                # Try to get position from pos element
+                x_attr = pos_elem.get('x')
+                z_attr = pos_elem.get('z')
+                
+                # Also try text content
+                if x_attr is None or z_attr is None:
+                    if pos_elem.text:
+                        # Parse position string
+                        x, y, z = parse_group_pos(pos_elem.text)
+                    else:
+                        print(f"Posbubble[{posbubble_idx}] pos[{pos_idx}]: no position found, skipping")
+                        continue
+                else:
+                    try:
+                        x = float(x_attr)
+                        z = float(z_attr)
+                        y = 0.0
+                    except (ValueError, TypeError):
+                        print(f"Posbubble[{posbubble_idx}] pos[{pos_idx}]: invalid x or z value (x='{x_attr}', z='{z_attr}'), skipping")
+                        continue
+                
+                # Skip if position is invalid (all zeros)
+                if x == 0.0 and z == 0.0:
+                    print(f"Posbubble[{posbubble_idx}] pos[{pos_idx}]: invalid position (x and z are both zero), skipping")
+                    continue
+                
+                # Store the pos element XML (not the entire posbubble)
+                pos_xml = ET.tostring(pos_elem, encoding='unicode').strip()
+                
+                spawn_point_data = {
+                    'id': len(spawn_points),
+                    'x': x,
+                    'y': y,
+                    'z': z,  # Frontend will reverse this
+                    'width': width,
+                    'height': height,
+                    'xml': pos_xml
+                }
+                
+                spawn_points.append(spawn_point_data)
+        
+        print(f"Successfully loaded {len(spawn_points)} player spawn points")
+        return spawn_points
+    except Exception as e:
+        import traceback
+        print(f"Error loading player spawn points: {e}")
+        traceback.print_exc()
+        return []
+
+
+@app.route('/api/player-spawn-points')
+def get_player_spawn_points():
+    """Get player spawn point data from cfgplayerspawnpoints.xml."""
+    try:
+        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        # Look for cfgplayerspawnpoints.xml
+        spawn_points_file = mission_path / 'cfgplayerspawnpoints.xml'
+        if not spawn_points_file.exists():
+            return jsonify({
+                'success': True,
+                'spawn_points': [],
+                'count': 0,
+                'message': f'cfgplayerspawnpoints.xml not found at: {spawn_points_file}'
+            })
+        
+        print(f"Loading player spawn points from: {spawn_points_file}")
+        spawn_points = load_player_spawn_points(str(spawn_points_file))
+        
+        return jsonify({
+            'success': True,
+            'spawn_points': spawn_points,
+            'count': len(spawn_points)
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print(f"Map Viewer starting...")
     print(f"Default mission directory: {DEFAULT_MISSION_DIR}")

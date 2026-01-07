@@ -9,6 +9,8 @@ let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName',
 let effectAreas = []; // Effect areas from cfgeffectareas.json
 let eventSpawns = []; // Event spawns from cfgeventspawns.xml
 let visibleEventSpawns = new Set(); // For filtering event spawns
+let playerSpawnPoints = []; // Player spawn points from cfgplayerspawnpoints.xml
+let showPlayerSpawnPoints = true;
 let backgroundImage = null;
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
@@ -789,6 +791,57 @@ function drawTerritories() {
     });
 }
 
+// Draw player spawn point markers and rectangles
+function drawPlayerSpawnPoints() {
+    if (!showPlayerSpawnPoints || playerSpawnPoints.length === 0) {
+        return;
+    }
+    
+    // Calculate offset for hover detection
+    const spawnPointOffset = markers.length + eventSpawns.length + 
+        territories.reduce((sum, t) => sum + t.zones.length, 0);
+    
+    playerSpawnPoints.forEach((spawnPoint, index) => {
+        const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+        
+        // Skip if position is invalid
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
+            return;
+        }
+        
+        const isHovered = hoveredMarkerIndex === spawnPointOffset + index;
+        
+        // Draw rectangle (more transparent)
+        const screenWidth = spawnPoint.width * viewScale;
+        const screenHeight = spawnPoint.height * viewScale;
+        
+        ctx.save();
+        ctx.globalAlpha = 0.15; // More transparent
+        ctx.fillStyle = '#00ffff'; // Cyan color
+        ctx.strokeStyle = isHovered ? '#00ffff' : '#00aaaa';
+        ctx.lineWidth = isHovered ? 2 : 1;
+        
+        // Draw rectangle centered on the spawn point
+        const rectX = screenPos.x - screenWidth / 2;
+        const rectY = screenPos.y - screenHeight / 2;
+        
+        ctx.fillRect(rectX, rectY, screenWidth, screenHeight);
+        ctx.strokeRect(rectX, rectY, screenWidth, screenHeight);
+        
+        ctx.restore();
+        
+        // Draw marker (more visible)
+        ctx.fillStyle = isHovered ? '#00ffff' : '#00aaaa';
+        ctx.strokeStyle = isHovered ? '#ffffff' : '#008888';
+        ctx.lineWidth = isHovered ? 3 : 2;
+        
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    });
+}
+
 // Format a value for tooltip display (handles arrays/lists)
 function formatTooltipValue(value) {
     if (value === null || value === undefined) {
@@ -827,9 +880,10 @@ function drawTooltip() {
     }
     
     // Determine what type of marker we're hovering over
-    let marker, isEventSpawn, isZone;
+    let marker, isEventSpawn, isZone, isPlayerSpawnPoint;
     const eventSpawnOffset = markers.length;
     const zoneOffset = eventSpawnOffset + eventSpawns.length;
+    const playerSpawnPointOffset = zoneOffset + territories.reduce((sum, t) => sum + t.zones.length, 0);
     
     if (hoveredMarkerIndex < eventSpawnOffset) {
         // Regular marker
@@ -843,6 +897,7 @@ function drawTooltip() {
         marker = markers[hoveredMarkerIndex];
         isEventSpawn = false;
         isZone = false;
+        isPlayerSpawnPoint = false;
     } else if (hoveredMarkerIndex < zoneOffset) {
         // Event spawn
         // Check if event spawns are enabled
@@ -860,7 +915,8 @@ function drawTooltip() {
         marker = eventSpawns[eventSpawnIndex];
         isEventSpawn = true;
         isZone = false;
-    } else {
+        isPlayerSpawnPoint = false;
+    } else if (hoveredMarkerIndex < playerSpawnPointOffset) {
         // Zone marker
         // Check if territories are enabled
         if (!showTerritories) {
@@ -884,6 +940,21 @@ function drawTooltip() {
         }
         isEventSpawn = false;
         isZone = true;
+        isPlayerSpawnPoint = false;
+    } else {
+        // Player spawn point
+        // Check if player spawn points are enabled
+        if (!showPlayerSpawnPoints) {
+            return; // Don't show tooltip if player spawn points are hidden
+        }
+        const spawnPointIndex = hoveredMarkerIndex - playerSpawnPointOffset;
+        if (spawnPointIndex >= playerSpawnPoints.length) {
+            return;
+        }
+        marker = playerSpawnPoints[spawnPointIndex];
+        isEventSpawn = false;
+        isZone = false;
+        isPlayerSpawnPoint = true;
     }
     const padding = 8;
     const lineHeight = 18;
@@ -893,7 +964,9 @@ function drawTooltip() {
     const lines = [];
     
     // Name on first line
-    if (marker.name) {
+    if (isPlayerSpawnPoint) {
+        lines.push('Player Spawn Point');
+    } else if (marker.name) {
         lines.push(marker.name);
     } else {
         lines.push('(Unnamed)');
@@ -906,6 +979,13 @@ function drawTooltip() {
     lines.push(`X: ${marker.x.toFixed(2)} m`);
     lines.push(`Y: ${marker.y.toFixed(2)} m`);
     lines.push(`Z: ${marker.z.toFixed(2)} m`);
+    
+    // Display rectangle dimensions for player spawn points
+    if (isPlayerSpawnPoint) {
+        lines.push('');
+        lines.push(`Rectangle Width: ${marker.width.toFixed(2)} m`);
+        lines.push(`Rectangle Height: ${marker.height.toFixed(2)} m`);
+    }
     
     // Display usage if available
     // Usage can be a string, array, or in proto_children
@@ -1175,11 +1255,12 @@ function draw() {
     // Clear main canvas (transparent - background image shows through from background canvas)
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // Draw grid, markers, event spawns, territories, effect areas, marquee on main canvas
+    // Draw grid, markers, event spawns, territories, player spawn points, effect areas, marquee on main canvas
     drawGrid();
     drawMarkers();
     drawEventSpawns(); // Draw event spawn markers (after regular markers)
     drawTerritories(); // Draw territory circles and zone markers
+    drawPlayerSpawnPoints(); // Draw player spawn point markers and rectangles
     drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
     drawMarquee();
     drawTooltip();
@@ -1423,6 +1504,24 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
+    // Check player spawn points (offset by markers + event spawns + zones)
+    if (showPlayerSpawnPoints) {
+        const spawnPointOffset = markers.length + eventSpawns.length + 
+            territories.reduce((sum, t) => sum + t.zones.length, 0);
+        
+        playerSpawnPoints.forEach((spawnPoint, index) => {
+            const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                minDistance = distance;
+                newHoveredIndex = spawnPointOffset + index;
+            }
+        });
+    }
+    
     if (hoveredMarkerIndex !== newHoveredIndex) {
         hoveredMarkerIndex = newHoveredIndex;
         draw();
@@ -1594,6 +1693,32 @@ async function loadEventSpawns() {
     }
 }
 
+// Load player spawn points from API
+async function loadPlayerSpawnPoints() {
+    if (!missionDir) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/player-spawn-points?mission_dir=${encodeURIComponent(missionDir)}`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            playerSpawnPoints = data.spawn_points || [];
+            draw(); // Redraw to show player spawn points
+        } else {
+            playerSpawnPoints = [];
+        }
+    } catch (error) {
+        playerSpawnPoints = [];
+    }
+}
+
 // Load groups from API
 async function loadGroups() {
     const dir = document.getElementById('missionDir').value.trim();
@@ -1622,10 +1747,11 @@ async function loadGroups() {
         markers = data.groups || [];
         selectedMarkers.clear();
         
-        // Load effect areas, event spawns, and territories after loading markers
+        // Load effect areas, event spawns, territories, and player spawn points after loading markers
         await loadEffectAreas();
         await loadEventSpawns();
         await loadTerritories();
+        await loadPlayerSpawnPoints();
         
         // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
@@ -2548,6 +2674,7 @@ function saveFilterAndDisplaySettings() {
     localStorage.setItem('map_viewer_showEventSpawns', showEventSpawns.toString());
     localStorage.setItem('map_viewer_showTerritories', showTerritories.toString());
     localStorage.setItem('map_viewer_showEffectAreas', showEffectAreas.toString());
+    localStorage.setItem('map_viewer_showPlayerSpawnPoints', showPlayerSpawnPoints.toString());
     localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
     localStorage.setItem('map_viewer_backgroundImageOpacity', backgroundImageOpacity.toString());
     
@@ -2600,6 +2727,13 @@ async function restoreSavedState() {
         showEffectAreas = savedShowEffectAreas === 'true';
         const checkbox = document.getElementById('showEffectAreas');
         if (checkbox) checkbox.checked = showEffectAreas;
+    }
+    
+    const savedShowPlayerSpawnPoints = localStorage.getItem('map_viewer_showPlayerSpawnPoints');
+    if (savedShowPlayerSpawnPoints !== null) {
+        showPlayerSpawnPoints = savedShowPlayerSpawnPoints === 'true';
+        const checkbox = document.getElementById('showPlayerSpawnPoints');
+        if (checkbox) checkbox.checked = showPlayerSpawnPoints;
     }
     
     const savedShowBackgroundImage = localStorage.getItem('map_viewer_showBackgroundImage');
@@ -2765,6 +2899,13 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('showEffectAreas').addEventListener('change', (e) => {
         showEffectAreas = e.target.checked;
         draw();
+        saveFilterAndDisplaySettings();
+    });
+    
+    document.getElementById('showPlayerSpawnPoints').addEventListener('change', (e) => {
+        showPlayerSpawnPoints = e.target.checked;
+        draw();
+        saveFilterAndDisplaySettings();
     });
     
     const showTerritoriesCheckbox = document.getElementById('showTerritories');
