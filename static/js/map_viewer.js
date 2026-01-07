@@ -114,7 +114,11 @@ function initCanvas() {
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
         
-        if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+        if (e.button === 2) {
+            // Right click - copy location
+            handleRightClick(x, y);
+            e.preventDefault();
+        } else if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             // Pan mode
             isPanning = true;
             panStartX = x;
@@ -1525,6 +1529,130 @@ function updateHoveredMarker(screenX, screenY) {
     if (hoveredMarkerIndex !== newHoveredIndex) {
         hoveredMarkerIndex = newHoveredIndex;
         draw();
+    }
+}
+
+// Get location string for a marker or world coordinates
+function getLocationString(markerOrCoords) {
+    let x, y, z;
+    
+    if (markerOrCoords && typeof markerOrCoords === 'object') {
+        // It's a marker object
+        x = markerOrCoords.x;
+        y = markerOrCoords.y !== undefined ? markerOrCoords.y : 0;
+        z = markerOrCoords.z;
+    } else if (markerOrCoords && typeof markerOrCoords === 'number') {
+        // It's a single coordinate (shouldn't happen, but handle it)
+        x = markerOrCoords;
+        y = 0;
+        z = 0;
+    } else {
+        // Fallback
+        x = 0;
+        y = 0;
+        z = 0;
+    }
+    
+    // Format as "x,y,z" with y defaulting to 0 if not available
+    return `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)}`;
+}
+
+// Handle right click to copy location
+async function handleRightClick(screenX, screenY) {
+    let locationString = '';
+    let locationSource = '';
+    
+    // Check if we're hovering over a marker
+    if (hoveredMarkerIndex >= 0) {
+        // Get the marker based on its index
+        const eventSpawnOffset = markers.length;
+        const zoneOffset = eventSpawnOffset + eventSpawns.length;
+        const playerSpawnPointOffset = zoneOffset + territories.reduce((sum, t) => sum + t.zones.length, 0);
+        
+        let marker = null;
+        
+        if (hoveredMarkerIndex < eventSpawnOffset) {
+            // Regular marker
+            if (hoveredMarkerIndex < markers.length) {
+                marker = markers[hoveredMarkerIndex];
+                locationSource = 'marker';
+            }
+        } else if (hoveredMarkerIndex < zoneOffset) {
+            // Event spawn
+            const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
+            if (eventSpawnIndex < eventSpawns.length) {
+                marker = eventSpawns[eventSpawnIndex];
+                locationSource = 'event spawn';
+            }
+        } else if (hoveredMarkerIndex < playerSpawnPointOffset) {
+            // Zone marker
+            let zoneIndex = hoveredMarkerIndex - zoneOffset;
+            for (const territory of territories) {
+                if (zoneIndex < territory.zones.length) {
+                    marker = territory.zones[zoneIndex];
+                    locationSource = 'zone';
+                    break;
+                }
+                zoneIndex -= territory.zones.length;
+            }
+        } else {
+            // Player spawn point
+            const spawnPointIndex = hoveredMarkerIndex - playerSpawnPointOffset;
+            if (spawnPointIndex < playerSpawnPoints.length) {
+                marker = playerSpawnPoints[spawnPointIndex];
+                locationSource = 'spawn point';
+            }
+        }
+        
+        if (marker) {
+            locationString = getLocationString(marker);
+        }
+    }
+    
+    // If no marker, use cursor position in world coordinates
+    if (!locationString) {
+        const worldCoords = screenToWorld(screenX, screenY);
+        locationString = getLocationString({ x: worldCoords.x, y: 0, z: worldCoords.z });
+        locationSource = 'cursor';
+    }
+    
+    // Update the location field in the UI
+    const locationField = document.getElementById('locationField');
+    if (locationField) {
+        locationField.value = locationString;
+        // Select the text so user can easily copy it
+        locationField.select();
+    }
+    
+    // Try to copy to clipboard if permission is available (silently fail if not)
+    try {
+        // Try modern Clipboard API first
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(locationString);
+            const sourceText = locationSource ? ` (${locationSource})` : '';
+            updateStatus(`Copied location${sourceText} to clipboard`);
+        } else {
+            // Fallback: use execCommand for older browsers
+            const textarea = document.createElement('textarea');
+            textarea.value = locationString;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-999999px';
+            textarea.style.top = '-999999px';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            
+            if (successful) {
+                const sourceText = locationSource ? ` (${locationSource})` : '';
+                updateStatus(`Copied location${sourceText} to clipboard`);
+            }
+        }
+    } catch (error) {
+        // Silently fail - the location is already in the text field
+        // User can manually copy from there if clipboard access is blocked
     }
 }
 
