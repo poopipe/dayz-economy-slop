@@ -536,6 +536,196 @@ def get_effect_areas():
         }), 500
 
 
+def save_effect_areas(effect_area_file_path, effect_areas_data, deleted_indices=None, new_indices=None):
+    """
+    Save effect areas to cfgeffectarea.json.
+    effect_areas_data is a list of {name, x, y, z, radius, isNew, isDeleted} objects.
+    deleted_indices is a list of indices that should be removed from the JSON.
+    new_indices is a list of indices that are newly added effect areas.
+    """
+    if not effect_area_file_path or not Path(effect_area_file_path).exists():
+        return {'success': False, 'error': f'File does not exist: {effect_area_file_path}'}
+    
+    if deleted_indices is None:
+        deleted_indices = []
+    if new_indices is None:
+        new_indices = []
+    
+    try:
+        # Load existing JSON
+        with open(effect_area_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Get Areas list
+        areas_list = data.get('Areas') or data.get('areas')
+        if not areas_list:
+            areas_list = []
+            data['Areas'] = areas_list
+        
+        # Create sets for quick lookup
+        deleted_set = set(deleted_indices)
+        new_set = set(new_indices)
+        
+        # Remove deleted areas (in reverse order to maintain indices)
+        for idx in sorted(deleted_indices, reverse=True):
+            if idx < len(areas_list):
+                areas_list.pop(idx)
+        
+        # Update existing areas (skip deleted and new ones)
+        data_index = 0
+        json_index = 0
+        updated_count = 0
+        
+        while data_index < len(effect_areas_data) and json_index < len(areas_list):
+            area_data = effect_areas_data[data_index]
+            
+            # Skip deleted areas in data
+            if data_index in deleted_set or area_data.get('isDeleted', False):
+                data_index += 1
+                continue
+            
+            # Skip new areas in data (they'll be added later)
+            if data_index in new_set or area_data.get('isNew', False):
+                data_index += 1
+                continue
+            
+            # Update this area
+            area_json = areas_list[json_index]
+            
+            # Ensure Data object exists
+            if 'Data' not in area_json:
+                area_json['Data'] = {}
+            if 'data' not in area_json and 'Data' not in area_json:
+                area_json['Data'] = {}
+            
+            data_obj = area_json.get('Data') or area_json.get('data', {})
+            
+            # Round to 2 decimal places
+            x = round(float(area_data.get('x', 0)), 2)
+            y = round(float(area_data.get('y', 0)), 2)
+            z = round(float(area_data.get('z', 0)), 2)
+            radius = round(float(area_data.get('radius', 50)), 2)
+            
+            # Update position and radius
+            data_obj['Pos'] = [x, y, z]
+            data_obj['Radius'] = radius
+            
+            # Update area name if provided
+            if 'name' in area_data:
+                area_json['AreaName'] = area_data['name']
+            
+            updated_count += 1
+            data_index += 1
+            json_index += 1
+        
+        # Add new areas
+        added_count = 0
+        for idx in sorted(new_indices):
+            if idx < len(effect_areas_data):
+                area_data = effect_areas_data[idx]
+                
+                if area_data.get('isDeleted', False):
+                    continue
+                
+                # Round to 2 decimal places
+                x = round(float(area_data.get('x', 0)), 2)
+                y = round(float(area_data.get('y', 0)), 2)
+                z = round(float(area_data.get('z', 0)), 2)
+                radius = round(float(area_data.get('radius', 50)), 2)
+                
+                # Create new area
+                new_area = {
+                    'AreaName': area_data.get('name', f'Area_{idx}'),
+                    'Data': {
+                        'Pos': [x, y, z],
+                        'Radius': radius
+                    }
+                }
+                areas_list.append(new_area)
+                added_count += 1
+        
+        # Write back to file
+        with open(effect_area_file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        total_changes = updated_count + added_count + len(deleted_indices)
+        print(f"Successfully saved effect areas: {updated_count} updated, {added_count} added, {len(deleted_indices)} deleted")
+        return {'success': True, 'count': total_changes, 'updated': updated_count, 'added': added_count, 'deleted': len(deleted_indices)}
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/effect-areas/save', methods=['POST'])
+def save_effect_areas_endpoint():
+    """Save effect area data to cfgeffectarea.json."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        effect_areas_data = data.get('effect_areas', [])
+        if not effect_areas_data:
+            return jsonify({'success': False, 'error': 'No effect areas data provided'}), 400
+        
+        deleted_indices = data.get('deleted_indices', [])
+        new_indices = data.get('new_indices', [])
+        
+        # Look for cfgeffectarea.json
+        effect_area_file = mission_path / 'cfgeffectarea.json'
+        if not effect_area_file.exists():
+            return jsonify({
+                'success': False,
+                'error': f'cfgeffectarea.json not found at: {effect_area_file}'
+            }), 404
+        
+        print(f"Saving effect areas to: {effect_area_file}")
+        result = save_effect_areas(str(effect_area_file), effect_areas_data, deleted_indices, new_indices)
+        
+        if result['success']:
+            message_parts = []
+            if result.get('updated', 0) > 0:
+                message_parts.append(f"{result['updated']} updated")
+            if result.get('added', 0) > 0:
+                message_parts.append(f"{result['added']} added")
+            if result.get('deleted', 0) > 0:
+                message_parts.append(f"{result['deleted']} deleted")
+            message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
+            
+            return jsonify({
+                'success': True,
+                'count': result['count'],
+                'message': message
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Unknown error')
+            }), 500
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 def load_type_categories(economycore_file_path):
     """
     Load type categories from cfgeconomycore.xml.

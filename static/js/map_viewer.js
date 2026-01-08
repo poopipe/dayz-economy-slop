@@ -55,14 +55,22 @@ let needsRedraw = false;
 // Marker editing state
 let editingEnabled = {
     playerSpawnPoints: false,
+    effectAreas: false,
     // Add other marker types here as needed
 };
 let originalPositions = {
     playerSpawnPoints: new Map(), // Map<index, {x, y, z}>
+    effectAreas: new Map(), // Map<index, {x, y, z, radius}>
     // Add other marker types here as needed
 };
 let deletedSpawnPoints = new Set(); // Set of indices for deleted spawn points
 let newSpawnPoints = new Set(); // Set of indices for newly added spawn points
+let deletedEffectAreas = new Set(); // Set of indices for deleted effect areas
+let newEffectAreas = new Set(); // Set of indices for newly added effect areas
+let selectedEffectAreas = new Set(); // Selected effect areas (when editing)
+let isEditingRadius = false; // Flag to indicate if we're editing radius
+let radiusEditIndex = -1; // Index of effect area being radius-edited
+let radiusEditStartRadius = 0; // Starting radius when radius editing begins
 let isDragging = false;
 let draggedMarkerType = null;
 let draggedMarkerIndex = -1;
@@ -148,12 +156,53 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
-            // In edit mode, check for Ctrl+Click to add spawn point
+            // In edit mode, check for Ctrl+Click to add spawn point or effect area
             if (editingEnabled.playerSpawnPoints && (e.ctrlKey || e.metaKey)) {
                 // Ctrl+Click (or Cmd+Click on Mac) - add spawn point at click location
                 addSpawnPointAt(x, y);
                 e.preventDefault();
                 return;
+            }
+            if (editingEnabled.effectAreas && (e.ctrlKey || e.metaKey)) {
+                // Ctrl+Click (or Cmd+Click on Mac) - add effect area at click location
+                addEffectAreaAt(x, y);
+                e.preventDefault();
+                return;
+            }
+            
+            // In edit mode, check for effect area interactions
+            if (editingEnabled.effectAreas) {
+                // Check for radius handle click or edge click
+                const radiusResult = tryStartRadiusEdit(x, y);
+                if (radiusResult) {
+                    e.preventDefault();
+                    return;
+                }
+                // Check for center click to drag
+                if (tryStartDragEffectArea(x, y)) {
+                    e.preventDefault();
+                    return;
+                }
+                // Check if clicking on an effect area to select it
+                const clickedArea = getEffectAreaAtPoint(x, y);
+                if (clickedArea !== null) {
+                    if (e.altKey) {
+                        // Alt+Click - toggle selection
+                        if (selectedEffectAreas.has(clickedArea.index)) {
+                            selectedEffectAreas.delete(clickedArea.index);
+                        } else {
+                            selectedEffectAreas.add(clickedArea.index);
+                        }
+                    } else {
+                        // Normal click - select this one
+                        selectedEffectAreas.clear();
+                        selectedEffectAreas.add(clickedArea.index);
+                    }
+                    updateSelectedCount();
+                    requestDraw();
+                    e.preventDefault();
+                    return;
+                }
             }
             
             // In edit mode, check for selection/drag first
@@ -209,8 +258,13 @@ function initCanvas() {
         tooltipX = x;
         tooltipY = y;
         
-        if (isDragging) {
-            // Update marker position during drag
+        // Handle dragging or radius editing
+        if (isDragging || isEditingRadius) {
+            handleDrag(x, y);
+        }
+        
+        if (isDragging || isEditingRadius) {
+            // Update marker position or radius during drag
             handleDrag(x, y);
             e.preventDefault();
         } else if (isPanning) {
@@ -230,8 +284,8 @@ function initCanvas() {
     });
     
     canvas.addEventListener('mouseup', (e) => {
-        if (isDragging && e.button === 0) {
-            // End drag on left mouse button release
+        if ((isDragging || isEditingRadius) && e.button === 0) {
+            // End drag or radius edit on left mouse button release
             handleDragEnd();
             e.preventDefault();
             return;
@@ -245,7 +299,7 @@ function initCanvas() {
     
     // Also handle mouseup on window to catch cases where mouse leaves canvas during drag
     window.addEventListener('mouseup', (e) => {
-        if (isDragging && e.button === 0) {
+        if ((isDragging || isEditingRadius) && e.button === 0) {
             handleDragEnd();
         }
     });
@@ -271,6 +325,9 @@ function initCanvas() {
         if (e.key === 'Delete' || e.key === 'Backspace') {
             if (editingEnabled.playerSpawnPoints && selectedPlayerSpawnPoints.size > 0) {
                 deleteSelectedSpawnPoints();
+                e.preventDefault();
+            } else if (editingEnabled.effectAreas && selectedEffectAreas.size > 0) {
+                deleteSelectedEffectAreas();
                 e.preventDefault();
             }
         }
@@ -725,7 +782,15 @@ function drawEffectAreas() {
         return;
     }
     
-    effectAreas.forEach(area => {
+    const isEditing = editingEnabled.effectAreas;
+    const isDraggingThisType = isDragging && draggedMarkerType === 'effectAreas';
+    
+    effectAreas.forEach((area, index) => {
+        // Skip deleted effect areas
+        if (deletedEffectAreas.has(index)) {
+            return;
+        }
+        
         // Convert world coordinates to screen coordinates
         // Note: z coordinate needs to be reversed since origin is in lower left
         const screenPos = worldToScreen(area.x, area.z);
@@ -738,25 +803,72 @@ function drawEffectAreas() {
             return;
         }
         
+        const isSelected = selectedEffectAreas.has(index);
+        const hasUnsavedChanges = originalPositions.effectAreas.has(index);
+        const isNew = newEffectAreas.has(index);
+        const isBeingDragged = isDraggingThisType && draggedMarkerIndex === index;
+        const isEditingRadius = radiusEditIndex === index;
+        
         // Increase visibility when zoomed out - adjust opacity
         // When zoomed out (viewScale < 1), make circles more visible
         const baseAlpha = 0.3;
         const zoomedOutAlpha = Math.min(0.6, baseAlpha + (1.0 - viewScale) * 0.3);
-        const alpha = viewScale < 1.0 ? zoomedOutAlpha : baseAlpha;
+        let alpha = viewScale < 1.0 ? zoomedOutAlpha : baseAlpha;
         
-        // Draw circle with orange color and transparency
+        // Adjust alpha for editing state
+        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+            alpha = Math.min(0.7, alpha + 0.2);
+        }
+        
+        // Draw circle with color based on editing state
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = '#ff8800'; // Orange
-        ctx.strokeStyle = '#ff6600'; // Slightly darker orange for border
-        ctx.lineWidth = 2;
+        
+        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+            if (isSelected) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800'; // Yellow/Orange for selected
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+            } else if (isNew) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00'; // Green for new
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
+            } else {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+            }
+        } else {
+            ctx.fillStyle = '#ff8800'; // Orange
+            ctx.strokeStyle = '#ff6600'; // Slightly darker orange for border
+        }
+        
+        ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
         
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, screenRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         
-        ctx.restore();
+        // Draw radius handle when editing and selected
+        if (isEditing && isSelected) {
+            ctx.restore();
+            ctx.save();
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            
+            // Draw handle on the right side of the circle
+            const handleX = screenPos.x + screenRadius;
+            const handleY = screenPos.y;
+            const handleRadius = 6;
+            
+            ctx.beginPath();
+            ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        } else {
+            ctx.restore();
+        }
     });
 }
 
@@ -1476,23 +1588,28 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
     const minZ = Math.min(topLeft.z, bottomRight.z);
     const maxZ = Math.max(topLeft.z, bottomRight.z);
     
-    // Select or deselect markers within the rectangle
-    markers.forEach((marker, index) => {
-        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
-            return; // Skip hidden markers
-        }
-        
-        if (marker.x >= minX && marker.x <= maxX &&
-            marker.z >= minZ && marker.z <= maxZ) {
-            if (addToSelection) {
-                // Add to selection
-                selectedMarkers.add(index);
-            } else {
-                // Remove from selection (deselect mode)
-                selectedMarkers.delete(index);
+    // If editing is enabled for a specific type, only allow selection of that type
+    const isEditingAnyType = editingEnabled.playerSpawnPoints || editingEnabled.effectAreas;
+    
+    // Select or deselect markers within the rectangle (only if not editing)
+    if (!isEditingAnyType) {
+        markers.forEach((marker, index) => {
+            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+                return; // Skip hidden markers
             }
-        }
-    });
+            
+            if (marker.x >= minX && marker.x <= maxX &&
+                marker.z >= minZ && marker.z <= maxZ) {
+                if (addToSelection) {
+                    // Add to selection
+                    selectedMarkers.add(index);
+                } else {
+                    // Remove from selection (deselect mode)
+                    selectedMarkers.delete(index);
+                }
+            }
+        });
+    }
     
     // Also select player spawn points if editing is enabled
     if (editingEnabled.playerSpawnPoints && showPlayerSpawnPoints) {
@@ -1503,6 +1620,23 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
                     selectedPlayerSpawnPoints.add(index);
                 } else {
                     selectedPlayerSpawnPoints.delete(index);
+                }
+            }
+        });
+    }
+    
+    // Also select effect areas if editing is enabled
+    if (editingEnabled.effectAreas && showEffectAreas) {
+        effectAreas.forEach((area, index) => {
+            if (deletedEffectAreas.has(index)) return;
+            
+            // Check if area center is within rectangle
+            if (area.x >= minX && area.x <= maxX &&
+                area.z >= minZ && area.z <= maxZ) {
+                if (addToSelection) {
+                    selectedEffectAreas.add(index);
+                } else {
+                    selectedEffectAreas.delete(index);
                 }
             }
         });
@@ -1543,6 +1677,9 @@ function selectAtPoint(screenX, screenY, altKey = false) {
     // Use consistent threshold for marker interaction
     let found = false;
     
+    // If editing is enabled for a specific type, only allow selection of that type
+    const isEditingAnyType = editingEnabled.playerSpawnPoints || editingEnabled.effectAreas;
+    
     // Check player spawn points first if editing is enabled
     if (editingEnabled.playerSpawnPoints && showPlayerSpawnPoints) {
         const spawnPointOffset = markers.length + eventSpawns.length + 
@@ -1569,8 +1706,33 @@ function selectAtPoint(screenX, screenY, altKey = false) {
         }
     }
     
-    // Check regular markers if no spawn point was clicked
-    if (!found) {
+    // Check effect areas if editing is enabled for them
+    if (!found && editingEnabled.effectAreas && showEffectAreas) {
+        for (let index = 0; index < effectAreas.length; index++) {
+            if (deletedEffectAreas.has(index)) continue;
+            
+            const area = effectAreas[index];
+            const screenPos = worldToScreen(area.x, area.z);
+            const screenRadius = area.radius * viewScale;
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Check if clicking on the circle
+            if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD) {
+                if (altKey) {
+                    selectedEffectAreas.delete(index);
+                } else {
+                    selectedEffectAreas.add(index);
+                }
+                found = true;
+                break;
+            }
+        }
+    }
+    
+    // Check regular markers if no editable marker was clicked and not editing
+    if (!found && !isEditingAnyType) {
         markers.forEach((marker, index) => {
             if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
                 return; // Skip hidden markers
@@ -1607,8 +1769,11 @@ function updateHoveredMarker(screenX, screenY) {
     let newHoveredIndex = -1;
     let minDistance = Infinity;
     
-    // Check regular markers (only if showMarkers is true)
-    if (showMarkers) {
+    // If editing is enabled for a specific type, only check that type
+    const isEditingAnyType = editingEnabled.playerSpawnPoints || editingEnabled.effectAreas;
+    
+    // Check regular markers (only if showMarkers is true and not editing)
+    if (showMarkers && !isEditingAnyType) {
         markers.forEach((marker, index) => {
             if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
                 return; // Skip hidden markers
@@ -1626,8 +1791,8 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
-    // Check event spawns (offset index by markers.length)
-    if (showEventSpawns) {
+    // Check event spawns (offset index by markers.length) - skip if editing
+    if (showEventSpawns && !isEditingAnyType) {
         eventSpawns.forEach((spawn, index) => {
             if (!visibleEventSpawns.has(index) && visibleEventSpawns.size > 0) {
                 return; // Skip hidden event spawns
@@ -1645,8 +1810,8 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
-    // Check zone markers (offset by markers.length + eventSpawns.length)
-    if (showTerritories) {
+    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing
+    if (showTerritories && !isEditingAnyType) {
         let zoneIndexOffset = markers.length + eventSpawns.length;
         territories.forEach((territory, territoryIndex) => {
             if (!visibleTerritories.has(territoryIndex) && visibleTerritories.size > 0) {
@@ -1671,22 +1836,51 @@ function updateHoveredMarker(screenX, screenY) {
     }
     
     // Check player spawn points (offset by markers + event spawns + zones)
-    // Only check if not currently dragging (to avoid hover conflicts during drag)
+    // Only check if editing is enabled for them, or if no editing is enabled at all
     if (showPlayerSpawnPoints && !isDragging) {
-        const spawnPointOffset = markers.length + eventSpawns.length + 
-            territories.reduce((sum, t) => sum + t.zones.length, 0);
-        
-        playerSpawnPoints.forEach((spawnPoint, index) => {
-            const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
-            const dx = screenPos.x - screenX;
-            const dy = screenPos.y - screenY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
+        if (editingEnabled.playerSpawnPoints || !isEditingAnyType) {
+            const spawnPointOffset = markers.length + eventSpawns.length + 
+                territories.reduce((sum, t) => sum + t.zones.length, 0);
             
-            if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-                minDistance = distance;
-                newHoveredIndex = spawnPointOffset + index;
-            }
-        });
+            playerSpawnPoints.forEach((spawnPoint, index) => {
+                if (deletedSpawnPoints.has(index)) return;
+                
+                const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                    minDistance = distance;
+                    newHoveredIndex = spawnPointOffset + index;
+                }
+            });
+        }
+    }
+    
+    // Check effect areas - only if editing is enabled for them, or if no editing is enabled at all
+    if (showEffectAreas && !isDragging && !isEditingRadius) {
+        if (editingEnabled.effectAreas || !isEditingAnyType) {
+            const effectAreaOffset = markers.length + eventSpawns.length + 
+                territories.reduce((sum, t) => sum + t.zones.length, 0) +
+                playerSpawnPoints.length;
+            
+            effectAreas.forEach((area, index) => {
+                if (deletedEffectAreas.has(index)) return;
+                
+                const screenPos = worldToScreen(area.x, area.z);
+                const screenRadius = area.radius * viewScale;
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Check if within circle
+                if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                    minDistance = distance;
+                    newHoveredIndex = effectAreaOffset + index;
+                }
+            });
+        }
     }
     
     if (hoveredMarkerIndex !== newHoveredIndex) {
@@ -1915,6 +2109,29 @@ function tryStartDrag(screenX, screenY) {
 
 // Handle drag update
 function handleDrag(screenX, screenY) {
+    if (isEditingRadius) {
+        // Handle radius editing
+        if (radiusEditIndex >= 0 && radiusEditIndex < effectAreas.length) {
+            const area = effectAreas[radiusEditIndex];
+            const screenPos = worldToScreen(area.x, area.z);
+            
+            // Calculate new radius based on distance from center
+            const dx = screenX - screenPos.x;
+            const dy = screenY - screenPos.y;
+            const newScreenRadius = Math.sqrt(dx * dx + dy * dy);
+            
+            // Convert back to world units
+            const newRadius = newScreenRadius / viewScale;
+            
+            // Ensure minimum radius
+            if (newRadius > 1.0) {
+                area.radius = newRadius;
+            }
+        }
+        requestDraw();
+        return;
+    }
+    
     if (!isDragging) return;
     
     // Calculate world position delta
@@ -1944,6 +2161,12 @@ function handleDrag(screenX, screenY) {
             spawnPoint.x = dragStartWorldX + deltaX;
             spawnPoint.z = dragStartWorldZ + deltaZ;
         }
+    } else if (draggedMarkerType === 'effectAreas') {
+        if (draggedMarkerIndex >= 0 && draggedMarkerIndex < effectAreas.length) {
+            const area = effectAreas[draggedMarkerIndex];
+            area.x = dragStartWorldX + deltaX;
+            area.z = dragStartWorldZ + deltaZ;
+        }
     }
     
     requestDraw();
@@ -1951,6 +2174,18 @@ function handleDrag(screenX, screenY) {
 
 // Handle drag end
 function handleDragEnd() {
+    if (isEditingRadius) {
+        // Round radius to 2 decimal places
+        if (radiusEditIndex >= 0 && radiusEditIndex < effectAreas.length) {
+            const area = effectAreas[radiusEditIndex];
+            area.radius = Math.round(area.radius * 100) / 100;
+        }
+        isEditingRadius = false;
+        radiusEditIndex = -1;
+        requestDraw();
+        return;
+    }
+    
     if (!isDragging) return;
     
     // Round positions to 2 decimal places when placing the marker(s)
@@ -1971,6 +2206,13 @@ function handleDragEnd() {
             spawnPoint.x = Math.round(spawnPoint.x * 100) / 100;
             spawnPoint.y = Math.round(spawnPoint.y * 100) / 100;
             spawnPoint.z = Math.round(spawnPoint.z * 100) / 100;
+        }
+    } else if (draggedMarkerType === 'effectAreas') {
+        if (draggedMarkerIndex >= 0 && draggedMarkerIndex < effectAreas.length) {
+            const area = effectAreas[draggedMarkerIndex];
+            area.x = Math.round(area.x * 100) / 100;
+            area.y = Math.round(area.y * 100) / 100;
+            area.z = Math.round(area.z * 100) / 100;
         }
     }
     
@@ -2086,6 +2328,301 @@ function addSpawnPointAt(screenX, screenY) {
     requestDraw();
 }
 
+// Get effect area at a point (returns {index, area} or null)
+function getEffectAreaAtPoint(screenX, screenY) {
+    if (!editingEnabled.effectAreas || !showEffectAreas) {
+        return null;
+    }
+    
+    for (let index = 0; index < effectAreas.length; index++) {
+        if (deletedEffectAreas.has(index)) continue;
+        
+        const area = effectAreas[index];
+        const screenPos = worldToScreen(area.x, area.z);
+        const screenRadius = area.radius * viewScale;
+        
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check if clicking on the circle (within radius + threshold)
+        if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD) {
+            return { index, area };
+        }
+    }
+    
+    return null;
+}
+
+// Try to start radius editing for an effect area
+function tryStartRadiusEdit(screenX, screenY) {
+    if (!editingEnabled.effectAreas || !showEffectAreas) {
+        return false;
+    }
+    
+    for (let index = 0; index < effectAreas.length; index++) {
+        if (deletedEffectAreas.has(index)) continue;
+        if (!selectedEffectAreas.has(index)) continue;
+        
+        const area = effectAreas[index];
+        const screenPos = worldToScreen(area.x, area.z);
+        const screenRadius = area.radius * viewScale;
+        
+        // Check if clicking on the radius handle (right side of circle)
+        const handleX = screenPos.x + screenRadius;
+        const handleY = screenPos.y;
+        const handleRadius = 6;
+        
+        const dx = handleX - screenX;
+        const dy = handleY - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < handleRadius + MARKER_INTERACTION_THRESHOLD) {
+            // Start radius editing
+            isEditingRadius = true;
+            radiusEditIndex = index;
+            radiusEditStartRadius = area.radius;
+            dragStartX = screenX;
+            dragStartY = screenY;
+            
+            // Store original position if not already stored
+            if (!originalPositions.effectAreas.has(index)) {
+                originalPositions.effectAreas.set(index, {
+                    x: area.x,
+                    y: area.y,
+                    z: area.z,
+                    radius: area.radius
+                });
+            }
+            
+            return true;
+        }
+        
+        // Also check if clicking near the edge of the circle (for radius editing)
+        const dx2 = screenPos.x - screenX;
+        const dy2 = screenPos.y - screenY;
+        const distanceFromCenter = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        const distanceFromEdge = Math.abs(distanceFromCenter - screenRadius);
+        
+        if (distanceFromEdge < MARKER_INTERACTION_THRESHOLD && distanceFromCenter > screenRadius * 0.5) {
+            // Clicking near edge - start radius editing
+            isEditingRadius = true;
+            radiusEditIndex = index;
+            radiusEditStartRadius = area.radius;
+            dragStartX = screenX;
+            dragStartY = screenY;
+            
+            if (!originalPositions.effectAreas.has(index)) {
+                originalPositions.effectAreas.set(index, {
+                    x: area.x,
+                    y: area.y,
+                    z: area.z,
+                    radius: area.radius
+                });
+            }
+            
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Try to start dragging an effect area
+function tryStartDragEffectArea(screenX, screenY) {
+    if (!editingEnabled.effectAreas || !showEffectAreas) {
+        return false;
+    }
+    
+    // Check if clicking on a selected effect area center to drag
+    if (selectedEffectAreas.size > 0) {
+        for (const index of selectedEffectAreas) {
+            if (index >= effectAreas.length) continue;
+            if (deletedEffectAreas.has(index)) continue;
+            
+            const area = effectAreas[index];
+            const screenPos = worldToScreen(area.x, area.z);
+            const screenRadius = area.radius * viewScale;
+            
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Check if clicking on center (within small radius, not on edge)
+            if (distance < Math.min(screenRadius * 0.3, 20) && distance < screenRadius - MARKER_INTERACTION_THRESHOLD) {
+                // Start dragging
+                isDragging = true;
+                draggedMarkerType = 'effectAreas';
+                draggedMarkerIndex = index;
+                dragStartX = screenX;
+                dragStartY = screenY;
+                
+                const clickedWorld = screenToWorld(screenX, screenY);
+                dragStartWorldX = clickedWorld.x;
+                dragStartWorldZ = clickedWorld.z;
+                
+                // Store original positions for all selected areas
+                for (const selectedIndex of selectedEffectAreas) {
+                    if (!originalPositions.effectAreas.has(selectedIndex)) {
+                        const ea = effectAreas[selectedIndex];
+                        originalPositions.effectAreas.set(selectedIndex, {
+                            x: ea.x,
+                            y: ea.y,
+                            z: ea.z,
+                            radius: ea.radius
+                        });
+                    }
+                }
+                
+                return true;
+            }
+        }
+    }
+    
+    // Check if clicking on any effect area center
+    for (let index = 0; index < effectAreas.length; index++) {
+        if (deletedEffectAreas.has(index)) continue;
+        
+        const area = effectAreas[index];
+        const screenPos = worldToScreen(area.x, area.z);
+        const screenRadius = area.radius * viewScale;
+        
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check if clicking on center (within small radius)
+        if (distance < Math.min(screenRadius * 0.3, 20)) {
+            // Start dragging
+            isDragging = true;
+            draggedMarkerType = 'effectAreas';
+            draggedMarkerIndex = index;
+            dragStartX = screenX;
+            dragStartY = screenY;
+            
+            const clickedWorld = screenToWorld(screenX, screenY);
+            dragStartWorldX = clickedWorld.x;
+            dragStartWorldZ = clickedWorld.z;
+            
+            if (!originalPositions.effectAreas.has(index)) {
+                originalPositions.effectAreas.set(index, {
+                    x: area.x,
+                    y: area.y,
+                    z: area.z,
+                    radius: area.radius
+                });
+            }
+            
+            // Select this area
+            selectedEffectAreas.clear();
+            selectedEffectAreas.add(index);
+            updateSelectedCount();
+            
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Add new effect area at cursor location
+function addEffectAreaAt(screenX, screenY) {
+    if (!editingEnabled.effectAreas) {
+        return;
+    }
+    
+    const worldPos = screenToWorld(screenX, screenY);
+    const x = Math.round(worldPos.x * 100) / 100;
+    const y = Math.round(worldPos.y * 100) / 100;
+    const z = Math.round(worldPos.z * 100) / 100;
+    
+    // Default radius (use first existing area's radius, or 50.0)
+    const defaultRadius = effectAreas.length > 0 ? effectAreas[0].radius : 50.0;
+    
+    // Create new effect area
+    const newIndex = effectAreas.length;
+    effectAreas.push({
+        id: newIndex,
+        name: `Area_${newIndex}`,
+        x: x,
+        y: y,
+        z: z,
+        radius: defaultRadius
+    });
+    
+    // Mark as new
+    newEffectAreas.add(newIndex);
+    
+    // Select the newly added area
+    selectedEffectAreas.clear();
+    selectedEffectAreas.add(newIndex);
+    updateSelectedCount();
+    requestDraw();
+}
+
+// Delete selected effect areas
+function deleteSelectedEffectAreas() {
+    if (!editingEnabled.effectAreas || selectedEffectAreas.size === 0) {
+        return;
+    }
+    
+    const indicesToDelete = Array.from(selectedEffectAreas).sort((a, b) => b - a);
+    
+    for (const index of indicesToDelete) {
+        if (index < effectAreas.length) {
+            if (newEffectAreas.has(index)) {
+                newEffectAreas.delete(index);
+                effectAreas.splice(index, 1);
+                // Update indices
+                const newOriginalPositions = new Map();
+                originalPositions.effectAreas.forEach((pos, idx) => {
+                    if (idx < index) {
+                        newOriginalPositions.set(idx, pos);
+                    } else if (idx > index) {
+                        newOriginalPositions.set(idx - 1, pos);
+                    }
+                });
+                originalPositions.effectAreas = newOriginalPositions;
+                
+                const newSelected = new Set();
+                selectedEffectAreas.forEach(idx => {
+                    if (idx < index) {
+                        newSelected.add(idx);
+                    } else if (idx > index) {
+                        newSelected.add(idx - 1);
+                    }
+                });
+                selectedEffectAreas = newSelected;
+                
+                const newNewEffectAreas = new Set();
+                newEffectAreas.forEach(idx => {
+                    if (idx < index) {
+                        newNewEffectAreas.add(idx);
+                    } else if (idx > index) {
+                        newNewEffectAreas.add(idx - 1);
+                    }
+                });
+                newEffectAreas = newNewEffectAreas;
+            } else {
+                deletedEffectAreas.add(index);
+                if (!originalPositions.effectAreas.has(index)) {
+                    const ea = effectAreas[index];
+                    originalPositions.effectAreas.set(index, {
+                        x: ea.x,
+                        y: ea.y,
+                        z: ea.z,
+                        radius: ea.radius
+                    });
+                }
+            }
+        }
+    }
+    
+    selectedEffectAreas.clear();
+    updateSelectedCount();
+    requestDraw();
+}
+
 // Save marker changes to file
 async function saveMarkerChanges(markerType) {
     if (markerType === 'playerSpawnPoints') {
@@ -2156,6 +2693,70 @@ async function saveMarkerChanges(markerType) {
         } catch (error) {
             return { success: false, message: error.message };
         }
+    } else if (markerType === 'effectAreas') {
+        // Check if there are any changes (modified, deleted, or new)
+        const hasChanges = originalPositions.effectAreas.size > 0 || 
+                          deletedEffectAreas.size > 0 || 
+                          newEffectAreas.size > 0;
+        
+        if (!hasChanges) {
+            return { success: true, message: 'No changes to save' };
+        }
+        
+        try {
+            // Prepare data for save: include all current effect areas, plus metadata about deletions and new points
+            const effectAreasData = effectAreas.map((ea, idx) => ({
+                index: idx,
+                name: ea.name || `Area_${idx}`,
+                x: ea.x != null ? ea.x : 0,
+                y: ea.y != null ? ea.y : 0,
+                z: ea.z != null ? ea.z : 0,
+                radius: ea.radius != null ? ea.radius : 50,
+                isNew: newEffectAreas.has(idx),
+                isDeleted: deletedEffectAreas.has(idx)
+            }));
+            
+            const deletedIndices = Array.from(deletedEffectAreas);
+            
+            const response = await fetch('/api/effect-areas/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    mission_dir: missionDir,
+                    effect_areas: effectAreasData,
+                    deleted_indices: deletedIndices,
+                    new_indices: Array.from(newEffectAreas)
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Remove deleted effect areas from array
+                const indicesToRemove = Array.from(deletedEffectAreas).sort((a, b) => b - a);
+                for (const index of indicesToRemove) {
+                    effectAreas.splice(index, 1);
+                }
+                
+                // Clear all tracking after successful save
+                originalPositions.effectAreas.clear();
+                deletedEffectAreas.clear();
+                newEffectAreas.clear();
+                
+                // Re-index effect areas
+                effectAreas.forEach((ea, idx) => {
+                    ea.id = idx;
+                });
+                
+                return { success: true, message: `Saved changes to effect areas` };
+            } else {
+                return { success: false, message: data.error || 'Failed to save' };
+            }
+        } catch (error) {
+            return { success: false, message: error.message };
+        }
     }
     
     return { success: false, message: 'Unknown marker type' };
@@ -2193,6 +2794,32 @@ function restoreMarkerPositions(markerType) {
         playerSpawnPoints.forEach((sp, idx) => {
             sp.id = idx;
         });
+    } else if (markerType === 'effectAreas') {
+        // Restore positions and radius of modified effect areas
+        originalPositions.effectAreas.forEach((original, index) => {
+            if (index < effectAreas.length && !deletedEffectAreas.has(index)) {
+                effectAreas[index].x = original.x;
+                effectAreas[index].y = original.y;
+                effectAreas[index].z = original.z;
+                effectAreas[index].radius = original.radius;
+            }
+        });
+        
+        // Remove newly added effect areas
+        const newIndices = Array.from(newEffectAreas).sort((a, b) => b - a);
+        for (const index of newIndices) {
+            effectAreas.splice(index, 1);
+        }
+        
+        // Clear all tracking
+        originalPositions.effectAreas.clear();
+        deletedEffectAreas.clear();
+        newEffectAreas.clear();
+        
+        // Re-index effect areas
+        effectAreas.forEach((ea, idx) => {
+            ea.id = idx;
+        });
     }
     
     requestDraw();
@@ -2205,6 +2832,11 @@ async function handleEditingToggle(markerType, enabled) {
     // Show/hide edit controls
     if (markerType === 'playerSpawnPoints') {
         const editControls = document.getElementById('spawnPointEditControls');
+        if (editControls) {
+            editControls.style.display = enabled ? 'block' : 'none';
+        }
+    } else if (markerType === 'effectAreas') {
+        const editControls = document.getElementById('effectAreaEditControls');
         if (editControls) {
             editControls.style.display = enabled ? 'block' : 'none';
         }
@@ -2225,6 +2857,10 @@ async function handleEditingToggle(markerType, enabled) {
             hasChanges = originalPositions.playerSpawnPoints.size > 0 || 
                         deletedSpawnPoints.size > 0 || 
                         newSpawnPoints.size > 0;
+        } else if (markerType === 'effectAreas') {
+            hasChanges = originalPositions.effectAreas.size > 0 || 
+                        deletedEffectAreas.size > 0 || 
+                        newEffectAreas.size > 0;
         }
         
         if (hasChanges) {
@@ -2236,6 +2872,8 @@ async function handleEditingToggle(markerType, enabled) {
                     // Clear selection after successful save
                     if (markerType === 'playerSpawnPoints') {
                         selectedPlayerSpawnPoints.clear();
+                    } else if (markerType === 'effectAreas') {
+                        selectedEffectAreas.clear();
                     }
                 } else {
                     updateStatus(`Error saving: ${result.message}`, true);
@@ -2255,12 +2893,16 @@ async function handleEditingToggle(markerType, enabled) {
                 // Clear selection after restore
                 if (markerType === 'playerSpawnPoints') {
                     selectedPlayerSpawnPoints.clear();
+                } else if (markerType === 'effectAreas') {
+                    selectedEffectAreas.clear();
                 }
             }
         } else {
             // No changes, but clear selection when disabling editing
             if (markerType === 'playerSpawnPoints') {
                 selectedPlayerSpawnPoints.clear();
+            } else if (markerType === 'effectAreas') {
+                selectedEffectAreas.clear();
             }
         }
         
@@ -2272,7 +2914,14 @@ async function handleEditingToggle(markerType, enabled) {
 
 // Update selected count display
 function updateSelectedCount() {
-    document.getElementById('selectedCount').textContent = `Selected: ${selectedMarkers.size}`;
+    let count = selectedMarkers.size;
+    if (editingEnabled.playerSpawnPoints) {
+        count += selectedPlayerSpawnPoints.size;
+    }
+    if (editingEnabled.effectAreas) {
+        count += selectedEffectAreas.size;
+    }
+    document.getElementById('selectedCount').textContent = `Selected: ${count}`;
 }
 
 // Clear all selected markers
@@ -3659,6 +4308,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    const editEffectAreasCheckbox = document.getElementById('editEffectAreas');
+    if (editEffectAreasCheckbox) {
+        editEffectAreasCheckbox.addEventListener('change', async (e) => {
+            await handleEditingToggle('effectAreas', e.target.checked);
+            draw();
+        });
+    }
     
     const showTerritoriesCheckbox = document.getElementById('showTerritories');
     if (showTerritoriesCheckbox) {
