@@ -61,6 +61,8 @@ let originalPositions = {
     playerSpawnPoints: new Map(), // Map<index, {x, y, z}>
     // Add other marker types here as needed
 };
+let deletedSpawnPoints = new Set(); // Set of indices for deleted spawn points
+let newSpawnPoints = new Set(); // Set of indices for newly added spawn points
 let isDragging = false;
 let draggedMarkerType = null;
 let draggedMarkerIndex = -1;
@@ -146,6 +148,14 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
+            // In edit mode, check for Ctrl+Click to add spawn point
+            if (editingEnabled.playerSpawnPoints && (e.ctrlKey || e.metaKey)) {
+                // Ctrl+Click (or Cmd+Click on Mac) - add spawn point at click location
+                addSpawnPointAt(x, y);
+                e.preventDefault();
+                return;
+            }
+            
             // In edit mode, check for selection/drag first
             if (editingEnabled.playerSpawnPoints) {
                 // Check if clicking on a selected spawn point to drag
@@ -254,6 +264,16 @@ function initCanvas() {
     window.addEventListener('resize', () => {
         resizeCanvas();
         draw();
+    });
+    
+    // Keyboard handler for Delete key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (editingEnabled.playerSpawnPoints && selectedPlayerSpawnPoints.size > 0) {
+                deleteSelectedSpawnPoints();
+                e.preventDefault();
+            }
+        }
     });
     
     draw();
@@ -881,6 +901,11 @@ function drawPlayerSpawnPoints() {
     const isDraggingThisType = isDragging && draggedMarkerType === 'playerSpawnPoints';
     
     playerSpawnPoints.forEach((spawnPoint, index) => {
+        // Skip deleted spawn points (they'll be removed on save)
+        if (deletedSpawnPoints.has(index)) {
+            return;
+        }
+        
         const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
         
         // Skip if position is invalid
@@ -892,6 +917,7 @@ function drawPlayerSpawnPoints() {
         const isBeingDragged = isDraggingThisType && (draggedMarkerIndex === index || draggedSelectedSpawnPoints.has(index));
         const isSelected = selectedPlayerSpawnPoints.has(index);
         const hasUnsavedChanges = originalPositions.playerSpawnPoints.has(index);
+        const isNew = newSpawnPoints.has(index);
         
         // Draw rectangle (more transparent)
         const screenWidth = spawnPoint.width * viewScale;
@@ -914,10 +940,13 @@ function drawPlayerSpawnPoints() {
         
         // Draw marker (more visible)
         // Use different color if editing and has unsaved changes or if selected
-        if (isEditing && (hasUnsavedChanges || isSelected)) {
+        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
             if (isSelected) {
                 ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800'; // Yellow/Orange for selected
                 ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+            } else if (isNew) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00'; // Green for new
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
             } else {
                 ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
                 ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
@@ -1952,33 +1981,141 @@ function handleDragEnd() {
     requestDraw();
 }
 
-// Save marker changes to file
-async function saveMarkerChanges(markerType) {
-    if (markerType === 'playerSpawnPoints') {
-        // Get all modified spawn points
-        const modifiedSpawnPoints = [];
-        for (let i = 0; i < playerSpawnPoints.length; i++) {
-            if (originalPositions.playerSpawnPoints.has(i)) {
-                const original = originalPositions.playerSpawnPoints.get(i);
-                const current = playerSpawnPoints[i];
+// Delete selected spawn points
+function deleteSelectedSpawnPoints() {
+    if (!editingEnabled.playerSpawnPoints || selectedPlayerSpawnPoints.size === 0) {
+        return;
+    }
+    
+    // Store original positions for deleted spawn points (for restore)
+    const indicesToDelete = Array.from(selectedPlayerSpawnPoints).sort((a, b) => b - a); // Sort descending for safe deletion
+    
+    for (const index of indicesToDelete) {
+        if (index < playerSpawnPoints.length) {
+            // If this spawn point was newly added, just remove it
+            if (newSpawnPoints.has(index)) {
+                newSpawnPoints.delete(index);
+                playerSpawnPoints.splice(index, 1);
+                // Update indices in originalPositions, selectedPlayerSpawnPoints, and newSpawnPoints
+                const newOriginalPositions = new Map();
+                originalPositions.playerSpawnPoints.forEach((pos, idx) => {
+                    if (idx < index) {
+                        newOriginalPositions.set(idx, pos);
+                    } else if (idx > index) {
+                        newOriginalPositions.set(idx - 1, pos);
+                    }
+                });
+                originalPositions.playerSpawnPoints = newOriginalPositions;
                 
-                // Check if position changed
-                if (original.x !== current.x || original.y !== current.y || original.z !== current.z) {
-                    modifiedSpawnPoints.push({
-                        index: i,
-                        original: original,
-                        current: { x: current.x, y: current.y, z: current.z },
-                        xml: current.xml
+                const newSelected = new Set();
+                selectedPlayerSpawnPoints.forEach(idx => {
+                    if (idx < index) {
+                        newSelected.add(idx);
+                    } else if (idx > index) {
+                        newSelected.add(idx - 1);
+                    }
+                });
+                selectedPlayerSpawnPoints = newSelected;
+                
+                // Update indices in newSpawnPoints
+                const newNewSpawnPoints = new Set();
+                newSpawnPoints.forEach(idx => {
+                    if (idx < index) {
+                        newNewSpawnPoints.add(idx);
+                    } else if (idx > index) {
+                        newNewSpawnPoints.add(idx - 1);
+                    }
+                });
+                newSpawnPoints = newNewSpawnPoints;
+            } else {
+                // Mark as deleted (don't remove from array yet, will be removed on save)
+                deletedSpawnPoints.add(index);
+                // Store original position for restore
+                if (!originalPositions.playerSpawnPoints.has(index)) {
+                    const sp = playerSpawnPoints[index];
+                    originalPositions.playerSpawnPoints.set(index, {
+                        x: sp.x,
+                        y: sp.y,
+                        z: sp.z
                     });
                 }
             }
         }
+    }
+    
+    // Clear selection
+    selectedPlayerSpawnPoints.clear();
+    updateSelectedCount();
+    requestDraw();
+}
+
+// Add new spawn point at cursor location
+function addSpawnPointAt(screenX, screenY) {
+    if (!editingEnabled.playerSpawnPoints) {
+        return;
+    }
+    
+    const worldPos = screenToWorld(screenX, screenY);
+    const x = Math.round(worldPos.x * 100) / 100;
+    const y = Math.round(worldPos.y * 100) / 100;
+    const z = Math.round(worldPos.z * 100) / 100;
+    
+    // Get width and height from existing spawn points (use first one's values, or defaults)
+    const width = playerSpawnPoints.length > 0 ? playerSpawnPoints[0].width : 100.0;
+    const height = playerSpawnPoints.length > 0 ? playerSpawnPoints[0].height : 100.0;
+    
+    // Create new spawn point
+    const newIndex = playerSpawnPoints.length;
+    playerSpawnPoints.push({
+        id: newIndex,
+        x: x,
+        y: y,
+        z: z,
+        width: width,
+        height: height,
+        xml: `<pos x="${x}" z="${z}"/>` // Default XML format
+    });
+    
+    // Mark as new
+    newSpawnPoints.add(newIndex);
+    
+    // Select the newly added spawn point
+    selectedPlayerSpawnPoints.clear();
+    selectedPlayerSpawnPoints.add(newIndex);
+    updateSelectedCount();
+    requestDraw();
+}
+
+// Save marker changes to file
+async function saveMarkerChanges(markerType) {
+    if (markerType === 'playerSpawnPoints') {
+        // Check if there are any changes (modified, deleted, or new)
+        const hasChanges = originalPositions.playerSpawnPoints.size > 0 || 
+                          deletedSpawnPoints.size > 0 || 
+                          newSpawnPoints.size > 0;
         
-        if (modifiedSpawnPoints.length === 0) {
+        if (!hasChanges) {
             return { success: true, message: 'No changes to save' };
         }
         
         try {
+            // Prepare data for save: include all current spawn points, plus metadata about deletions and new points
+            // Ensure all values are valid numbers (not null/undefined)
+            const spawnPointsData = playerSpawnPoints.map((sp, idx) => ({
+                index: idx,
+                x: sp.x != null ? sp.x : 0,
+                y: sp.y != null ? sp.y : 0,
+                z: sp.z != null ? sp.z : 0,
+                width: sp.width != null ? sp.width : 100,
+                height: sp.height != null ? sp.height : 100,
+                xml: sp.xml || `<pos x="${sp.x != null ? sp.x : 0}" z="${sp.z != null ? sp.z : 0}"/>`,
+                isNew: newSpawnPoints.has(idx),
+                isDeleted: deletedSpawnPoints.has(idx)
+            }));
+            
+            // Also send the deleted indices (for spawn points that were deleted but still in array)
+            const deletedIndices = Array.from(deletedSpawnPoints);
+            
             const response = await fetch('/api/player-spawn-points/save', {
                 method: 'POST',
                 headers: {
@@ -1986,24 +2123,33 @@ async function saveMarkerChanges(markerType) {
                 },
                 body: JSON.stringify({
                     mission_dir: missionDir,
-                    spawn_points: playerSpawnPoints.map((sp, idx) => ({
-                        index: idx,
-                        x: sp.x,
-                        y: sp.y,
-                        z: sp.z,
-                        width: sp.width,
-                        height: sp.height,
-                        xml: sp.xml
-                    }))
+                    spawn_points: spawnPointsData,
+                    deleted_indices: deletedIndices,
+                    new_indices: Array.from(newSpawnPoints)
                 })
             });
             
             const data = await response.json();
             
             if (data.success) {
-                // Clear original positions after successful save
+                // Remove deleted spawn points from array (they were already removed from XML)
+                const indicesToRemove = Array.from(deletedSpawnPoints).sort((a, b) => b - a);
+                for (const index of indicesToRemove) {
+                    playerSpawnPoints.splice(index, 1);
+                }
+                
+                // Clear all tracking after successful save
                 originalPositions.playerSpawnPoints.clear();
-                return { success: true, message: `Saved ${modifiedSpawnPoints.length} spawn point(s)` };
+                deletedSpawnPoints.clear();
+                newSpawnPoints.clear();
+                
+                // Re-index spawn points
+                playerSpawnPoints.forEach((sp, idx) => {
+                    sp.id = idx;
+                });
+                
+                const changeCount = originalPositions.playerSpawnPoints.size + deletedSpawnPoints.size + newSpawnPoints.size;
+                return { success: true, message: `Saved changes to spawn points` };
             } else {
                 return { success: false, message: data.error || 'Failed to save' };
             }
@@ -2018,14 +2164,35 @@ async function saveMarkerChanges(markerType) {
 // Restore marker positions
 function restoreMarkerPositions(markerType) {
     if (markerType === 'playerSpawnPoints') {
+        // Restore positions of modified spawn points
         originalPositions.playerSpawnPoints.forEach((original, index) => {
-            if (index < playerSpawnPoints.length) {
+            if (index < playerSpawnPoints.length && !deletedSpawnPoints.has(index)) {
                 playerSpawnPoints[index].x = original.x;
                 playerSpawnPoints[index].y = original.y;
                 playerSpawnPoints[index].z = original.z;
             }
         });
+        
+        // Restore deleted spawn points (remove from deleted set)
+        // Note: We can't fully restore deleted spawn points without reloading from XML,
+        // but we can at least clear the deleted set so they're not removed on next save
+        // For now, we'll just clear the deleted set - the user would need to reload to fully restore
+        
+        // Remove newly added spawn points
+        const newIndices = Array.from(newSpawnPoints).sort((a, b) => b - a);
+        for (const index of newIndices) {
+            playerSpawnPoints.splice(index, 1);
+        }
+        
+        // Clear all tracking
         originalPositions.playerSpawnPoints.clear();
+        deletedSpawnPoints.clear();
+        newSpawnPoints.clear();
+        
+        // Re-index spawn points
+        playerSpawnPoints.forEach((sp, idx) => {
+            sp.id = idx;
+        });
     }
     
     requestDraw();
@@ -2034,6 +2201,14 @@ function restoreMarkerPositions(markerType) {
 // Handle editing toggle change
 async function handleEditingToggle(markerType, enabled) {
     editingEnabled[markerType] = enabled;
+    
+    // Show/hide edit controls
+    if (markerType === 'playerSpawnPoints') {
+        const editControls = document.getElementById('spawnPointEditControls');
+        if (editControls) {
+            editControls.style.display = enabled ? 'block' : 'none';
+        }
+    }
     
     // Update canvas cursor style
     const anyEditingEnabled = Object.values(editingEnabled).some(v => v === true);
@@ -2047,7 +2222,9 @@ async function handleEditingToggle(markerType, enabled) {
         // Check if there are unsaved changes
         let hasChanges = false;
         if (markerType === 'playerSpawnPoints') {
-            hasChanges = originalPositions.playerSpawnPoints.size > 0;
+            hasChanges = originalPositions.playerSpawnPoints.size > 0 || 
+                        deletedSpawnPoints.size > 0 || 
+                        newSpawnPoints.size > 0;
         }
         
         if (hasChanges) {
@@ -3481,6 +3658,7 @@ document.addEventListener('DOMContentLoaded', () => {
             draw();
         });
     }
+    
     
     const showTerritoriesCheckbox = document.getElementById('showTerritories');
     if (showTerritoriesCheckbox) {

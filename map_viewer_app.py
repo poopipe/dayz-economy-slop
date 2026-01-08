@@ -1259,13 +1259,20 @@ def get_player_spawn_points():
         }), 500
 
 
-def save_player_spawn_points(spawn_points_file_path, spawn_points_data):
+def save_player_spawn_points(spawn_points_file_path, spawn_points_data, deleted_indices=None, new_indices=None):
     """
     Save player spawn points to cfgplayerspawnpoints.xml.
-    spawn_points_data is a list of {x, y, z, width, height, xml} objects.
+    spawn_points_data is a list of {x, y, z, width, height, xml, isNew, isDeleted} objects.
+    deleted_indices is a list of indices that should be removed from the XML.
+    new_indices is a list of indices that are newly added spawn points.
     """
     if not spawn_points_file_path or not Path(spawn_points_file_path).exists():
         return {'success': False, 'error': f'File does not exist: {spawn_points_file_path}'}
+    
+    if deleted_indices is None:
+        deleted_indices = []
+    if new_indices is None:
+        new_indices = []
     
     try:
         tree = ET.parse(spawn_points_file_path)
@@ -1288,49 +1295,122 @@ def save_player_spawn_points(spawn_points_file_path, spawn_points_data):
         if len(posbubbles) == 0:
             posbubbles = fresh_elem.findall('.//generator_posbubbles')
         
-        # Create a mapping of positions to find which pos element to update
-        # We'll match by parsing the XML and comparing positions
-        spawn_point_index = 0
+        if len(posbubbles) == 0:
+            # Create a generator_posbubbles element if none exists
+            posbubble = ET.SubElement(fresh_elem, 'generator_posbubbles')
+            posbubbles = [posbubble]
         
-        for posbubble in posbubbles:
-            pos_elements = posbubble.findall('pos')
-            if len(pos_elements) == 0:
-                pos_elements = posbubble.findall('.//pos')
+        # Use the first generator_posbubbles for all operations
+        posbubble = posbubbles[0]
+        
+        # Collect all pos elements
+        pos_elements = posbubble.findall('pos')
+        if len(pos_elements) == 0:
+            pos_elements = posbubble.findall('.//pos')
+        
+        # Create a set of deleted indices for quick lookup
+        deleted_set = set(deleted_indices)
+        new_set = set(new_indices)
+        
+        # First, remove deleted pos elements (in reverse order to maintain indices)
+        for idx in sorted(deleted_indices, reverse=True):
+            if idx < len(pos_elements):
+                posbubble.remove(pos_elements[idx])
+        
+        # Re-collect pos elements after deletions
+        pos_elements = posbubble.findall('pos')
+        if len(pos_elements) == 0:
+            pos_elements = posbubble.findall('.//pos')
+        
+        # Update existing pos elements
+        # Match by original index: iterate through spawn_points_data and update corresponding pos elements
+        # Skip deleted and new spawn points in the data
+        updated_count = 0
+        xml_index = 0
+        
+        for data_index in range(len(spawn_points_data)):
+            spawn_data = spawn_points_data[data_index]
             
-            for pos_elem in pos_elements:
-                if spawn_point_index >= len(spawn_points_data):
-                    break
-                
-                spawn_data = spawn_points_data[spawn_point_index]
-                
-                # Round to 2 decimal places
-                x = round(float(spawn_data['x']), 2)
-                y = round(float(spawn_data.get('y', 0)), 2)
-                z = round(float(spawn_data['z']), 2)
-                
-                # Update position attributes or text
-                if pos_elem.get('x') is not None or pos_elem.get('z') is not None:
-                    # Update attributes
-                    pos_elem.set('x', str(x))
-                    pos_elem.set('z', str(z))
-                elif pos_elem.text:
-                    # Update text content
-                    pos_elem.text = f"{x} {y} {z}"
-                else:
-                    # Set attributes if neither exists
-                    pos_elem.set('x', str(x))
-                    pos_elem.set('z', str(z))
-                
-                spawn_point_index += 1
+            # Skip deleted spawn points in data
+            if data_index in deleted_set or spawn_data.get('isDeleted', False):
+                continue
             
-            if spawn_point_index >= len(spawn_points_data):
+            # Skip new spawn points in data (they'll be added later)
+            if data_index in new_set or spawn_data.get('isNew', False):
+                continue
+            
+            # Update corresponding pos element (xml_index tracks position in remaining pos_elements)
+            if xml_index >= len(pos_elements):
+                # More spawn points than pos elements - this shouldn't happen, but handle gracefully
                 break
+            
+            pos_elem = pos_elements[xml_index]
+            
+            # Round to 2 decimal places, handle None values
+            x_val = spawn_data.get('x')
+            y_val = spawn_data.get('y', 0)
+            z_val = spawn_data.get('z')
+            
+            if x_val is None or z_val is None:
+                print(f"Warning: spawn point at index {data_index} has None for x or z, skipping")
+                continue
+            
+            x = round(float(x_val), 2)
+            y = round(float(y_val) if y_val is not None else 0, 2)
+            z = round(float(z_val), 2)
+            
+            # Update position attributes or text
+            if pos_elem.get('x') is not None or pos_elem.get('z') is not None:
+                # Update attributes
+                pos_elem.set('x', str(x))
+                pos_elem.set('z', str(z))
+            elif pos_elem.text:
+                # Update text content
+                pos_elem.text = f"{x} {y} {z}"
+            else:
+                # Set attributes if neither exists
+                pos_elem.set('x', str(x))
+                pos_elem.set('z', str(z))
+            
+            updated_count += 1
+            xml_index += 1
+        
+        # Add new spawn points
+        added_count = 0
+        for idx in sorted(new_indices):
+            if idx < len(spawn_points_data):
+                spawn_data = spawn_points_data[idx]
+                
+                # Skip if marked as deleted (shouldn't happen, but be safe)
+                if spawn_data.get('isDeleted', False):
+                    continue
+                
+                # Round to 2 decimal places, handle None values
+                x_val = spawn_data.get('x')
+                y_val = spawn_data.get('y', 0)
+                z_val = spawn_data.get('z')
+                
+                if x_val is None or z_val is None:
+                    print(f"Warning: new spawn point at index {idx} has None for x or z, skipping")
+                    continue
+                
+                x = round(float(x_val), 2)
+                y = round(float(y_val) if y_val is not None else 0, 2)
+                z = round(float(z_val), 2)
+                
+                # Create new pos element
+                new_pos = ET.SubElement(posbubble, 'pos')
+                new_pos.set('x', str(x))
+                new_pos.set('z', str(z))
+                
+                added_count += 1
         
         # Write back to file
         tree.write(spawn_points_file_path, encoding='utf-8', xml_declaration=True)
         
-        print(f"Successfully saved {spawn_point_index} player spawn points to {spawn_points_file_path}")
-        return {'success': True, 'count': spawn_point_index}
+        total_changes = updated_count + added_count + len(deleted_indices)
+        print(f"Successfully saved player spawn points: {updated_count} updated, {added_count} added, {len(deleted_indices)} deleted")
+        return {'success': True, 'count': total_changes, 'updated': updated_count, 'added': added_count, 'deleted': len(deleted_indices)}
         
     except Exception as e:
         import traceback
@@ -1362,6 +1442,9 @@ def save_player_spawn_points_endpoint():
         if not spawn_points_data:
             return jsonify({'success': False, 'error': 'No spawn points data provided'}), 400
         
+        deleted_indices = data.get('deleted_indices', [])
+        new_indices = data.get('new_indices', [])
+        
         # Look for cfgplayerspawnpoints.xml
         spawn_points_file = mission_path / 'cfgplayerspawnpoints.xml'
         if not spawn_points_file.exists():
@@ -1371,13 +1454,22 @@ def save_player_spawn_points_endpoint():
             }), 404
         
         print(f"Saving player spawn points to: {spawn_points_file}")
-        result = save_player_spawn_points(str(spawn_points_file), spawn_points_data)
+        result = save_player_spawn_points(str(spawn_points_file), spawn_points_data, deleted_indices, new_indices)
         
         if result['success']:
+            message_parts = []
+            if result.get('updated', 0) > 0:
+                message_parts.append(f"{result['updated']} updated")
+            if result.get('added', 0) > 0:
+                message_parts.append(f"{result['added']} added")
+            if result.get('deleted', 0) > 0:
+                message_parts.append(f"{result['deleted']} deleted")
+            message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
+            
             return jsonify({
                 'success': True,
                 'count': result['count'],
-                'message': f'Saved {result["count"]} spawn point(s)'
+                'message': message
             })
         else:
             return jsonify({
