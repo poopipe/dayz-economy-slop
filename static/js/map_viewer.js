@@ -26,6 +26,9 @@ let territories = []; // Territories from env/*.xml files
 let visibleTerritories = new Set(); // For filtering territories
 let activeTerritoryFilters = []; // Separate filters for territories
 let showTerritories = true;
+let territoryZones = []; // Flattened array of all zones for editing
+let zoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
+let selectedTerritoryType = ''; // Selected territory type for new zones
 let missionDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -168,6 +171,133 @@ const markerTypes = {
         deleted: new Set(),
         new: new Set(),
         originalPositions: new Map()
+    },
+    territoryZones: {
+        getArray: () => territoryZones,
+        setArray: (arr) => { 
+            territoryZones = arr;
+            // Update territories from flattened zones
+            updateTerritoriesFromZones();
+        },
+        getShowFlag: () => showTerritories,
+        canEditRadius: true,
+        canEditDimensions: false,
+        saveEndpoint: '/api/territories/save',
+        getDisplayName: () => 'Territory Zones',
+        getEditControlsId: () => 'territoryZoneEditControls',
+        getEditCheckboxId: () => 'editTerritoryZones',
+        getMarker: (index) => territoryZones[index],
+        isDeleted: (index) => markerTypes.territoryZones.deleted.has(index),
+        getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+        isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+            const screenRadius = (marker.radius || 50.0) * viewScale;
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance <= screenRadius + MARKER_INTERACTION_THRESHOLD;
+        },
+        createNew: (x, y, z) => {
+            // Get selected territory type from dropdown
+            const territoryTypeSelect = document.getElementById('territoryTypeSelect');
+            const selectedType = territoryTypeSelect ? territoryTypeSelect.value : '';
+            
+            if (!selectedType) {
+                // No type selected - use first available or default
+                const typeNames = getAllTerritoryTypeNames();
+                if (typeNames.length > 0) {
+                    // Use first type and update dropdown
+                    if (territoryTypeSelect) {
+                        territoryTypeSelect.value = typeNames[0];
+                    }
+                    return markerTypes.territoryZones.createNew(x, y, z); // Recursive call with type now set
+                }
+            }
+            
+            // Find territory of the selected type
+            let defaultRadius = 50.0;
+            let territoryType = selectedType || 'unknown';
+            let territoryColor = '#FF0000';
+            let territoryIndex = -1;
+            
+            // Find first territory of the selected type
+            for (let i = 0; i < territories.length; i++) {
+                if (territories[i].territory_type === selectedType) {
+                    territoryIndex = i;
+                    territoryColor = territories[i].color;
+                    if (territories[i].zones.length > 0) {
+                        defaultRadius = territories[i].zones[0].radius || 50.0;
+                    }
+                    break;
+                }
+            }
+            
+            // If no territory of this type exists, we'll create one when saving
+            // For now, use index 0 as placeholder (will be handled in save)
+            if (territoryIndex < 0) {
+                territoryIndex = 0; // Placeholder - will be created on save
+                // Try to get color from another territory of same type or use default
+                const typeNames = getAllTerritoryTypeNames();
+                const typeIndex = typeNames.indexOf(selectedType);
+                const colors = [
+                    '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
+                    '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
+                    '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
+                ];
+                territoryColor = colors[typeIndex % colors.length];
+            }
+            
+            // Create new zone
+            const newZone = {
+                id: territoryZones.length,
+                name: `Zone_${territoryZones.length}`,
+                x: x,
+                y: y,
+                z: z,
+                radius: defaultRadius,
+                territoryIndex: territoryIndex,
+                zoneIndex: -1, // Will be set when added to territory
+                territoryType: territoryType,
+                color: territoryColor,
+                xml: `<zone x="${x}" z="${z}" r="${defaultRadius}"/>`
+            };
+            
+            // Note: Mapping will be set in addMarkerAt after the zone is added to array
+            // This ensures the correct flattened index is used
+            
+            return newZone;
+        },
+        getOriginalData: (marker) => ({ 
+            x: marker.x, 
+            y: marker.y, 
+            z: marker.z, 
+            radius: marker.radius || 50.0 
+        }),
+        restoreOriginal: (marker, original) => {
+            marker.x = original.x;
+            marker.y = original.y;
+            marker.z = original.z;
+            marker.radius = original.radius;
+        },
+        prepareSaveData: (marker, index) => {
+            const mapEntry = zoneToTerritoryMap.get(index);
+            return {
+                index: index,
+                territoryType: marker.territoryType, // Include territory type for backend
+                territoryIndex: mapEntry ? mapEntry.territoryIndex : marker.territoryIndex,
+                zoneIndex: mapEntry ? mapEntry.zoneIndex : marker.zoneIndex,
+                name: marker.name || `Zone_${index}`,
+                x: marker.x != null ? marker.x : 0,
+                y: marker.y != null ? marker.y : 0,
+                z: marker.z != null ? marker.z : 0,
+                radius: marker.radius != null ? marker.radius : 50.0,
+                isNew: markerTypes.territoryZones.new.has(index),
+                isDeleted: markerTypes.territoryZones.deleted.has(index)
+            };
+        },
+        selected: new Set(),
+        deleted: new Set(),
+        new: new Set(),
+        originalPositions: new Map()
     }
 };
 
@@ -219,6 +349,10 @@ function requestDraw() {
 function initCanvas() {
     canvas = document.getElementById('markerCanvas');
     ctx = canvas.getContext('2d');
+    
+    // Make canvas focusable so it can receive keyboard events
+    canvas.setAttribute('tabindex', '0');
+    canvas.style.outline = 'none'; // Remove focus outline
     
     // Get or create background canvas
     backgroundCanvas = document.getElementById('backgroundCanvas');
@@ -416,19 +550,28 @@ function initCanvas() {
         draw();
     });
     
-    // Keyboard handler for Delete key
-    document.addEventListener('keydown', (e) => {
+    // Keyboard handler for Delete key - attach to both canvas and document
+    // Canvas handler (when canvas has focus)
+    canvas.addEventListener('keydown', (e) => {
         if (e.key === 'Delete' || e.key === 'Backspace') {
-            // Check each editable type for selected markers to delete
-            for (const markerType of Object.keys(markerTypes)) {
-                const typeConfig = markerTypes[markerType];
-                if (editingEnabled[markerType] && typeConfig.selected.size > 0) {
-                    deleteSelectedMarkers(markerType);
-                    e.preventDefault();
-                    return;
-                }
-            }
+            handleDeleteKey(e);
         }
+    });
+    
+    // Document handler (fallback when canvas doesn't have focus)
+    document.addEventListener('keydown', (e) => {
+        // Only handle if target is not an input/textarea/select
+        if ((e.key === 'Delete' || e.key === 'Backspace') && 
+            e.target.tagName !== 'INPUT' && 
+            e.target.tagName !== 'TEXTAREA' && 
+            e.target.tagName !== 'SELECT') {
+            handleDeleteKey(e);
+        }
+    });
+    
+    // Focus canvas on click to ensure keyboard events work
+    canvas.addEventListener('mousedown', () => {
+        canvas.focus();
     });
     
     draw();
@@ -1040,6 +1183,10 @@ function drawTerritories() {
         return;
     }
     
+    const isEditing = editingEnabled.territoryZones;
+    const isDraggingThisType = isDragging && draggedMarkerType === 'territoryZones';
+    const typeConfig = markerTypes.territoryZones;
+    
     let drawnTerritories = 0;
     let drawnZones = 0;
     let zoneIndexOffset = markers.length + eventSpawns.length;
@@ -1052,6 +1199,29 @@ function drawTerritories() {
         
         // Draw zone markers and circles within territory
         territory.zones.forEach((zone, zoneIndex) => {
+            // Find flattened index for this zone
+            let flattenedIndex = -1;
+            zoneToTerritoryMap.forEach((value, key) => {
+                if (value.territoryIndex === territoryIndex && value.zoneIndex === zoneIndex) {
+                    flattenedIndex = key;
+                }
+            });
+            
+            // If mapping not found, try to find by matching zone data (for newly added zones)
+            if (flattenedIndex < 0 && isEditing) {
+                territoryZones.forEach((tz, idx) => {
+                    if (tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
+                        tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex) {
+                        flattenedIndex = idx;
+                    }
+                });
+            }
+            
+            // Skip deleted zones when editing
+            if (isEditing && flattenedIndex >= 0 && typeConfig.isDeleted(flattenedIndex)) {
+                return;
+            }
+            
             const zoneScreenPos = worldToScreen(zone.x, zone.z);
             
             if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
@@ -1066,13 +1236,43 @@ function drawTerritories() {
             const zoneRadius = zone.radius || 50.0;
             const screenRadius = zoneRadius * viewScale;
             
+            // Check editing state if editing is enabled
+            const isSelected = isEditing && flattenedIndex >= 0 && typeConfig.selected.has(flattenedIndex);
+            const hasUnsavedChanges = isEditing && flattenedIndex >= 0 && typeConfig.originalPositions.has(flattenedIndex);
+            const isNew = isEditing && flattenedIndex >= 0 && typeConfig.new.has(flattenedIndex);
+            const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('territoryZones') && draggedSelectedMarkers.get('territoryZones').has(flattenedIndex)));
+            const isEditingRadius = radiusEditMarkerType === 'territoryZones' && radiusEditIndex === flattenedIndex;
+            
             // Draw circle around zone marker using territory color
             if (isFinite(screenRadius) && screenRadius > 1) {
                 ctx.save();
-                ctx.globalAlpha = 0.2; // Quite transparent
-                ctx.fillStyle = territory.color;
-                ctx.strokeStyle = territory.color;
-                ctx.lineWidth = 2;
+                let alpha = 0.2; // Quite transparent
+                
+                // Adjust alpha for editing state
+                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+                    alpha = Math.min(0.4, alpha + 0.1);
+                }
+                
+                ctx.globalAlpha = alpha;
+                
+                // Use different colors when editing
+                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+                    if (isSelected) {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+                    } else if (isNew) {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
+                    } else {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+                    }
+                } else {
+                    ctx.fillStyle = territory.color;
+                    ctx.strokeStyle = territory.color;
+                }
+                
+                ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
                 
                 ctx.beginPath();
                 ctx.arc(zoneScreenPos.x, zoneScreenPos.y, screenRadius, 0, Math.PI * 2);
@@ -1081,15 +1281,48 @@ function drawTerritories() {
                 
                 ctx.restore();
                 drawnTerritories++;
+                
+                // Draw radius handle when editing and selected
+                if (isEditing && isSelected && typeConfig.canEditRadius) {
+                    ctx.save();
+                    ctx.globalAlpha = 1.0;
+                    ctx.fillStyle = '#ffffff';
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 2;
+                    
+                    // Draw handle on the right side of the circle
+                    const handleX = zoneScreenPos.x + screenRadius;
+                    const handleY = zoneScreenPos.y;
+                    const handleRadius = 6;
+                    
+                    ctx.beginPath();
+                    ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                }
             }
             
             // Draw zone marker using territory color
-            ctx.fillStyle = territory.color;
-            ctx.strokeStyle = isHovered ? '#ffffff' : territory.color;
-            ctx.lineWidth = isHovered ? 3 : 2;
+            if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+                if (isSelected) {
+                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
+                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+                } else if (isNew) {
+                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
+                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
+                } else {
+                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
+                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+                }
+            } else {
+                ctx.fillStyle = territory.color;
+                ctx.strokeStyle = isHovered ? '#ffffff' : territory.color;
+            }
+            ctx.lineWidth = isHovered || isBeingDragged || isSelected ? 3 : 2;
             
             ctx.beginPath();
-            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
+            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, isHovered || isBeingDragged ? 6 : 4, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
             drawnZones++;
@@ -1219,82 +1452,111 @@ function drawTooltip() {
     let marker, isEventSpawn, isZone, isPlayerSpawnPoint;
     const eventSpawnOffset = markers.length;
     const zoneOffset = eventSpawnOffset + eventSpawns.length;
-    const playerSpawnPointOffset = zoneOffset + territories.reduce((sum, t) => sum + t.zones.length, 0);
+    const baseEditableOffset = zoneOffset + (editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + t.zones.length, 0));
     
-    if (hoveredMarkerIndex < eventSpawnOffset) {
-        // Regular marker
-        // Check if markers are enabled and marker is visible
-        if (!showMarkers) {
-            return; // Don't show tooltip if markers are hidden
-        }
-        if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) {
-            return; // Don't show tooltip for hidden markers
-        }
-        marker = markers[hoveredMarkerIndex];
-        isEventSpawn = false;
-        isZone = false;
-        isPlayerSpawnPoint = false;
-    } else if (hoveredMarkerIndex < zoneOffset) {
-        // Event spawn
-        // Check if event spawns are enabled
-        if (!showEventSpawns) {
-            return; // Don't show tooltip if event spawns are hidden
-        }
-        const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
-        if (eventSpawnIndex >= eventSpawns.length) {
-            return;
-        }
-        // Check if event spawn is visible
-        if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(eventSpawnIndex)) {
-            return; // Don't show tooltip for hidden event spawns
-        }
-        marker = eventSpawns[eventSpawnIndex];
-        isEventSpawn = true;
-        isZone = false;
-        isPlayerSpawnPoint = false;
-    } else if (hoveredMarkerIndex < playerSpawnPointOffset) {
-        // Zone marker
-        // Check if territories are enabled
-        if (!showTerritories) {
-            return; // Don't show tooltip if territories are hidden
-        }
-        let zoneIndex = hoveredMarkerIndex - zoneOffset;
-        let found = false;
-        for (const territory of territories) {
-            if (visibleTerritories.size > 0 && !visibleTerritories.has(territories.indexOf(territory))) {
-                continue; // Skip hidden territories
+    // Check editable marker types first (when editing is enabled)
+    let foundInEditable = false;
+    let currentOffset = baseEditableOffset;
+    
+    for (const markerType of Object.keys(markerTypes)) {
+        const typeConfig = markerTypes[markerType];
+        if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
+            const array = typeConfig.getArray();
+            if (hoveredMarkerIndex >= currentOffset && hoveredMarkerIndex < currentOffset + array.length) {
+                const index = hoveredMarkerIndex - currentOffset;
+                if (!typeConfig.isDeleted(index)) {
+                    marker = typeConfig.getMarker(index);
+                    isEventSpawn = false;
+                    isZone = (markerType === 'territoryZones');
+                    isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
+                    foundInEditable = true;
+                    break;
+                }
             }
-            if (zoneIndex < territory.zones.length) {
-                marker = territory.zones[zoneIndex];
-                found = true;
-                break;
+            currentOffset += array.length;
+        }
+    }
+    
+    if (!foundInEditable) {
+        // Check non-editable markers
+        if (hoveredMarkerIndex < eventSpawnOffset) {
+            // Regular marker
+            // Check if markers are enabled and marker is visible
+            if (!showMarkers) {
+                return; // Don't show tooltip if markers are hidden
             }
-            zoneIndex -= territory.zones.length;
+            if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) {
+                return; // Don't show tooltip for hidden markers
+            }
+            marker = markers[hoveredMarkerIndex];
+            isEventSpawn = false;
+            isZone = false;
+            isPlayerSpawnPoint = false;
+        } else if (hoveredMarkerIndex < zoneOffset) {
+            // Event spawn
+            // Check if event spawns are enabled
+            if (!showEventSpawns) {
+                return; // Don't show tooltip if event spawns are hidden
+            }
+            const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
+            if (eventSpawnIndex >= eventSpawns.length) {
+                return;
+            }
+            // Check if event spawn is visible
+            if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(eventSpawnIndex)) {
+                return; // Don't show tooltip for hidden event spawns
+            }
+            marker = eventSpawns[eventSpawnIndex];
+            isEventSpawn = true;
+            isZone = false;
+            isPlayerSpawnPoint = false;
+        } else if (hoveredMarkerIndex < baseEditableOffset) {
+            // Zone marker (when not editing)
+            // Check if territories are enabled
+            if (!showTerritories) {
+                return; // Don't show tooltip if territories are hidden
+            }
+            let zoneIndex = hoveredMarkerIndex - zoneOffset;
+            let found = false;
+            for (const territory of territories) {
+                if (visibleTerritories.size > 0 && !visibleTerritories.has(territories.indexOf(territory))) {
+                    continue; // Skip hidden territories
+                }
+                if (zoneIndex < territory.zones.length) {
+                    marker = territory.zones[zoneIndex];
+                    found = true;
+                    break;
+                }
+                zoneIndex -= territory.zones.length;
+            }
+            if (!found) {
+                return;
+            }
+            isEventSpawn = false;
+            isZone = true;
+            isPlayerSpawnPoint = false;
+        } else {
+            // Check non-editable spawn points
+            const spawnPointOffset = baseEditableOffset;
+            if (hoveredMarkerIndex >= spawnPointOffset && hoveredMarkerIndex < spawnPointOffset + playerSpawnPoints.length) {
+                const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
+                if (spawnPointIndex < playerSpawnPoints.length) {
+                    marker = playerSpawnPoints[spawnPointIndex];
+                    isEventSpawn = false;
+                    isZone = false;
+                    isPlayerSpawnPoint = true;
+                }
+            }
         }
-        if (!found) {
-            return;
-        }
-        isEventSpawn = false;
-        isZone = true;
-        isPlayerSpawnPoint = false;
-    } else {
-        // Player spawn point
-        // Check if player spawn points are enabled
-        if (!showPlayerSpawnPoints) {
-            return; // Don't show tooltip if player spawn points are hidden
-        }
-        const spawnPointIndex = hoveredMarkerIndex - playerSpawnPointOffset;
-        if (spawnPointIndex >= playerSpawnPoints.length) {
-            return;
-        }
-        marker = playerSpawnPoints[spawnPointIndex];
-        isEventSpawn = false;
-        isZone = false;
-        isPlayerSpawnPoint = true;
     }
     const padding = 8;
     const lineHeight = 18;
     const fontSize = 12;
+    
+    // Check if marker exists
+    if (!marker) {
+        return; // Don't draw tooltip if marker is undefined
+    }
     
     // Build tooltip content - initially only name and coordinates
     const lines = [];
@@ -1312,15 +1574,23 @@ function drawTooltip() {
     lines.push('');
     
     // Coordinates on separate lines
-    lines.push(`X: ${marker.x.toFixed(2)} m`);
-    lines.push(`Y: ${marker.y.toFixed(2)} m`);
-    lines.push(`Z: ${marker.z.toFixed(2)} m`);
+    if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+        lines.push(`X: ${marker.x.toFixed(2)} m`);
+        lines.push(`Y: ${marker.y.toFixed(2)} m`);
+        lines.push(`Z: ${marker.z.toFixed(2)} m`);
+    }
     
     // Display rectangle dimensions for player spawn points
-    if (isPlayerSpawnPoint) {
+    if (isPlayerSpawnPoint && marker.width !== undefined && marker.height !== undefined) {
         lines.push('');
         lines.push(`Rectangle Width: ${marker.width.toFixed(2)} m`);
         lines.push(`Rectangle Height: ${marker.height.toFixed(2)} m`);
+    }
+    
+    // Display radius for zones and effect areas
+    if (isZone && marker.radius !== undefined) {
+        lines.push('');
+        lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
     }
     
     // Display usage if available
@@ -1720,6 +1990,7 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
             const array = typeConfig.getArray();
             array.forEach((marker, index) => {
                 if (typeConfig.isDeleted(index)) return;
+                if (!isMarkerVisible(markerType, index)) return; // Skip hidden markers
                 
                 // Check if marker center is within rectangle
                 if (marker.x >= minX && marker.x <= maxX &&
@@ -1764,6 +2035,24 @@ function handleWheel(e) {
     requestDraw();
 }
 
+// Helper function to check if a marker is visible
+function isMarkerVisible(markerType, index) {
+    if (markerType === 'territoryZones') {
+        // Check if the territory containing this zone is visible
+        const mapEntry = zoneToTerritoryMap.get(index);
+        if (!mapEntry) return true; // If no mapping, assume visible
+        const territoryIndex = mapEntry.territoryIndex;
+        // If filters are active, check visibility set
+        if (visibleTerritories.size > 0) {
+            return visibleTerritories.has(territoryIndex);
+        }
+        return true; // No filters = all visible
+    }
+    // For other types, check if the type is shown
+    const typeConfig = markerTypes[markerType];
+    return typeConfig.getShowFlag();
+}
+
 // Generic function to select marker at point for a specific type
 function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
     const typeConfig = markerTypes[markerType];
@@ -1774,6 +2063,7 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
     const array = typeConfig.getArray();
     for (let index = 0; index < array.length; index++) {
         if (typeConfig.isDeleted(index)) continue;
+        if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
         
         const marker = typeConfig.getMarker(index);
         const screenPos = typeConfig.getScreenPos(marker);
@@ -1853,7 +2143,7 @@ function updateHoveredMarker(screenX, screenY) {
     let minDistance = Infinity;
     
     // If editing is enabled for a specific type, only check that type
-    const isEditingAnyType = editingEnabled.playerSpawnPoints || editingEnabled.effectAreas;
+    const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
     
     // Check regular markers (only if showMarkers is true and not editing)
     if (showMarkers && !isEditingAnyType) {
@@ -1893,8 +2183,8 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
-    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing
-    if (showTerritories && !isEditingAnyType) {
+    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing territory zones
+    if (showTerritories && !editingEnabled.territoryZones) {
         let zoneIndexOffset = markers.length + eventSpawns.length;
         territories.forEach((territory, territoryIndex) => {
             if (!visibleTerritories.has(territoryIndex) && visibleTerritories.size > 0) {
@@ -1918,17 +2208,27 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
-    // Check editable marker types for hover
+    // Check editable marker types for hover (including territory zones when editing)
     if (!isDragging && !isEditingRadius) {
-        let offset = markers.length + eventSpawns.length + 
-            territories.reduce((sum, t) => sum + t.zones.length, 0);
+        let offset = markers.length + eventSpawns.length;
+        
+        // If not editing territory zones, add zone offset
+        if (!editingEnabled.territoryZones) {
+            offset += territories.reduce((sum, t) => sum + t.zones.length, 0);
+        }
         
         for (const markerType of Object.keys(markerTypes)) {
             const typeConfig = markerTypes[markerType];
+            // Skip territory zones if not editing (they're handled above)
+            if (markerType === 'territoryZones' && !editingEnabled.territoryZones) {
+                continue;
+            }
+            
             if (typeConfig.getShowFlag() && (editingEnabled[markerType] || !isEditingAnyType)) {
                 const array = typeConfig.getArray();
                 array.forEach((marker, index) => {
                     if (typeConfig.isDeleted(index)) return;
+                    if (!isMarkerVisible(markerType, index)) return; // Skip hidden markers
                     
                     const screenPos = typeConfig.getScreenPos(marker);
                     const dx = screenPos.x - screenX;
@@ -1936,7 +2236,7 @@ function updateHoveredMarker(screenX, screenY) {
                     
                     let distance;
                     if (typeConfig.canEditRadius && marker.radius !== undefined) {
-                        const screenRadius = marker.radius * viewScale;
+                        const screenRadius = (marker.radius || 50.0) * viewScale;
                         distance = Math.sqrt(dx * dx + dy * dy);
                         // Check if within circle
                         if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
@@ -1997,40 +2297,73 @@ async function handleRightClick(screenX, screenY) {
         // Get the marker based on its index
         const eventSpawnOffset = markers.length;
         const zoneOffset = eventSpawnOffset + eventSpawns.length;
-        const playerSpawnPointOffset = zoneOffset + territories.reduce((sum, t) => sum + t.zones.length, 0);
+        const baseEditableOffset = zoneOffset + (editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + t.zones.length, 0));
         
         let marker = null;
         
-        if (hoveredMarkerIndex < eventSpawnOffset) {
-            // Regular marker
-            if (hoveredMarkerIndex < markers.length) {
-                marker = markers[hoveredMarkerIndex];
-                locationSource = 'marker';
-            }
-        } else if (hoveredMarkerIndex < zoneOffset) {
-            // Event spawn
-            const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
-            if (eventSpawnIndex < eventSpawns.length) {
-                marker = eventSpawns[eventSpawnIndex];
-                locationSource = 'event spawn';
-            }
-        } else if (hoveredMarkerIndex < playerSpawnPointOffset) {
-            // Zone marker
-            let zoneIndex = hoveredMarkerIndex - zoneOffset;
-            for (const territory of territories) {
-                if (zoneIndex < territory.zones.length) {
-                    marker = territory.zones[zoneIndex];
-                    locationSource = 'zone';
-                    break;
+        // Check editable marker types first (when editing is enabled)
+        let foundInEditable = false;
+        let currentOffset = baseEditableOffset;
+        
+        for (const markerType of Object.keys(markerTypes)) {
+            const typeConfig = markerTypes[markerType];
+            if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
+                const array = typeConfig.getArray();
+                if (hoveredMarkerIndex >= currentOffset && hoveredMarkerIndex < currentOffset + array.length) {
+                    const index = hoveredMarkerIndex - currentOffset;
+                    if (!typeConfig.isDeleted(index)) {
+                        marker = typeConfig.getMarker(index);
+                        if (markerType === 'territoryZones') {
+                            locationSource = 'zone';
+                        } else if (markerType === 'playerSpawnPoints') {
+                            locationSource = 'spawn point';
+                        } else if (markerType === 'effectAreas') {
+                            locationSource = 'effect area';
+                        }
+                        foundInEditable = true;
+                        break;
+                    }
                 }
-                zoneIndex -= territory.zones.length;
+                currentOffset += array.length;
             }
-        } else {
-            // Player spawn point
-            const spawnPointIndex = hoveredMarkerIndex - playerSpawnPointOffset;
-            if (spawnPointIndex < playerSpawnPoints.length) {
-                marker = playerSpawnPoints[spawnPointIndex];
-                locationSource = 'spawn point';
+        }
+        
+        if (!foundInEditable) {
+            // Check non-editable markers
+            if (hoveredMarkerIndex < eventSpawnOffset) {
+                // Regular marker
+                if (hoveredMarkerIndex < markers.length) {
+                    marker = markers[hoveredMarkerIndex];
+                    locationSource = 'marker';
+                }
+            } else if (hoveredMarkerIndex < zoneOffset) {
+                // Event spawn
+                const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
+                if (eventSpawnIndex < eventSpawns.length) {
+                    marker = eventSpawns[eventSpawnIndex];
+                    locationSource = 'event spawn';
+                }
+            } else if (hoveredMarkerIndex < baseEditableOffset) {
+                // Zone marker (when not editing)
+                let zoneIndex = hoveredMarkerIndex - zoneOffset;
+                for (const territory of territories) {
+                    if (zoneIndex < territory.zones.length) {
+                        marker = territory.zones[zoneIndex];
+                        locationSource = 'zone';
+                        break;
+                    }
+                    zoneIndex -= territory.zones.length;
+                }
+            } else {
+                // Check non-editable spawn points
+                const spawnPointOffset = baseEditableOffset;
+                if (hoveredMarkerIndex >= spawnPointOffset && hoveredMarkerIndex < spawnPointOffset + playerSpawnPoints.length) {
+                    const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
+                    if (spawnPointIndex < playerSpawnPoints.length) {
+                        marker = playerSpawnPoints[spawnPointIndex];
+                        locationSource = 'spawn point';
+                    }
+                }
             }
         }
         
@@ -2101,6 +2434,7 @@ function tryStartDragForType(markerType, screenX, screenY) {
         // Check if clicking on a selected marker
         for (const index of selected) {
             if (index >= array.length || typeConfig.isDeleted(index)) continue;
+            if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
             const marker = typeConfig.getMarker(index);
             const screenPos = typeConfig.getScreenPos(marker);
             
@@ -2143,6 +2477,7 @@ function tryStartDragForType(markerType, screenX, screenY) {
         // No selection - check if clicking on any marker
         for (let index = 0; index < array.length; index++) {
             if (typeConfig.isDeleted(index)) continue;
+            if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
             const marker = typeConfig.getMarker(index);
             const screenPos = typeConfig.getScreenPos(marker);
             
@@ -2201,6 +2536,11 @@ function handleDrag(screenX, screenY) {
                     // Ensure minimum radius
                     if (newRadius > 1.0) {
                         marker.radius = newRadius;
+                        
+                        // For territory zones, sync radius change back to territories array
+                        if (radiusEditMarkerType === 'territoryZones') {
+                            syncTerritoryZoneToTerritories(radiusEditIndex);
+                        }
                     }
                 }
             }
@@ -2233,6 +2573,11 @@ function handleDrag(screenX, screenY) {
             if (marker) {
                 marker.x = newCenterX + offset.offsetX;
                 marker.z = newCenterZ + offset.offsetZ;
+                
+                // For territory zones, sync changes back to territories array immediately
+                if (markerType === 'territoryZones') {
+                    syncTerritoryZoneToTerritories(index);
+                }
             }
         });
     } else if (draggedMarkerIndex >= 0) {
@@ -2241,6 +2586,11 @@ function handleDrag(screenX, screenY) {
         if (marker) {
             marker.x = dragStartWorldX + deltaX;
             marker.z = dragStartWorldZ + deltaZ;
+            
+            // For territory zones, sync changes back to territories array immediately
+            if (markerType === 'territoryZones') {
+                syncTerritoryZoneToTerritories(draggedMarkerIndex);
+            }
         }
     }
     
@@ -2291,6 +2641,21 @@ function handleDragEnd() {
             marker.x = Math.round(marker.x * 100) / 100;
             if (marker.y !== undefined) marker.y = Math.round(marker.y * 100) / 100;
             marker.z = Math.round(marker.z * 100) / 100;
+            
+            // For territory zones, sync changes back to territories array
+            if (draggedMarkerType === 'territoryZones') {
+                syncTerritoryZoneToTerritories(draggedMarkerIndex);
+            }
+        }
+    }
+    
+    // For territory zones with multiple selected markers, sync all changes
+    if (draggedMarkerType === 'territoryZones') {
+        const offsets = draggedSelectedMarkers.get('territoryZones');
+        if (offsets && offsets.size > 0) {
+            offsets.forEach((offset, index) => {
+                syncTerritoryZoneToTerritories(index);
+            });
         }
     }
     
@@ -2299,6 +2664,22 @@ function handleDragEnd() {
     draggedMarkerIndex = -1;
     draggedSelectedMarkers.clear();
     requestDraw();
+}
+
+// Handle Delete/Backspace key press
+function handleDeleteKey(e) {
+    // Check each editable type for selected markers to delete
+    for (const markerType of Object.keys(markerTypes)) {
+        const typeConfig = markerTypes[markerType];
+        if (editingEnabled[markerType] && typeConfig.selected.size > 0) {
+            deleteSelectedMarkers(markerType);
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+    }
+    
+    // If no editable markers selected, don't prevent default (allow normal browser behavior)
 }
 
 // Generic function to delete selected markers
@@ -2388,6 +2769,69 @@ function addMarkerAt(markerType, screenX, screenY) {
     // Mark as new
     typeConfig.new.add(newIndex);
     
+    // For territory zones, ensure the zone is properly synced to territories
+    if (markerType === 'territoryZones') {
+        // Find or create territory of the selected type
+        const selectedType = newMarker.territoryType;
+        let targetTerritoryIndex = -1;
+        
+        // First, try to find an existing territory of this type
+        for (let i = 0; i < territories.length; i++) {
+            if (territories[i].territory_type === selectedType) {
+                targetTerritoryIndex = i;
+                break;
+            }
+        }
+        
+        // If no territory of this type exists, we'll need to create one
+        // For now, add the zone to a placeholder territory (will be created on save)
+        if (targetTerritoryIndex < 0) {
+            // Create a placeholder territory entry
+            const colors = [
+                '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
+                '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
+                '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
+            ];
+            const typeNames = getAllTerritoryTypeNames();
+            const typeIndex = typeNames.indexOf(selectedType);
+            const color = colors[typeIndex % colors.length];
+            
+            // Create new territory entry
+            const newTerritory = {
+                id: territories.length,
+                name: `${selectedType}_0`,
+                territory_type: selectedType,
+                color: color,
+                zones: []
+            };
+            territories.push(newTerritory);
+            targetTerritoryIndex = territories.length - 1;
+        }
+        
+        // Add zone to the target territory
+        const territory = territories[targetTerritoryIndex];
+        const zoneIndex = territory.zones.length;
+        newMarker.territoryIndex = targetTerritoryIndex;
+        newMarker.zoneIndex = zoneIndex;
+        
+        // Add zone to territory
+        territory.zones.push({
+            id: zoneIndex,
+            name: newMarker.name,
+            x: newMarker.x,
+            y: newMarker.y,
+            z: newMarker.z,
+            radius: newMarker.radius,
+            xml: newMarker.xml
+        });
+        
+        // Update zone color to match territory
+        newMarker.color = territory.color;
+        
+        // Set mapping using the correct flattened index (newIndex)
+        zoneToTerritoryMap.set(newIndex, { territoryIndex: targetTerritoryIndex, zoneIndex: zoneIndex });
+    }
+    
     // Select the newly added marker
     typeConfig.selected.clear();
     typeConfig.selected.add(newIndex);
@@ -2405,6 +2849,7 @@ function getMarkerAtPoint(markerType, screenX, screenY) {
     const array = typeConfig.getArray();
     for (let index = 0; index < array.length; index++) {
         if (typeConfig.isDeleted(index)) continue;
+        if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
         
         const marker = typeConfig.getMarker(index);
         const screenPos = typeConfig.getScreenPos(marker);
@@ -2433,6 +2878,7 @@ function tryStartRadiusEdit(markerType, screenX, screenY) {
     for (let index = 0; index < array.length; index++) {
         if (typeConfig.isDeleted(index)) continue;
         if (!typeConfig.selected.has(index)) continue;
+        if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
         
         const marker = typeConfig.getMarker(index);
         if (!marker || marker.radius === undefined) continue;
@@ -2515,6 +2961,7 @@ function tryStartDragRadiusEditable(markerType, screenX, screenY) {
     if (typeConfig.selected.size > 0) {
         for (const index of typeConfig.selected) {
             if (index >= array.length || typeConfig.isDeleted(index)) continue;
+            if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
             
             const marker = typeConfig.getMarker(index);
             if (!marker || marker.radius === undefined) continue;
@@ -2555,12 +3002,13 @@ function tryStartDragRadiusEditable(markerType, screenX, screenY) {
     // Check if clicking on any marker center
     for (let index = 0; index < array.length; index++) {
         if (typeConfig.isDeleted(index)) continue;
+        if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
         
         const marker = typeConfig.getMarker(index);
         if (!marker || marker.radius === undefined) continue;
         
         const screenPos = typeConfig.getScreenPos(marker);
-        const screenRadius = marker.radius * viewScale;
+        const screenRadius = (marker.radius || 50.0) * viewScale;
         
         const dx = screenPos.x - screenX;
         const dy = screenPos.y - screenY;
@@ -2636,12 +3084,31 @@ async function saveMarkerChanges(markerType) {
     try {
         const array = typeConfig.getArray();
         
-        // Prepare data for save using type-specific prepareSaveData function
-        const markerData = array.map((marker, idx) => typeConfig.prepareSaveData(marker, idx));
+        // Special handling for territory zones - need to update territories first
+        if (markerType === 'territoryZones') {
+            // Update territories from flattened zones before saving
+            updateTerritoriesFromZones();
+        }
         
-        // Also send the deleted indices
+        // Prepare data for save - only include markers that have changes
+        // For territory zones, we need to track which territories have changes
+        const markerData = [];
         const deletedIndices = Array.from(typeConfig.deleted);
         const newIndices = Array.from(typeConfig.new);
+        const modifiedIndices = Array.from(typeConfig.originalPositions.keys());
+        
+        if (markerType === 'territoryZones') {
+            // Only include zones that are modified, deleted, or new
+            const allChangedIndices = new Set([...deletedIndices, ...newIndices, ...modifiedIndices]);
+            allChangedIndices.forEach(idx => {
+                if (idx < array.length) {
+                    markerData.push(typeConfig.prepareSaveData(array[idx], idx));
+                }
+            });
+        } else {
+            // For other types, include all markers (they handle filtering on backend)
+            markerData.push(...array.map((marker, idx) => typeConfig.prepareSaveData(marker, idx)));
+        }
         
         // Determine the data key name based on marker type
         let dataKey = 'markers';
@@ -2649,6 +3116,8 @@ async function saveMarkerChanges(markerType) {
             dataKey = 'spawn_points';
         } else if (markerType === 'effectAreas') {
             dataKey = 'effect_areas';
+        } else if (markerType === 'territoryZones') {
+            dataKey = 'zones';
         }
         
         const requestBody = {
@@ -2657,6 +3126,16 @@ async function saveMarkerChanges(markerType) {
             deleted_indices: deletedIndices,
             new_indices: newIndices
         };
+        
+        // For territory zones, also send territories structure
+        if (markerType === 'territoryZones') {
+            requestBody.territories = territories.map(t => ({
+                id: t.id,
+                name: t.name,
+                territory_type: t.territory_type,
+                color: t.color
+            }));
+        }
         
         const response = await fetch(typeConfig.saveEndpoint, {
             method: 'POST',
@@ -2673,6 +3152,20 @@ async function saveMarkerChanges(markerType) {
             const indicesToRemove = Array.from(typeConfig.deleted).sort((a, b) => b - a);
             for (const index of indicesToRemove) {
                 array.splice(index, 1);
+                // Also remove from zoneToTerritoryMap
+                if (markerType === 'territoryZones') {
+                    zoneToTerritoryMap.delete(index);
+                    // Update remaining indices in map
+                    const newMap = new Map();
+                    zoneToTerritoryMap.forEach((value, key) => {
+                        if (key < index) {
+                            newMap.set(key, value);
+                        } else if (key > index) {
+                            newMap.set(key - 1, value);
+                        }
+                    });
+                    zoneToTerritoryMap = newMap;
+                }
             }
             
             // Clear all tracking after successful save
@@ -2684,6 +3177,15 @@ async function saveMarkerChanges(markerType) {
             array.forEach((marker, idx) => {
                 marker.id = idx;
             });
+            
+            // For territory zones, update the local structure instead of reloading
+            // (reloading would overwrite any unsaved changes in other marker types)
+            if (markerType === 'territoryZones') {
+                // Update territories from the current state of territoryZones
+                updateTerritoriesFromZones();
+                // Re-flatten to ensure consistency
+                flattenTerritoryZones();
+            }
             
             return { success: true, message: `Saved changes to ${typeConfig.getDisplayName()}` };
         } else {
@@ -2761,29 +3263,21 @@ async function handleEditingToggle(markerType, enabled) {
                           typeConfig.new.size > 0;
         
         if (hasChanges) {
-            const save = confirm('You have unsaved changes. Do you want to save them?');
-            if (save) {
-                const result = await saveMarkerChanges(markerType);
-                if (result.success) {
-                    updateStatus(result.message);
-                    // Clear selection after successful save
-                    typeConfig.selected.clear();
-                } else {
-                    updateStatus(`Error saving: ${result.message}`, true);
-                    // Don't disable editing if save failed
-                    editingEnabled[markerType] = true;
-                    const checkboxId = typeConfig.getEditCheckboxId();
-                    const checkbox = document.getElementById(checkboxId);
-                    if (checkbox) checkbox.checked = true;
-                    // Re-add cursor class since we're keeping editing enabled
-                    canvas.classList.add('editing-enabled');
-                    return;
-                }
-            } else {
+            const discard = confirm('You have unsaved changes. Discard them?');
+            if (discard) {
                 // Restore original positions
                 restoreMarkerPositions(markerType);
                 // Clear selection after restore
                 typeConfig.selected.clear();
+            } else {
+                // User wants to keep changes - re-enable editing
+                editingEnabled[markerType] = true;
+                const checkboxId = typeConfig.getEditCheckboxId();
+                const checkbox = document.getElementById(checkboxId);
+                if (checkbox) checkbox.checked = true;
+                // Re-add cursor class since we're keeping editing enabled
+                canvas.classList.add('editing-enabled');
+                return;
             }
         } else {
             // No changes, but clear selection when disabling editing
@@ -2891,6 +3385,104 @@ async function loadEffectAreas() {
     }
 }
 
+// Flatten zones from territories into a single array for editing
+function flattenTerritoryZones() {
+    territoryZones = [];
+    zoneToTerritoryMap.clear();
+    
+    territories.forEach((territory, territoryIndex) => {
+        territory.zones.forEach((zone, zoneIndex) => {
+            const flattenedIndex = territoryZones.length;
+            // Create a copy of the zone with territory metadata
+            const zoneCopy = {
+                ...zone,
+                territoryIndex: territoryIndex,
+                zoneIndex: zoneIndex,
+                territoryType: territory.territory_type,
+                color: territory.color,
+                territoryName: territory.name
+            };
+            territoryZones.push(zoneCopy);
+            zoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
+        });
+    });
+}
+
+// Sync a single territory zone back to territories array
+function syncTerritoryZoneToTerritories(flattenedIndex) {
+    if (flattenedIndex < 0 || flattenedIndex >= territoryZones.length) {
+        return;
+    }
+    
+    const zone = territoryZones[flattenedIndex];
+    const mapEntry = zoneToTerritoryMap.get(flattenedIndex);
+    
+    if (!mapEntry) {
+        return;
+    }
+    
+    const { territoryIndex, zoneIndex } = mapEntry;
+    
+    if (territoryIndex >= 0 && territoryIndex < territories.length &&
+        zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+        // Update the zone in the territories array
+        const territoryZone = territories[territoryIndex].zones[zoneIndex];
+        territoryZone.x = zone.x;
+        territoryZone.y = zone.y;
+        territoryZone.z = zone.z;
+        territoryZone.radius = zone.radius;
+        territoryZone.xml = zone.xml || `<zone x="${zone.x}" z="${zone.z}" r="${zone.radius}"/>`;
+    }
+}
+
+// Update territories from flattened zones (after editing)
+function updateTerritoriesFromZones() {
+    // Rebuild territories from flattened zones
+    const territoryMap = new Map(); // Map<territoryIndex, {territory, zones}>
+    
+    territoryZones.forEach((zone, flattenedIndex) => {
+        if (markerTypes.territoryZones.deleted.has(flattenedIndex)) {
+            return; // Skip deleted zones
+        }
+        
+        const mapEntry = zoneToTerritoryMap.get(flattenedIndex);
+        const territoryIndex = mapEntry ? mapEntry.territoryIndex : zone.territoryIndex;
+        
+        if (!territoryMap.has(territoryIndex)) {
+            // Get original territory structure
+            if (territoryIndex < territories.length) {
+                const originalTerritory = territories[territoryIndex];
+                territoryMap.set(territoryIndex, {
+                    territory: { ...originalTerritory },
+                    zones: []
+                });
+            }
+        }
+        
+        const entry = territoryMap.get(territoryIndex);
+        if (entry) {
+            // Create zone copy without metadata
+            const zoneCopy = {
+                id: entry.zones.length,
+                name: zone.name,
+                x: zone.x,
+                y: zone.y,
+                z: zone.z,
+                radius: zone.radius,
+                xml: zone.xml || `<zone x="${zone.x}" z="${zone.z}" r="${zone.radius}"/>`
+            };
+            entry.zones.push(zoneCopy);
+        }
+    });
+    
+    // Update territories array
+    territoryMap.forEach((entry, territoryIndex) => {
+        if (territoryIndex < territories.length) {
+            territories[territoryIndex].zones = entry.zones;
+        }
+    });
+}
+
 // Load territories from API
 async function loadTerritories() {
     if (!missionDir) {
@@ -2908,6 +3500,10 @@ async function loadTerritories() {
         
         if (data.success) {
             territories = data.territories || [];
+            // Flatten zones for editing
+            flattenTerritoryZones();
+            // Populate territory type selector for editing
+            populateTerritoryTypeSelector();
             // Always show territory filter section (even if empty, so user knows it exists)
             const territoryFilterSection = document.getElementById('territoryFilterSection');
             if (territoryFilterSection) {
@@ -2921,6 +3517,8 @@ async function loadTerritories() {
             draw(); // Redraw to show territories
         } else {
             territories = [];
+            territoryZones = [];
+            zoneToTerritoryMap.clear();
             // Still show the filter section even on error
             const territoryFilterSection = document.getElementById('territoryFilterSection');
             if (territoryFilterSection) {
@@ -2929,6 +3527,8 @@ async function loadTerritories() {
         }
     } catch (error) {
         territories = [];
+        territoryZones = [];
+        zoneToTerritoryMap.clear();
     }
 }
 
@@ -3390,6 +3990,38 @@ function getAllTerritoryNames() {
         }
     });
     return Array.from(names).sort();
+}
+
+// Populate territory type selector for editing
+function populateTerritoryTypeSelector() {
+    const typeSelect = document.getElementById('territoryTypeSelect');
+    if (!typeSelect) return;
+    
+    typeSelect.innerHTML = '';
+    const typeNames = getAllTerritoryTypeNames();
+    
+    if (typeNames.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No territory types available';
+        typeSelect.appendChild(option);
+        return;
+    }
+    
+    typeNames.forEach(typeName => {
+        const option = document.createElement('option');
+        option.value = typeName;
+        option.textContent = typeName;
+        typeSelect.appendChild(option);
+    });
+    
+    // Set default selection to first type if nothing selected
+    if (!selectedTerritoryType || !typeNames.includes(selectedTerritoryType)) {
+        selectedTerritoryType = typeNames[0];
+        typeSelect.value = selectedTerritoryType;
+    } else {
+        typeSelect.value = selectedTerritoryType;
+    }
 }
 
 // Populate filter territory type dropdown
@@ -4197,6 +4829,72 @@ document.addEventListener('DOMContentLoaded', () => {
         editEffectAreasCheckbox.addEventListener('change', async (e) => {
             await handleEditingToggle('effectAreas', e.target.checked);
             draw();
+        });
+    }
+    
+    const editTerritoryZonesCheckbox = document.getElementById('editTerritoryZones');
+    if (editTerritoryZonesCheckbox) {
+        editTerritoryZonesCheckbox.addEventListener('change', async (e) => {
+            await handleEditingToggle('territoryZones', e.target.checked);
+            // Populate territory type selector when enabling editing
+            if (e.target.checked) {
+                populateTerritoryTypeSelector();
+            }
+            draw();
+        });
+    }
+    
+    // Territory type selector change handler
+    const territoryTypeSelect = document.getElementById('territoryTypeSelect');
+    if (territoryTypeSelect) {
+        territoryTypeSelect.addEventListener('change', (e) => {
+            selectedTerritoryType = e.target.value;
+        });
+    }
+    
+    // Save button handlers
+    const savePlayerSpawnPointsBtn = document.getElementById('savePlayerSpawnPointsBtn');
+    if (savePlayerSpawnPointsBtn) {
+        savePlayerSpawnPointsBtn.addEventListener('click', async () => {
+            const result = await saveMarkerChanges('playerSpawnPoints');
+            if (result.success) {
+                updateStatus(result.message);
+                markerTypes.playerSpawnPoints.selected.clear();
+                updateSelectedCount();
+                draw();
+            } else {
+                updateStatus(`Error saving: ${result.message}`, true);
+            }
+        });
+    }
+    
+    const saveEffectAreasBtn = document.getElementById('saveEffectAreasBtn');
+    if (saveEffectAreasBtn) {
+        saveEffectAreasBtn.addEventListener('click', async () => {
+            const result = await saveMarkerChanges('effectAreas');
+            if (result.success) {
+                updateStatus(result.message);
+                markerTypes.effectAreas.selected.clear();
+                updateSelectedCount();
+                draw();
+            } else {
+                updateStatus(`Error saving: ${result.message}`, true);
+            }
+        });
+    }
+    
+    const saveTerritoryZonesBtn = document.getElementById('saveTerritoryZonesBtn');
+    if (saveTerritoryZonesBtn) {
+        saveTerritoryZonesBtn.addEventListener('click', async () => {
+            const result = await saveMarkerChanges('territoryZones');
+            if (result.success) {
+                updateStatus(result.message);
+                markerTypes.territoryZones.selected.clear();
+                updateSelectedCount();
+                draw();
+            } else {
+                updateStatus(`Error saving: ${result.message}`, true);
+            }
         });
     }
     

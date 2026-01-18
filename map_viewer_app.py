@@ -1127,7 +1127,7 @@ def load_territories(mission_dir):
         return []
     
     territories = []
-    territory_files = list(env_dir.glob('*.xml'))
+    territory_files = sorted(env_dir.glob('*.xml'), key=lambda p: p.name)  # Sort by filename for consistent ordering
     
     print(f"Found {len(territory_files)} XML files in {env_dir}")
     if len(territory_files) == 0:
@@ -1285,6 +1285,352 @@ def get_territories():
             'count': len(territories),
             'diagnostic': diagnostic
         })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=None):
+    """
+    Save territory zones to XML files in mpmissions/env directory.
+    zones_data is a list of {territoryIndex, zoneIndex, name, x, y, z, radius, isNew, isDeleted} objects.
+    deleted_indices is a list of flattened indices that should be removed.
+    new_indices is a list of flattened indices that are newly added zones.
+    """
+    if deleted_indices is None:
+        deleted_indices = []
+    if new_indices is None:
+        new_indices = []
+    
+    try:
+        mission_path = Path(mission_dir)
+        env_dir = mission_path / 'env'
+        
+        if not env_dir.exists():
+            return {'success': False, 'error': f'Environment directory does not exist: {env_dir}'}
+        
+        # Group zones by territory - only process zones that have actual changes
+        territory_updates = {}  # Map<territoryIndex, {zones: [], deleted_zone_indices: [], new_zones: []}>
+        
+        # Track which territories have changes
+        territories_with_changes_set = set()
+        
+        for zone_data in zones_data:
+            territory_index = zone_data.get('territoryIndex')
+            territory_type = zone_data.get('territoryType')  # Get territory type from zone data
+            if territory_index is None:
+                continue
+            
+            flattened_index = zone_data.get('index')
+            is_deleted = flattened_index in deleted_indices or zone_data.get('isDeleted', False)
+            is_new = flattened_index in new_indices or zone_data.get('isNew', False)
+            is_modified = flattened_index not in deleted_indices and flattened_index not in new_indices
+            
+            # Only process if this zone has changes
+            if is_deleted or is_new or is_modified:
+                territories_with_changes_set.add(territory_index)
+                
+                if territory_index not in territory_updates:
+                    territory_updates[territory_index] = {
+                        'zones': [],
+                        'deleted_zone_indices': [],
+                        'new_zones': [],
+                        'territory_type': territory_type  # Store territory type for new territories
+                    }
+                
+                if is_deleted:
+                    zone_index = zone_data.get('zoneIndex')
+                    if zone_index is not None:
+                        territory_updates[territory_index]['deleted_zone_indices'].append(zone_index)
+                elif is_new:
+                    territory_updates[territory_index]['new_zones'].append(zone_data)
+                elif is_modified:
+                    territory_updates[territory_index]['zones'].append(zone_data)
+        
+        # Get list of territory files
+        territory_files = list(env_dir.glob('*.xml'))
+        territory_files_by_type = {}
+        for tf in territory_files:
+            territory_files_by_type[tf.stem] = tf
+        
+        # Load current territories to get file mappings
+        # We need to rebuild the mapping by loading territories the same way as load_territories does
+        current_territories = load_territories(mission_dir)
+        territory_file_map = {}  # Map<territoryIndex, {file_path, territory_index_in_file}>
+        territory_index_in_file_map = {}  # Map<territoryIndex, territory_index_within_file>
+        
+        print(f"Found {len(current_territories)} territories")
+        print(f"Found {len(territory_files_by_type)} territory files: {list(territory_files_by_type.keys())}")
+        
+        # Rebuild the mapping by iterating through files in the same order as load_territories
+        global_territory_index = 0
+        for territory_type, territory_file in sorted(territory_files_by_type.items()):
+            try:
+                tree = ET.parse(territory_file)
+                root = tree.getroot()
+                territory_elements = root.findall('.//territory')
+                if len(territory_elements) == 0:
+                    territory_elements = root.findall('territory')
+                
+                for territory_idx_in_file, territory_elem in enumerate(territory_elements):
+                    # Check if this territory has zones (same check as in load_territories)
+                    zone_elements = territory_elem.findall('zone')
+                    if len(zone_elements) == 0:
+                        zone_elements = territory_elem.findall('.//zone')
+                    
+                    if len(zone_elements) == 0:
+                        continue  # Skip territories without zones
+                    
+                    # Map global index to file and territory index within file
+                    territory_file_map[global_territory_index] = territory_file
+                    territory_index_in_file_map[global_territory_index] = territory_idx_in_file
+                    print(f"Territory {global_territory_index}: type='{territory_type}', file='{territory_file.name}', index_in_file={territory_idx_in_file}")
+                    global_territory_index += 1
+            except Exception as e:
+                print(f"Error processing file {territory_file} for mapping: {e}")
+                continue
+        
+        updated_count = 0
+        added_count = 0
+        deleted_count = 0
+        
+        # Process each territory that has changes
+        # Only process territories that have actual changes (deletions, additions, or modifications)
+        territories_with_changes = {}
+        for territory_index, updates in territory_updates.items():
+            has_changes = (len(updates['deleted_zone_indices']) > 0 or 
+                          len(updates['new_zones']) > 0 or 
+                          len(updates['zones']) > 0)
+            if has_changes:
+                territories_with_changes[territory_index] = updates
+        
+        print(f"\nProcessing {len(territories_with_changes)} territories with actual changes (out of {len(territory_updates)} total)")
+        print(f"Territory updates keys: {list(territory_updates.keys())}")
+        print(f"Territories with changes: {list(territories_with_changes.keys())}")
+        print(f"Territory file map keys: {list(territory_file_map.keys())}")
+        
+        for territory_index, updates in territories_with_changes.items():
+            print(f"\nTerritory {territory_index}:")
+            print(f"  Zones to update: {len(updates['zones'])}")
+            print(f"  Zones to delete: {len(updates['deleted_zone_indices'])}")
+            print(f"  Zones to add: {len(updates['new_zones'])}")
+            
+            # Check if this territory exists in the file map
+            # If not, it's a new territory that needs to be created
+            territory_type = updates.get('territory_type')
+            if territory_index not in territory_file_map:
+                # This is a new territory - need to create it
+                if not territory_type:
+                    # Try to get territory type from first new zone
+                    if updates['new_zones']:
+                        territory_type = updates['new_zones'][0].get('territoryType')
+                    if not territory_type:
+                        print(f"ERROR: Territory index {territory_index} not found and no territory_type provided")
+                        continue
+                
+                # Check if file for this territory type exists
+                territory_file = env_dir / f"{territory_type}.xml"
+                if not territory_file.exists():
+                    # Create new file with root element
+                    root = ET.Element(territory_type)
+                    tree = ET.ElementTree(root)
+                    # Format XML with proper indentation
+                    ET.indent(tree, space='    ')
+                    tree.write(territory_file, encoding='utf-8', xml_declaration=True)
+                    print(f"Created new territory file: {territory_file}")
+                
+                # Parse the file
+                tree = ET.parse(territory_file)
+                root = tree.getroot()
+                
+                # Find existing territories to determine index
+                territory_elements = root.findall('.//territory')
+                if len(territory_elements) == 0:
+                    territory_elements = root.findall('territory')
+                territory_idx_in_file = len(territory_elements)
+                
+                # Create new territory element
+                territory_elem = ET.SubElement(root, 'territory')
+                
+                print(f"Created new territory in file: {territory_file}, index: {territory_idx_in_file}")
+            else:
+                territory_file = territory_file_map[territory_index]
+                territory_idx_in_file = territory_index_in_file_map.get(territory_index, 0)
+            print(f"  Target file: {territory_file}")
+            print(f"  Full path: {territory_file.resolve()}")
+            print(f"  Territory index within file: {territory_idx_in_file}")
+            
+            try:
+                tree = ET.parse(territory_file)
+                root = tree.getroot()
+                
+                # Find the territory element
+                territory_elements = root.findall('.//territory')
+                if len(territory_elements) == 0:
+                    territory_elements = root.findall('territory')
+                
+                # Find the specific territory by index within the file
+                if territory_idx_in_file < len(territory_elements):
+                    territory_elem = territory_elements[territory_idx_in_file]
+                else:
+                    print(f"Warning: Territory index {territory_idx_in_file} out of range (file has {len(territory_elements)} territories)")
+                    continue
+                
+                # Find all zone elements
+                zone_elements = territory_elem.findall('zone')
+                if len(zone_elements) == 0:
+                    zone_elements = territory_elem.findall('.//zone')
+                
+                # Remove deleted zones (in reverse order)
+                for zone_idx in sorted(updates['deleted_zone_indices'], reverse=True):
+                    if zone_idx < len(zone_elements):
+                        territory_elem.remove(zone_elements[zone_idx])
+                        deleted_count += 1
+                
+                # Re-collect zone elements after deletions
+                zone_elements = territory_elem.findall('zone')
+                if len(zone_elements) == 0:
+                    zone_elements = territory_elem.findall('.//zone')
+                
+                # Create a mapping of original zone indices to current XML elements
+                # We need to track which zones were deleted to adjust indices
+                deleted_set = set(updates['deleted_zone_indices'])
+                
+                # Update existing zones - match by original zoneIndex
+                for zone_data in updates['zones']:
+                    zone_index = zone_data.get('zoneIndex')
+                    if zone_index is None:
+                        continue
+                    
+                    # Skip if this zone was deleted
+                    if zone_index in deleted_set:
+                        continue
+                    
+                    # Calculate the current XML index accounting for deletions before this zone
+                    # Count how many zones before this one were deleted
+                    deleted_before = sum(1 for idx in deleted_set if idx < zone_index)
+                    current_xml_index = zone_index - deleted_before
+                    
+                    # Find corresponding zone element
+                    if 0 <= current_xml_index < len(zone_elements):
+                        zone_elem = zone_elements[current_xml_index]
+                        
+                        # Round to 2 decimal places
+                        x = round(float(zone_data.get('x', 0)), 2)
+                        z = round(float(zone_data.get('z', 0)), 2)
+                        r = round(float(zone_data.get('radius', 50)), 2)
+                        
+                        # Update zone attributes
+                        zone_elem.set('x', str(x))
+                        zone_elem.set('z', str(z))
+                        zone_elem.set('r', str(r))
+                        
+                        # Update name if provided
+                        if 'name' in zone_data:
+                            zone_elem.set('name', zone_data['name'])
+                        
+                        updated_count += 1
+                
+                # Add new zones
+                for zone_data in updates['new_zones']:
+                    # Round to 2 decimal places
+                    x = round(float(zone_data.get('x', 0)), 2)
+                    z = round(float(zone_data.get('z', 0)), 2)
+                    r = round(float(zone_data.get('radius', 50)), 2)
+                    
+                    # Create new zone element
+                    new_zone = ET.SubElement(territory_elem, 'zone')
+                    new_zone.set('x', str(x))
+                    new_zone.set('z', str(z))
+                    new_zone.set('r', str(r))
+                    
+                    if 'name' in zone_data:
+                        new_zone.set('name', zone_data['name'])
+                    
+                    added_count += 1
+                
+                # Write back to file
+                print(f"Saving territory file: {territory_file}")
+                print(f"  Updated: {updated_count} zones")
+                print(f"  Added: {len(updates['new_zones'])} zones")
+                print(f"  Deleted: {len(updates['deleted_zone_indices'])} zones")
+                
+                # Format XML with proper indentation
+                ET.indent(tree, space='    ')
+                tree.write(territory_file, encoding='utf-8', xml_declaration=True)
+                print(f"Successfully wrote {territory_file}")
+                
+            except Exception as e:
+                import traceback
+                print(f"Error saving territory file {territory_file}: {e}")
+                traceback.print_exc()
+                continue
+        
+        total_changes = updated_count + added_count + deleted_count
+        print(f"Successfully saved territory zones: {updated_count} updated, {added_count} added, {deleted_count} deleted")
+        return {'success': True, 'count': total_changes, 'updated': updated_count, 'added': added_count, 'deleted': deleted_count}
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/territories/save', methods=['POST'])
+def save_territories_endpoint():
+    """Save territory zone data to XML files in mpmissions/env directory."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return jsonify({'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        zones_data = data.get('zones', [])
+        if not zones_data:
+            return jsonify({'success': False, 'error': 'No zones data provided'}), 400
+        
+        deleted_indices = data.get('deleted_indices', [])
+        new_indices = data.get('new_indices', [])
+        
+        print(f"Saving territory zones to: {mission_path / 'env'}")
+        result = save_territories(mission_dir, zones_data, deleted_indices, new_indices)
+        
+        if result['success']:
+            message_parts = []
+            if result.get('updated', 0) > 0:
+                message_parts.append(f"{result['updated']} updated")
+            if result.get('added', 0) > 0:
+                message_parts.append(f"{result['added']} added")
+            if result.get('deleted', 0) > 0:
+                message_parts.append(f"{result['deleted']} deleted")
+            message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
+            
+            return jsonify({
+                'success': True,
+                'count': result['count'],
+                'message': message
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Unknown error')
+            }), 500
+            
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1603,7 +1949,8 @@ def save_player_spawn_points(spawn_points_file_path, spawn_points_data, deleted_
                 
                 added_count += 1
         
-        # Write back to file
+        # Write back to file with proper formatting
+        ET.indent(tree, space='    ')
         tree.write(spawn_points_file_path, encoding='utf-8', xml_declaration=True)
         
         total_changes = updated_count + added_count + len(deleted_indices)

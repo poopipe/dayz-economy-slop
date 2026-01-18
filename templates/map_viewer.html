@@ -53,19 +53,20 @@
                             <input type="checkbox" id="editPlayerSpawnPoints"> Enable editing: Player Spawn Points
                         </label>
                         <p style="font-size: 12px; color: var(--nord4); margin-top: 5px; margin-bottom: 0;">
-                            When enabled, drag markers to move them. Disable to save or discard changes.
+                            When enabled, drag markers to move them. Use Save button to save changes.
                         </p>
                         <div id="spawnPointEditControls" style="display: none; margin-top: 10px;">
                             <p style="font-size: 11px; color: var(--nord4); margin-top: 5px; margin-bottom: 5px;">
                                 <strong>Add:</strong> Ctrl+Click (Cmd+Click on Mac) to add spawn point at cursor<br>
                                 <strong>Delete:</strong> Select spawn points and press Delete/Backspace
                             </p>
+                            <button id="savePlayerSpawnPointsBtn" style="margin-top: 8px; padding: 6px 12px; background: var(--nord10); color: white; border: none; border-radius: 4px; cursor: pointer;">Save Changes</button>
                         </div>
                         <label>
                             <input type="checkbox" id="editEffectAreas"> Enable editing: Effect Areas
                         </label>
                         <p style="font-size: 12px; color: var(--nord4); margin-top: 5px; margin-bottom: 0;">
-                            When enabled, drag to move, drag edge/handle to resize radius. Disable to save or discard changes.
+                            When enabled, drag to move, drag edge/handle to resize radius. Use Save button to save changes.
                         </p>
                         <div id="effectAreaEditControls" style="display: none; margin-top: 10px;">
                             <p style="font-size: 11px; color: var(--nord4); margin-top: 5px; margin-bottom: 5px;">
@@ -74,6 +75,28 @@
                                 <strong>Resize:</strong> Click and drag edge or handle (white dot) to change radius<br>
                                 <strong>Delete:</strong> Select effect areas and press Delete/Backspace
                             </p>
+                            <button id="saveEffectAreasBtn" style="margin-top: 8px; padding: 6px 12px; background: var(--nord10); color: white; border: none; border-radius: 4px; cursor: pointer;">Save Changes</button>
+                        </div>
+                        <label>
+                            <input type="checkbox" id="editTerritoryZones"> Enable editing: Territory Zones
+                        </label>
+                        <p style="font-size: 12px; color: var(--nord4); margin-top: 5px; margin-bottom: 0;">
+                            When enabled, drag to move, drag edge/handle to resize radius. Use Save button to save changes.
+                        </p>
+                        <div id="territoryZoneEditControls" style="display: none; margin-top: 10px;">
+                            <label for="territoryTypeSelect" style="font-size: 11px; color: var(--nord4); display: block; margin-bottom: 5px;">
+                                <strong>Territory Type for New Zones:</strong>
+                            </label>
+                            <select id="territoryTypeSelect" style="width: 100%; padding: 4px; margin-bottom: 8px; font-size: 11px; background: var(--nord1); color: var(--nord4); border: 1px solid var(--nord3); border-radius: 4px;">
+                                <option value="">Loading...</option>
+                            </select>
+                            <p style="font-size: 11px; color: var(--nord4); margin-top: 5px; margin-bottom: 5px;">
+                                <strong>Add:</strong> Ctrl+Click (Cmd+Click on Mac) to add zone at cursor<br>
+                                <strong>Move:</strong> Click and drag center of circle<br>
+                                <strong>Resize:</strong> Click and drag edge or handle (white dot) to change radius<br>
+                                <strong>Delete:</strong> Select zones and press Delete/Backspace
+                            </p>
+                            <button id="saveTerritoryZonesBtn" style="margin-top: 8px; padding: 6px 12px; background: var(--nord10); color: white; border: none; border-radius: 4px; cursor: pointer;">Save Changes</button>
                         </div>
                     </div>
                     
