@@ -1175,6 +1175,7 @@ def load_territories(mission_dir):
                     # Zones have x, z attributes directly on the zone element
                     x_attr = zone.get('x')
                     z_attr = zone.get('z')
+                    r_attr = zone.get('r')  # Get radius parameter
                     
                     if x_attr is None or z_attr is None:
                         print(f"Zone {zone_idx} missing x or z attribute, skipping")
@@ -1184,6 +1185,18 @@ def load_territories(mission_dir):
                         x = float(x_attr)
                         z = float(z_attr)
                         y = 0.0
+                        
+                        # Parse radius, default to 50.0 if not provided
+                        radius = 50.0
+                        if r_attr is not None:
+                            try:
+                                radius = float(r_attr)
+                                if radius <= 0:
+                                    print(f"Zone {zone_idx} has invalid radius ({r_attr}), using default 50.0")
+                                    radius = 50.0
+                            except (ValueError, TypeError):
+                                print(f"Zone {zone_idx} has invalid radius value ({r_attr}), using default 50.0")
+                                radius = 50.0
                         
                         # Skip if position is invalid (both zeros)
                         if x == 0.0 and z == 0.0:
@@ -1202,6 +1215,7 @@ def load_territories(mission_dir):
                             'x': x,
                             'y': y,
                             'z': z,
+                            'radius': radius,  # Store radius with zone
                             'xml': zone_xml
                         })
                     except (ValueError, TypeError) as e:
@@ -1212,9 +1226,6 @@ def load_territories(mission_dir):
                     print(f"Territory {territory_idx} has no valid zone positions, skipping")
                     continue
                 
-                # Calculate bounding circle
-                center_x, center_z, radius = calculate_bounding_circle(zone_positions)
-                
                 # Store territory XML
                 territory_xml = ET.tostring(territory, encoding='unicode').strip()
                 
@@ -1223,9 +1234,6 @@ def load_territories(mission_dir):
                     'name': territory_name,
                     'territory_type': territory_type,
                     'color': color,
-                    'center_x': center_x,
-                    'center_z': center_z,
-                    'radius': radius,
                     'zones': zones,
                     'xml': territory_xml
                 }

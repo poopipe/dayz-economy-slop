@@ -951,27 +951,7 @@ function drawTerritories() {
             return; // Skip hidden territories
         }
         
-        // Draw territory bounding circle (transparent)
-        const centerScreenPos = worldToScreen(territory.center_x, territory.center_z);
-        const screenRadius = territory.radius * viewScale;
-        
-        if (isFinite(centerScreenPos.x) && isFinite(centerScreenPos.y) && isFinite(screenRadius) && screenRadius > 1) {
-            ctx.save();
-            ctx.globalAlpha = 0.2; // Quite transparent
-            ctx.fillStyle = territory.color;
-            ctx.strokeStyle = territory.color;
-            ctx.lineWidth = 2;
-            
-            ctx.beginPath();
-            ctx.arc(centerScreenPos.x, centerScreenPos.y, screenRadius, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            
-            ctx.restore();
-            drawnTerritories++;
-        }
-        
-        // Draw zone markers within territory
+        // Draw zone markers and circles within territory
         territory.zones.forEach((zone, zoneIndex) => {
             const zoneScreenPos = worldToScreen(zone.x, zone.z);
             
@@ -982,6 +962,27 @@ function drawTerritories() {
             // Calculate offset for hover detection (markers + event spawns + previous zones)
             const zoneMarkerIndex = zoneIndexOffset + zoneIndex;
             const isHovered = hoveredMarkerIndex === zoneMarkerIndex;
+            
+            // Get zone radius (default to 50 if not provided for backward compatibility)
+            const zoneRadius = zone.radius || 50.0;
+            const screenRadius = zoneRadius * viewScale;
+            
+            // Draw circle around zone marker using territory color
+            if (isFinite(screenRadius) && screenRadius > 1) {
+                ctx.save();
+                ctx.globalAlpha = 0.2; // Quite transparent
+                ctx.fillStyle = territory.color;
+                ctx.strokeStyle = territory.color;
+                ctx.lineWidth = 2;
+                
+                ctx.beginPath();
+                ctx.arc(zoneScreenPos.x, zoneScreenPos.y, screenRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                ctx.restore();
+                drawnTerritories++;
+            }
             
             // Draw zone marker using territory color
             ctx.fillStyle = territory.color;
