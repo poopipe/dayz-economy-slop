@@ -29,6 +29,8 @@ let showTerritories = true;
 let territoryZones = []; // Flattened array of all zones for editing
 let zoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 let selectedTerritoryType = ''; // Selected territory type for new zones
+let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing
+let zombieZoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 let missionDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -298,6 +300,111 @@ const markerTypes = {
         deleted: new Set(),
         new: new Set(),
         originalPositions: new Map()
+    },
+    zombieTerritoryZones: {
+        getArray: () => zombieTerritoryZones,
+        setArray: (arr) => { 
+            zombieTerritoryZones = arr;
+            // Update territories from flattened zones
+            updateZombieTerritoriesFromZones();
+        },
+        getShowFlag: () => showTerritories,
+        canEditRadius: true,
+        canEditDimensions: false,
+        saveEndpoint: '/api/territories/save',
+        getDisplayName: () => 'Zombie Territory Zones',
+        getEditControlsId: () => 'zombieTerritoryZoneEditControls',
+        getEditCheckboxId: () => 'editZombieTerritoryZones',
+        getMarker: (index) => zombieTerritoryZones[index],
+        isDeleted: (index) => markerTypes.zombieTerritoryZones.deleted.has(index),
+        getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+        isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+            const screenRadius = (marker.radius || 50.0) * viewScale;
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance <= screenRadius + MARKER_INTERACTION_THRESHOLD;
+        },
+        createNew: (x, y, z) => {
+            // Find zombie territory (typically "infected" type)
+            let defaultRadius = 50.0;
+            let territoryType = 'infected'; // Default zombie territory type
+            let territoryColor = '#FF0000';
+            let territoryIndex = -1;
+            
+            // Find first zombie territory
+            for (let i = 0; i < territories.length; i++) {
+                const t = territories[i];
+                if (t.territory_type === 'infected' || t.territory_type === 'zombie' || 
+                    t.territory_type.toLowerCase().includes('zombie') ||
+                    t.territory_type.toLowerCase().includes('infected')) {
+                    territoryIndex = i;
+                    territoryType = t.territory_type;
+                    territoryColor = t.color;
+                    if (t.zones.length > 0) {
+                        defaultRadius = t.zones[0].radius || 50.0;
+                    }
+                    break;
+                }
+            }
+            
+            // If no zombie territory exists, create placeholder
+            if (territoryIndex < 0) {
+                territoryIndex = 0; // Placeholder - will be created on save
+                territoryColor = '#FF0000';
+            }
+            
+            // Create new zone with default parameters
+            const newZone = {
+                id: zombieTerritoryZones.length,
+                name: `Zone_${zombieTerritoryZones.length}`,
+                x: x,
+                y: y,
+                z: z,
+                radius: defaultRadius,
+                territoryIndex: territoryIndex,
+                zoneIndex: -1, // Will be set when added to territory
+                territoryType: territoryType,
+                color: territoryColor,
+                // Additional parameters for zombie zones (to be configured via list boxes)
+                // These will be populated from the UI list boxes
+                xml: `<zone x="${x}" z="${z}" r="${defaultRadius}"/>`
+            };
+            
+            return newZone;
+        },
+        getOriginalData: (marker) => ({ 
+            x: marker.x, 
+            y: marker.y, 
+            z: marker.z, 
+            radius: marker.radius || 50.0 
+        }),
+        restoreOriginal: (marker, original) => {
+            marker.x = original.x;
+            marker.y = original.y;
+            marker.z = original.z;
+            marker.radius = original.radius;
+        },
+        prepareSaveData: (marker, index) => {
+            const mapEntry = zombieZoneToTerritoryMap.get(index);
+            return {
+                index: index,
+                territoryType: marker.territoryType,
+                territoryIndex: mapEntry ? mapEntry.territoryIndex : marker.territoryIndex,
+                zoneIndex: mapEntry ? mapEntry.zoneIndex : marker.zoneIndex,
+                name: marker.name || `Zone_${index}`,
+                x: marker.x != null ? marker.x : 0,
+                y: marker.y != null ? marker.y : 0,
+                z: marker.z != null ? marker.z : 0,
+                radius: marker.radius != null ? marker.radius : 50.0,
+                isNew: markerTypes.zombieTerritoryZones.new.has(index),
+                isDeleted: markerTypes.zombieTerritoryZones.deleted.has(index)
+            };
+        },
+        selected: new Set(),
+        deleted: new Set(),
+        new: new Set(),
+        originalPositions: new Map()
     }
 };
 
@@ -442,9 +549,15 @@ function initCanvas() {
                                 typeConfig.selected.add(clickedMarker.index);
                             }
                         } else {
-                            // Normal click - select this one
+                            // Normal click - select this one (clear others of same type and other types)
                             typeConfig.selected.clear();
                             typeConfig.selected.add(clickedMarker.index);
+                            // Clear selection for other marker types
+                            for (const otherType of Object.keys(markerTypes)) {
+                                if (otherType !== markerType && editingEnabled[otherType]) {
+                                    markerTypes[otherType].selected.clear();
+                                }
+                            }
                         }
                         updateSelectedCount();
                         requestDraw();
@@ -465,14 +578,39 @@ function initCanvas() {
             for (const markerType of Object.keys(markerTypes)) {
                 if (editingEnabled[markerType] && selectAtPointForType(markerType, x, y, e.altKey)) {
                     clickedOnEditableMarker = true;
+                    // Clear selection for other marker types when selecting this one (unless Alt is held)
+                    if (!e.altKey) {
+                        for (const otherType of Object.keys(markerTypes)) {
+                            if (otherType !== markerType && editingEnabled[otherType]) {
+                                markerTypes[otherType].selected.clear();
+                            }
+                        }
+                    }
+                    updateSelectedCount();
+                    requestDraw();
                     e.preventDefault();
                     return;
                 }
             }
             
-            // If not in edit mode or no editable marker clicked, allow normal selection/marquee
+            // If clicking on empty space in edit mode, clear all selections
             if (!clickedOnEditableMarker) {
-                handleMouseDown(e);
+                const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
+                if (isEditingAnyType) {
+                    // Clear all editable marker selections when clicking empty space
+                    for (const markerType of Object.keys(markerTypes)) {
+                        if (editingEnabled[markerType]) {
+                            markerTypes[markerType].selected.clear();
+                        }
+                    }
+                    updateSelectedCount();
+                    requestDraw();
+                    e.preventDefault();
+                    return;
+                } else {
+                    // Not in edit mode - allow normal selection/marquee
+                    handleMouseDown(e);
+                }
             }
         }
     });
@@ -1173,7 +1311,177 @@ function drawEventSpawns() {
     });
 }
 
-// Draw territory circles and zone markers
+// Draw zombie territory circles and zone markers
+function drawZombieTerritories() {
+    if (!showTerritories) {
+        return;
+    }
+    
+    if (territories.length === 0) {
+        return;
+    }
+    
+    const isEditing = editingEnabled.zombieTerritoryZones;
+    const isDraggingThisType = isDragging && draggedMarkerType === 'zombieTerritoryZones';
+    const typeConfig = markerTypes.zombieTerritoryZones;
+    
+    let drawnTerritories = 0;
+    let drawnZones = 0;
+    let zoneIndexOffset = markers.length + eventSpawns.length + 
+        territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
+    
+    territories.forEach((territory, territoryIndex) => {
+        // Only draw zombie territories
+        if (!isZombieTerritoryType(territory.territory_type)) {
+            return;
+        }
+        
+        // Check if territory is visible (filtered)
+        if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
+            return; // Skip hidden territories
+        }
+        
+        // Draw zone markers and circles within territory
+        territory.zones.forEach((zone, zoneIndex) => {
+            // Find flattened index for this zone
+            let flattenedIndex = -1;
+            zombieZoneToTerritoryMap.forEach((value, key) => {
+                if (value.territoryIndex === territoryIndex && value.zoneIndex === zoneIndex) {
+                    flattenedIndex = key;
+                }
+            });
+            
+            // If mapping not found, try to find by matching zone data (for newly added zones)
+            if (flattenedIndex < 0 && isEditing) {
+                zombieTerritoryZones.forEach((tz, idx) => {
+                    if (tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
+                        tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex) {
+                        flattenedIndex = idx;
+                    }
+                });
+            }
+            
+            // Skip deleted zones (check regardless of editing state if we have a flattened index)
+            if (flattenedIndex >= 0 && typeConfig.isDeleted(flattenedIndex)) {
+                return;
+            }
+            
+            // If flattened index is still -1 and we're in editing mode, check if this zone exists in zombieTerritoryZones
+            // This handles the case where a new zone was added and then deleted - it might still be in territory.zones
+            if (flattenedIndex < 0 && isEditing) {
+                // Check if this zone exists in the zombieTerritoryZones array
+                const zoneExists = zombieTerritoryZones.some(tz => 
+                    tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
+                    tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex
+                );
+                // If it doesn't exist in zombieTerritoryZones but is in territory.zones, it was likely deleted
+                if (!zoneExists) {
+                    return; // Skip drawing this zone
+                }
+            }
+            
+            const zoneScreenPos = worldToScreen(zone.x, zone.z);
+            
+            if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
+                return;
+            }
+            
+            // Calculate offset for hover detection
+            const zoneMarkerIndex = zoneIndexOffset + zoneIndex;
+            const isHovered = hoveredMarkerIndex === zoneMarkerIndex;
+            
+            // Get zone radius
+            const zoneRadius = zone.radius || 50.0;
+            const screenRadius = zoneRadius * viewScale;
+            
+            // Check editing state if editing is enabled
+            const isSelected = isEditing && flattenedIndex >= 0 && typeConfig.selected.has(flattenedIndex);
+            const hasUnsavedChanges = isEditing && flattenedIndex >= 0 && typeConfig.originalPositions.has(flattenedIndex);
+            const isNew = isEditing && flattenedIndex >= 0 && typeConfig.new.has(flattenedIndex);
+            const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('zombieTerritoryZones') && draggedSelectedMarkers.get('zombieTerritoryZones').has(flattenedIndex)));
+            const isEditingRadius = radiusEditMarkerType === 'zombieTerritoryZones' && radiusEditIndex === flattenedIndex;
+            
+            // Draw circle around zone marker using territory color
+            if (isFinite(screenRadius) && screenRadius > 1) {
+                ctx.save();
+                let alpha = 0.2; // Quite transparent
+                
+                // Adjust alpha for editing state
+                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+                    alpha = Math.min(0.4, alpha + 0.1);
+                }
+                
+                ctx.globalAlpha = alpha;
+                
+                // Use different colors when editing
+                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
+                    if (isSelected) {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+                    } else if (isNew) {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
+                    } else {
+                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
+                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+                    }
+                } else {
+                    ctx.fillStyle = territory.color;
+                    ctx.strokeStyle = territory.color;
+                }
+                
+                ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
+                
+                ctx.beginPath();
+                ctx.arc(zoneScreenPos.x, zoneScreenPos.y, screenRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+            
+            // Draw zone marker (center point)
+            ctx.save();
+            if (isEditing && isSelected) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
+            } else if (isEditing && isNew) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
+            } else if (isEditing && hasUnsavedChanges) {
+                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
+                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+            } else {
+                ctx.fillStyle = territory.color;
+                ctx.strokeStyle = territory.color;
+            }
+            
+            ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
+            
+            ctx.beginPath();
+            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Draw radius edit handle when editing and selected
+            if (isEditing && isSelected && typeConfig.canEditRadius) {
+                ctx.fillStyle = '#ffffff';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(zoneScreenPos.x + screenRadius, zoneScreenPos.y, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+            drawnZones++;
+        });
+        
+        drawnTerritories++;
+    });
+}
+
+// Draw territory circles and zone markers (non-zombie)
 function drawTerritories() {
     if (!showTerritories) {
         return;
@@ -1192,6 +1500,11 @@ function drawTerritories() {
     let zoneIndexOffset = markers.length + eventSpawns.length;
     
     territories.forEach((territory, territoryIndex) => {
+        // Skip zombie territories - they're drawn separately
+        if (isZombieTerritoryType(territory.territory_type)) {
+            return;
+        }
+        
         // Check if territory is visible (filtered)
         if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
             return; // Skip hidden territories
@@ -1467,7 +1780,7 @@ function drawTooltip() {
                 if (!typeConfig.isDeleted(index)) {
                     marker = typeConfig.getMarker(index);
                     isEventSpawn = false;
-                    isZone = (markerType === 'territoryZones');
+                    isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones');
                     isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
                     foundInEditable = true;
                     break;
@@ -1865,7 +2178,8 @@ function draw() {
     drawGrid();
     drawMarkers();
     drawEventSpawns(); // Draw event spawn markers (after regular markers)
-    drawTerritories(); // Draw territory circles and zone markers
+    drawTerritories(); // Draw territory circles and zone markers (non-zombie)
+    drawZombieTerritories(); // Draw zombie territory circles and zone markers
     drawPlayerSpawnPoints(); // Draw player spawn point markers and rectangles
     drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
     drawMarquee();
@@ -2047,6 +2361,16 @@ function isMarkerVisible(markerType, index) {
             return visibleTerritories.has(territoryIndex);
         }
         return true; // No filters = all visible
+    } else if (markerType === 'zombieTerritoryZones') {
+        // Check if the zombie territory containing this zone is visible
+        const mapEntry = zombieZoneToTerritoryMap.get(index);
+        if (!mapEntry) return true; // If no mapping, assume visible
+        const territoryIndex = mapEntry.territoryIndex;
+        // If filters are active, check visibility set
+        if (visibleTerritories.size > 0) {
+            return visibleTerritories.has(territoryIndex);
+        }
+        return true; // No filters = all visible
     }
     // For other types, check if the type is shown
     const typeConfig = markerTypes[markerType];
@@ -2077,10 +2401,17 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
                     typeConfig.selected.add(index);
                 }
             } else {
-                // Normal mode - select this one (clear others)
+                // Normal mode - select this one (clear others of same type and other types)
                 typeConfig.selected.clear();
                 typeConfig.selected.add(index);
+                // Clear selection for other marker types
+                for (const otherType of Object.keys(markerTypes)) {
+                    if (otherType !== markerType && editingEnabled[otherType]) {
+                        markerTypes[otherType].selected.clear();
+                    }
+                }
             }
+            updateSelectedCount();
             return true;
         }
     }
@@ -2212,15 +2543,22 @@ function updateHoveredMarker(screenX, screenY) {
     if (!isDragging && !isEditingRadius) {
         let offset = markers.length + eventSpawns.length;
         
-        // If not editing territory zones, add zone offset
+        // If not editing territory zones, add zone offset (non-zombie)
         if (!editingEnabled.territoryZones) {
-            offset += territories.reduce((sum, t) => sum + t.zones.length, 0);
+            offset += territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
+        }
+        // If not editing zombie territory zones, add zombie zone offset
+        if (!editingEnabled.zombieTerritoryZones) {
+            offset += territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
         }
         
         for (const markerType of Object.keys(markerTypes)) {
             const typeConfig = markerTypes[markerType];
             // Skip territory zones if not editing (they're handled above)
             if (markerType === 'territoryZones' && !editingEnabled.territoryZones) {
+                continue;
+            }
+            if (markerType === 'zombieTerritoryZones' && !editingEnabled.zombieTerritoryZones) {
                 continue;
             }
             
@@ -2315,6 +2653,8 @@ async function handleRightClick(screenX, screenY) {
                         marker = typeConfig.getMarker(index);
                         if (markerType === 'territoryZones') {
                             locationSource = 'zone';
+                        } else if (markerType === 'zombieTerritoryZones') {
+                            locationSource = 'zombie zone';
                         } else if (markerType === 'playerSpawnPoints') {
                             locationSource = 'spawn point';
                         } else if (markerType === 'effectAreas') {
@@ -2540,6 +2880,8 @@ function handleDrag(screenX, screenY) {
                         // For territory zones, sync radius change back to territories array
                         if (radiusEditMarkerType === 'territoryZones') {
                             syncTerritoryZoneToTerritories(radiusEditIndex);
+                        } else if (radiusEditMarkerType === 'zombieTerritoryZones') {
+                            syncZombieTerritoryZoneToTerritories(radiusEditIndex);
                         }
                     }
                 }
@@ -2575,8 +2917,10 @@ function handleDrag(screenX, screenY) {
                 marker.z = newCenterZ + offset.offsetZ;
                 
                 // For territory zones, sync changes back to territories array immediately
-                if (markerType === 'territoryZones') {
+                if (draggedMarkerType === 'territoryZones') {
                     syncTerritoryZoneToTerritories(index);
+                } else if (draggedMarkerType === 'zombieTerritoryZones') {
+                    syncZombieTerritoryZoneToTerritories(index);
                 }
             }
         });
@@ -2588,8 +2932,10 @@ function handleDrag(screenX, screenY) {
             marker.z = dragStartWorldZ + deltaZ;
             
             // For territory zones, sync changes back to territories array immediately
-            if (markerType === 'territoryZones') {
+            if (draggedMarkerType === 'territoryZones') {
                 syncTerritoryZoneToTerritories(draggedMarkerIndex);
+            } else if (draggedMarkerType === 'zombieTerritoryZones') {
+                syncZombieTerritoryZoneToTerritories(draggedMarkerIndex);
             }
         }
     }
@@ -2645,6 +2991,8 @@ function handleDragEnd() {
             // For territory zones, sync changes back to territories array
             if (draggedMarkerType === 'territoryZones') {
                 syncTerritoryZoneToTerritories(draggedMarkerIndex);
+            } else if (draggedMarkerType === 'zombieTerritoryZones') {
+                syncZombieTerritoryZoneToTerritories(draggedMarkerIndex);
             }
         }
     }
@@ -2655,6 +3003,13 @@ function handleDragEnd() {
         if (offsets && offsets.size > 0) {
             offsets.forEach((offset, index) => {
                 syncTerritoryZoneToTerritories(index);
+            });
+        }
+    } else if (draggedMarkerType === 'zombieTerritoryZones') {
+        const offsets = draggedSelectedMarkers.get('zombieTerritoryZones');
+        if (offsets && offsets.size > 0) {
+            offsets.forEach((offset, index) => {
+                syncZombieTerritoryZoneToTerritories(index);
             });
         }
     }
@@ -2696,6 +3051,38 @@ function deleteSelectedMarkers(markerType) {
         if (index < array.length) {
             // If this marker was newly added, just remove it
             if (typeConfig.new.has(index)) {
+                const marker = typeConfig.getMarker(index);
+                
+                // For zombie territory zones, also remove from territories array
+                if (markerType === 'zombieTerritoryZones' && marker) {
+                    const mapEntry = zombieZoneToTerritoryMap.get(index);
+                    if (mapEntry) {
+                        const { territoryIndex, zoneIndex } = mapEntry;
+                        if (territoryIndex >= 0 && territoryIndex < territories.length &&
+                            zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+                            // Remove from territories array
+                            territories[territoryIndex].zones.splice(zoneIndex, 1);
+                        }
+                        // Remove mapping
+                        zombieZoneToTerritoryMap.delete(index);
+                    }
+                }
+                
+                // For regular territory zones, also remove from territories array
+                if (markerType === 'territoryZones' && marker) {
+                    const mapEntry = zoneToTerritoryMap.get(index);
+                    if (mapEntry) {
+                        const { territoryIndex, zoneIndex } = mapEntry;
+                        if (territoryIndex >= 0 && territoryIndex < territories.length &&
+                            zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+                            // Remove from territories array
+                            territories[territoryIndex].zones.splice(zoneIndex, 1);
+                        }
+                        // Remove mapping
+                        zoneToTerritoryMap.delete(index);
+                    }
+                }
+                
                 typeConfig.new.delete(index);
                 array.splice(index, 1);
                 
@@ -2729,6 +3116,35 @@ function deleteSelectedMarkers(markerType) {
                     }
                 });
                 typeConfig.new = newNew;
+                
+                // Update mappings for indices after the deleted one
+                if (markerType === 'zombieTerritoryZones') {
+                    const newMap = new Map();
+                    zombieZoneToTerritoryMap.forEach((value, key) => {
+                        if (key < index) {
+                            newMap.set(key, value);
+                        } else if (key > index) {
+                            newMap.set(key - 1, value);
+                        }
+                    });
+                    zombieZoneToTerritoryMap.clear();
+                    newMap.forEach((value, key) => {
+                        zombieZoneToTerritoryMap.set(key, value);
+                    });
+                } else if (markerType === 'territoryZones') {
+                    const newMap = new Map();
+                    zoneToTerritoryMap.forEach((value, key) => {
+                        if (key < index) {
+                            newMap.set(key, value);
+                        } else if (key > index) {
+                            newMap.set(key - 1, value);
+                        }
+                    });
+                    zoneToTerritoryMap.clear();
+                    newMap.forEach((value, key) => {
+                        zoneToTerritoryMap.set(key, value);
+                    });
+                }
             } else {
                 // Mark as deleted (don't remove from array yet, will be removed on save)
                 typeConfig.deleted.add(index);
@@ -2769,8 +3185,56 @@ function addMarkerAt(markerType, screenX, screenY) {
     // Mark as new
     typeConfig.new.add(newIndex);
     
-    // For territory zones, ensure the zone is properly synced to territories
-    if (markerType === 'territoryZones') {
+    // For zombie territory zones, ensure the zone is properly synced to territories
+    if (markerType === 'zombieTerritoryZones') {
+        // Find or create zombie territory
+        const selectedType = newMarker.territoryType;
+        let targetTerritoryIndex = -1;
+        
+        // First, try to find an existing zombie territory
+        for (let i = 0; i < territories.length; i++) {
+            if (isZombieTerritoryType(territories[i].territory_type)) {
+                targetTerritoryIndex = i;
+                break;
+            }
+        }
+        
+        // If no zombie territory exists, create placeholder
+        if (targetTerritoryIndex < 0) {
+            const newTerritory = {
+                id: territories.length,
+                name: `${selectedType}_0`,
+                territory_type: selectedType,
+                color: '#FF0000',
+                zones: []
+            };
+            territories.push(newTerritory);
+            targetTerritoryIndex = territories.length - 1;
+        }
+        
+        // Add zone to the target territory
+        const territory = territories[targetTerritoryIndex];
+        const zoneIndex = territory.zones.length;
+        newMarker.territoryIndex = targetTerritoryIndex;
+        newMarker.zoneIndex = zoneIndex;
+        
+        // Add zone to territory
+        territory.zones.push({
+            id: zoneIndex,
+            name: newMarker.name,
+            x: newMarker.x,
+            y: newMarker.y,
+            z: newMarker.z,
+            radius: newMarker.radius,
+            xml: newMarker.xml
+        });
+        
+        // Update zone color to match territory
+        newMarker.color = territory.color;
+        
+        // Set mapping using the correct flattened index (newIndex)
+        zombieZoneToTerritoryMap.set(newIndex, { territoryIndex: targetTerritoryIndex, zoneIndex: zoneIndex });
+    } else if (markerType === 'territoryZones') {
         // Find or create territory of the selected type
         const selectedType = newMarker.territoryType;
         let targetTerritoryIndex = -1;
@@ -3088,6 +3552,9 @@ async function saveMarkerChanges(markerType) {
         if (markerType === 'territoryZones') {
             // Update territories from flattened zones before saving
             updateTerritoriesFromZones();
+        } else if (markerType === 'zombieTerritoryZones') {
+            // Update zombie territories from flattened zones before saving
+            updateZombieTerritoriesFromZones();
         }
         
         // Prepare data for save - only include markers that have changes
@@ -3203,33 +3670,101 @@ function restoreMarkerPositions(markerType) {
     
     const array = typeConfig.getArray();
     
-    // Restore positions of modified markers
-    typeConfig.originalPositions.forEach((original, index) => {
-        if (index < array.length && !typeConfig.deleted.has(index)) {
+    // For territory zones, we need to handle the nested structure
+    if (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones') {
+        // Remove newly added markers from both flattened array and territories array
+        const newIndices = Array.from(typeConfig.new).sort((a, b) => b - a);
+        for (const index of newIndices) {
             const marker = typeConfig.getMarker(index);
             if (marker) {
-                typeConfig.restoreOriginal(marker, original);
+                // Remove from territories array if it was added there
+                const mapEntry = (markerType === 'territoryZones' ? zoneToTerritoryMap : zombieZoneToTerritoryMap).get(index);
+                if (mapEntry) {
+                    const { territoryIndex, zoneIndex } = mapEntry;
+                    if (territoryIndex >= 0 && territoryIndex < territories.length &&
+                        zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+                        territories[territoryIndex].zones.splice(zoneIndex, 1);
+                    }
+                }
             }
+            array.splice(index, 1);
         }
-    });
-    
-    // Remove newly added markers
-    const newIndices = Array.from(typeConfig.new).sort((a, b) => b - a);
-    for (const index of newIndices) {
-        array.splice(index, 1);
+        
+        // Restore positions of modified markers (including deleted ones)
+        typeConfig.originalPositions.forEach((original, index) => {
+            if (index < array.length) {
+                const marker = typeConfig.getMarker(index);
+                if (marker) {
+                    typeConfig.restoreOriginal(marker, original);
+                    // Sync back to territories array
+                    if (markerType === 'territoryZones') {
+                        syncTerritoryZoneToTerritories(index);
+                    } else {
+                        syncZombieTerritoryZoneToTerritories(index);
+                    }
+                }
+            }
+        });
+        
+        // Rebuild mappings after removing new markers
+        if (markerType === 'territoryZones') {
+            flattenTerritoryZones();
+        } else {
+            // For zombie territories, we need to rebuild the flattened array
+            zombieTerritoryZones = [];
+            zombieZoneToTerritoryMap.clear();
+            territories.forEach((territory, territoryIndex) => {
+                if (isZombieTerritoryType(territory.territory_type)) {
+                    territory.zones.forEach((zone, zoneIndex) => {
+                        const flattenedIndex = zombieTerritoryZones.length;
+                        const zoneCopy = {
+                            ...zone,
+                            territoryIndex: territoryIndex,
+                            zoneIndex: zoneIndex,
+                            territoryType: territory.territory_type,
+                            color: territory.color,
+                            territoryName: territory.name
+                        };
+                        zombieTerritoryZones.push(zoneCopy);
+                        zombieZoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
+                    });
+                }
+            });
+        }
+    } else {
+        // For non-territory markers, restore normally
+        // Restore positions of modified markers (including deleted ones)
+        typeConfig.originalPositions.forEach((original, index) => {
+            if (index < array.length) {
+                const marker = typeConfig.getMarker(index);
+                if (marker) {
+                    typeConfig.restoreOriginal(marker, original);
+                }
+            }
+        });
+        
+        // Remove newly added markers
+        const newIndices = Array.from(typeConfig.new).sort((a, b) => b - a);
+        for (const index of newIndices) {
+            array.splice(index, 1);
+        }
     }
     
     // Clear all tracking
     typeConfig.originalPositions.clear();
     typeConfig.deleted.clear();
     typeConfig.new.clear();
+    typeConfig.selected.clear();
     
     // Re-index markers
     array.forEach((marker, idx) => {
         marker.id = idx;
     });
     
+    // Update UI
+    updateSelectedCount();
     requestDraw();
+    draw(); // Force immediate redraw
 }
 
 // Handle editing toggle change
@@ -3238,6 +3773,11 @@ async function handleEditingToggle(markerType, enabled) {
     if (!typeConfig) return;
     
     editingEnabled[markerType] = enabled;
+    
+    // When disabling editing, clear selection for this type
+    if (!enabled) {
+        typeConfig.selected.clear();
+    }
     
     // Show/hide edit controls
     const editControlsId = typeConfig.getEditControlsId();
@@ -3389,10 +3929,14 @@ async function loadEffectAreas() {
 function flattenTerritoryZones() {
     territoryZones = [];
     zoneToTerritoryMap.clear();
+    zombieTerritoryZones = [];
+    zombieZoneToTerritoryMap.clear();
     
     territories.forEach((territory, territoryIndex) => {
+        const isZombieTerritory = isZombieTerritoryType(territory.territory_type);
+        
         territory.zones.forEach((zone, zoneIndex) => {
-            const flattenedIndex = territoryZones.length;
+            const flattenedIndex = isZombieTerritory ? zombieTerritoryZones.length : territoryZones.length;
             // Create a copy of the zone with territory metadata
             const zoneCopy = {
                 ...zone,
@@ -3402,10 +3946,24 @@ function flattenTerritoryZones() {
                 color: territory.color,
                 territoryName: territory.name
             };
-            territoryZones.push(zoneCopy);
-            zoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
+            
+            if (isZombieTerritory) {
+                zombieTerritoryZones.push(zoneCopy);
+                zombieZoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
+            } else {
+                territoryZones.push(zoneCopy);
+                zoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
+            }
         });
     });
+}
+
+// Check if a territory type is a zombie territory
+function isZombieTerritoryType(territoryType) {
+    if (!territoryType) return false;
+    const typeLower = territoryType.toLowerCase();
+    return typeLower === 'infected' || typeLower === 'zombie' || 
+           typeLower.includes('zombie') || typeLower.includes('infected');
 }
 
 // Sync a single territory zone back to territories array
@@ -3416,6 +3974,33 @@ function syncTerritoryZoneToTerritories(flattenedIndex) {
     
     const zone = territoryZones[flattenedIndex];
     const mapEntry = zoneToTerritoryMap.get(flattenedIndex);
+    
+    if (!mapEntry) {
+        return;
+    }
+    
+    const { territoryIndex, zoneIndex } = mapEntry;
+    
+    if (territoryIndex >= 0 && territoryIndex < territories.length &&
+        zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+        // Update the zone in the territories array
+        const territoryZone = territories[territoryIndex].zones[zoneIndex];
+        territoryZone.x = zone.x;
+        territoryZone.y = zone.y;
+        territoryZone.z = zone.z;
+        territoryZone.radius = zone.radius;
+        territoryZone.xml = zone.xml || `<zone x="${zone.x}" z="${zone.z}" r="${zone.radius}"/>`;
+    }
+}
+
+// Sync a single zombie territory zone back to territories array
+function syncZombieTerritoryZoneToTerritories(flattenedIndex) {
+    if (flattenedIndex < 0 || flattenedIndex >= zombieTerritoryZones.length) {
+        return;
+    }
+    
+    const zone = zombieTerritoryZones[flattenedIndex];
+    const mapEntry = zombieZoneToTerritoryMap.get(flattenedIndex);
     
     if (!mapEntry) {
         return;
@@ -3446,6 +4031,54 @@ function updateTerritoriesFromZones() {
         }
         
         const mapEntry = zoneToTerritoryMap.get(flattenedIndex);
+        const territoryIndex = mapEntry ? mapEntry.territoryIndex : zone.territoryIndex;
+        
+        if (!territoryMap.has(territoryIndex)) {
+            // Get original territory structure
+            if (territoryIndex < territories.length) {
+                const originalTerritory = territories[territoryIndex];
+                territoryMap.set(territoryIndex, {
+                    territory: { ...originalTerritory },
+                    zones: []
+                });
+            }
+        }
+        
+        const entry = territoryMap.get(territoryIndex);
+        if (entry) {
+            // Create zone copy without metadata
+            const zoneCopy = {
+                id: entry.zones.length,
+                name: zone.name,
+                x: zone.x,
+                y: zone.y,
+                z: zone.z,
+                radius: zone.radius,
+                xml: zone.xml || `<zone x="${zone.x}" z="${zone.z}" r="${zone.radius}"/>`
+            };
+            entry.zones.push(zoneCopy);
+        }
+    });
+    
+    // Update territories array
+    territoryMap.forEach((entry, territoryIndex) => {
+        if (territoryIndex < territories.length) {
+            territories[territoryIndex].zones = entry.zones;
+        }
+    });
+}
+
+// Update zombie territories from flattened zones (after editing)
+function updateZombieTerritoriesFromZones() {
+    // Rebuild zombie territories from flattened zones
+    const territoryMap = new Map(); // Map<territoryIndex, {territory, zones}>
+    
+    zombieTerritoryZones.forEach((zone, flattenedIndex) => {
+        if (markerTypes.zombieTerritoryZones.deleted.has(flattenedIndex)) {
+            return; // Skip deleted zones
+        }
+        
+        const mapEntry = zombieZoneToTerritoryMap.get(flattenedIndex);
         const territoryIndex = mapEntry ? mapEntry.territoryIndex : zone.territoryIndex;
         
         if (!territoryMap.has(territoryIndex)) {
@@ -3562,9 +4195,12 @@ async function loadEventSpawns() {
             draw(); // Redraw to show event spawns
         } else {
             eventSpawns = [];
+            console.warn('Failed to load event spawns:', data.error || 'Unknown error');
         }
     } catch (error) {
         eventSpawns = [];
+        console.warn('Error loading event spawns:', error.message);
+        // Continue execution - event spawns are optional
     }
 }
 
@@ -4844,6 +5480,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    const editZombieTerritoryZonesCheckbox = document.getElementById('editZombieTerritoryZones');
+    if (editZombieTerritoryZonesCheckbox) {
+        editZombieTerritoryZonesCheckbox.addEventListener('change', async (e) => {
+            await handleEditingToggle('zombieTerritoryZones', e.target.checked);
+            draw();
+        });
+    }
+    
     // Territory type selector change handler
     const territoryTypeSelect = document.getElementById('territoryTypeSelect');
     if (territoryTypeSelect) {
@@ -4895,6 +5539,58 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 updateStatus(`Error saving: ${result.message}`, true);
             }
+        });
+    }
+    
+    const saveZombieTerritoryZonesBtn = document.getElementById('saveZombieTerritoryZonesBtn');
+    if (saveZombieTerritoryZonesBtn) {
+        saveZombieTerritoryZonesBtn.addEventListener('click', async () => {
+            const result = await saveMarkerChanges('zombieTerritoryZones');
+            if (result.success) {
+                updateStatus(result.message);
+                markerTypes.zombieTerritoryZones.selected.clear();
+                updateSelectedCount();
+                draw();
+            } else {
+                updateStatus(`Error saving: ${result.message}`, true);
+            }
+        });
+    }
+    
+    const discardZombieTerritoryZonesBtn = document.getElementById('discardZombieTerritoryZonesBtn');
+    if (discardZombieTerritoryZonesBtn) {
+        discardZombieTerritoryZonesBtn.addEventListener('click', () => {
+            restoreMarkerPositions('zombieTerritoryZones');
+            updateSelectedCount();
+            draw();
+        });
+    }
+    
+    // Add discard button handlers for other marker types if they exist
+    const discardTerritoryZonesBtn = document.getElementById('discardTerritoryZonesBtn');
+    if (discardTerritoryZonesBtn) {
+        discardTerritoryZonesBtn.addEventListener('click', () => {
+            restoreMarkerPositions('territoryZones');
+            updateSelectedCount();
+            draw();
+        });
+    }
+    
+    const discardPlayerSpawnPointsBtn = document.getElementById('discardPlayerSpawnPointsBtn');
+    if (discardPlayerSpawnPointsBtn) {
+        discardPlayerSpawnPointsBtn.addEventListener('click', () => {
+            restoreMarkerPositions('playerSpawnPoints');
+            updateSelectedCount();
+            draw();
+        });
+    }
+    
+    const discardEffectAreasBtn = document.getElementById('discardEffectAreasBtn');
+    if (discardEffectAreasBtn) {
+        discardEffectAreasBtn.addEventListener('click', () => {
+            restoreMarkerPositions('effectAreas');
+            updateSelectedCount();
+            draw();
         });
     }
     
