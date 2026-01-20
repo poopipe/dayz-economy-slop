@@ -115,6 +115,23 @@ const markerTypes = {
             isNew: markerTypes.playerSpawnPoints.new.has(index),
             isDeleted: markerTypes.playerSpawnPoints.deleted.has(index)
         }),
+        // Tooltip generation
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push('Player Spawn Point');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.width !== undefined && marker.height !== undefined) {
+                lines.push('');
+                lines.push(`Rectangle Width: ${marker.width.toFixed(2)} m`);
+                lines.push(`Rectangle Height: ${marker.height.toFixed(2)} m`);
+            }
+            return lines;
+        },
         // State
         selected: new Set(),
         deleted: new Set(),
@@ -169,6 +186,63 @@ const markerTypes = {
             isNew: markerTypes.effectAreas.new.has(index),
             isDeleted: markerTypes.effectAreas.deleted.has(index)
         }),
+        // Tooltip generation
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.radius !== undefined) {
+                lines.push('');
+                lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
+            }
+            // Add usage information
+            const usageNames = [];
+            if (marker.usage) {
+                if (Array.isArray(marker.usage)) {
+                    marker.usage.forEach(u => {
+                        if (typeof u === 'object' && u.name) {
+                            usageNames.push(u.name);
+                        } else if (typeof u === 'string' && u.trim()) {
+                            usageNames.push(u.trim());
+                        }
+                    });
+                } else if (typeof marker.usage === 'object' && marker.usage.name) {
+                    usageNames.push(marker.usage.name);
+                } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
+                    usageNames.push(marker.usage.trim());
+                }
+            }
+            if (marker.proto_children && typeof marker.proto_children === 'object' && marker.proto_children.usage) {
+                const usage = marker.proto_children.usage;
+                if (Array.isArray(usage)) {
+                    usage.forEach(u => {
+                        if (typeof u === 'object' && u.name) {
+                            usageNames.push(u.name);
+                        } else if (typeof u === 'string' && u.trim()) {
+                            usageNames.push(u.trim());
+                        }
+                    });
+                } else if (typeof usage === 'object' && usage.name) {
+                    usageNames.push(usage.name);
+                } else if (typeof usage === 'string' && usage.trim()) {
+                    usageNames.push(usage.trim());
+                }
+            }
+            const uniqueUsageNames = [...new Set(usageNames)];
+            if (uniqueUsageNames.length > 0) {
+                lines.push('');
+                lines.push('Usage:');
+                uniqueUsageNames.forEach(name => {
+                    lines.push(`  • ${name}`);
+                });
+            }
+            return lines;
+        },
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
@@ -296,6 +370,31 @@ const markerTypes = {
                 isDeleted: markerTypes.territoryZones.deleted.has(index)
             };
         },
+        // Tooltip generation
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.radius !== undefined) {
+                lines.push('');
+                lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
+            }
+            // Find which territory this zone belongs to
+            for (const territory of territories) {
+                if (territory.zones.some(z => z === marker)) {
+                    lines.push('');
+                    lines.push(`Territory: ${territory.name}`);
+                    lines.push(`Territory Type: ${territory.territory_type}`);
+                    break;
+                }
+            }
+            return lines;
+        },
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
@@ -401,6 +500,22 @@ const markerTypes = {
                 isDeleted: markerTypes.zombieTerritoryZones.deleted.has(index)
             };
         },
+        // Tooltip generation - simplified for zombie territories
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.radius !== undefined) {
+                lines.push('');
+                lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
+            }
+            return lines;
+        },
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
@@ -408,10 +523,598 @@ const markerTypes = {
     }
 };
 
-// Global editing state
+// Marker State Manager - centralizes state management for all marker types
+class MarkerStateManager {
+    constructor() {
+        this.editingEnabled = new Map();
+        this.selections = new Map(); // Map<markerType, Set<index>>
+        this.deleted = new Map(); // Map<markerType, Set<index>>
+        this.new = new Map(); // Map<markerType, Set<index>>
+        this.originalPositions = new Map(); // Map<markerType, Map<index, originalData>>
+        
+        // Initialize state for all marker types
+        Object.keys(markerTypes).forEach(type => {
+            this.editingEnabled.set(type, false);
+            this.selections.set(type, new Set());
+            this.deleted.set(type, new Set());
+            this.new.set(type, new Set());
+            this.originalPositions.set(type, new Map());
+        });
+    }
+    
+    isEditingEnabled(markerType) {
+        return this.editingEnabled.get(markerType) || false;
+    }
+    
+    setEditingEnabled(markerType, enabled) {
+        this.editingEnabled.set(markerType, enabled);
+    }
+    
+    getSelected(markerType) {
+        return this.selections.get(markerType) || new Set();
+    }
+    
+    isSelected(markerType, index) {
+        return this.getSelected(markerType).has(index);
+    }
+    
+    addSelection(markerType, index) {
+        const selected = this.selections.get(markerType);
+        if (selected) {
+            selected.add(index);
+        }
+    }
+    
+    removeSelection(markerType, index) {
+        const selected = this.selections.get(markerType);
+        if (selected) {
+            selected.delete(index);
+        }
+    }
+    
+    clearSelection(markerType) {
+        const selected = this.selections.get(markerType);
+        if (selected) {
+            selected.clear();
+        }
+    }
+    
+    isDeleted(markerType, index) {
+        const deleted = this.deleted.get(markerType);
+        return deleted ? deleted.has(index) : false;
+    }
+    
+    markDeleted(markerType, index) {
+        const deleted = this.deleted.get(markerType);
+        if (deleted) {
+            deleted.add(index);
+        }
+    }
+    
+    unmarkDeleted(markerType, index) {
+        const deleted = this.deleted.get(markerType);
+        if (deleted) {
+            deleted.delete(index);
+        }
+    }
+    
+    isNew(markerType, index) {
+        const newSet = this.new.get(markerType);
+        return newSet ? newSet.has(index) : false;
+    }
+    
+    markNew(markerType, index) {
+        const newSet = this.new.get(markerType);
+        if (newSet) {
+            newSet.add(index);
+        }
+    }
+    
+    unmarkNew(markerType, index) {
+        const newSet = this.new.get(markerType);
+        if (newSet) {
+            newSet.delete(index);
+        }
+    }
+    
+    getOriginalPosition(markerType, index) {
+        const positions = this.originalPositions.get(markerType);
+        return positions ? positions.get(index) : null;
+    }
+    
+    setOriginalPosition(markerType, index, data) {
+        const positions = this.originalPositions.get(markerType);
+        if (positions) {
+            positions.set(index, data);
+        }
+    }
+    
+    clearOriginalPosition(markerType, index) {
+        const positions = this.originalPositions.get(markerType);
+        if (positions) {
+            positions.delete(index);
+        }
+    }
+}
+
+// Create global state manager instance
+const markerStateManager = new MarkerStateManager();
+
+// Marker Event System - decouples components and enables extensibility
+class MarkerEventEmitter {
+    constructor() {
+        this.listeners = new Map();
+    }
+    
+    on(event, callback) {
+        if (!this.listeners.has(event)) {
+            this.listeners.set(event, []);
+        }
+        this.listeners.get(event).push(callback);
+    }
+    
+    off(event, callback) {
+        if (!this.listeners.has(event)) return;
+        const callbacks = this.listeners.get(event);
+        const index = callbacks.indexOf(callback);
+        if (index > -1) {
+            callbacks.splice(index, 1);
+        }
+    }
+    
+    emit(event, data) {
+        const callbacks = this.listeners.get(event) || [];
+        callbacks.forEach(cb => {
+            try {
+                cb(data);
+            } catch (error) {
+                console.error(`Error in event listener for '${event}':`, error);
+            }
+        });
+    }
+    
+    once(event, callback) {
+        const wrapper = (data) => {
+            callback(data);
+            this.off(event, wrapper);
+        };
+        this.on(event, wrapper);
+    }
+}
+
+// Create global event emitter instance
+const markerEvents = new MarkerEventEmitter();
+
+// Event types:
+// - 'marker:created' - { markerType, index, marker }
+// - 'marker:deleted' - { markerType, index }
+// - 'marker:moved' - { markerType, index, oldPos, newPos }
+// - 'marker:resized' - { markerType, index, oldRadius, newRadius }
+// - 'marker:selected' - { markerType, index }
+// - 'marker:deselected' - { markerType, index }
+// - 'marker:selection:cleared' - { markerType }
+// - 'marker:changes:saved' - { markerType }
+// - 'marker:changes:discarded' - { markerType }
+
+// Marker Interaction Handler - unified interaction system for all marker types
+class MarkerInteractionHandler {
+    constructor(markerType) {
+        this.markerType = markerType;
+        this.typeConfig = markerTypes[markerType];
+    }
+    
+    handleClick(screenX, screenY, modifiers) {
+        if (!editingEnabled[this.markerType] || !this.typeConfig.getShowFlag()) {
+            return false;
+        }
+        
+        // Check if clicking on a marker
+        const clicked = getMarkerAtPoint(this.markerType, screenX, screenY);
+        if (clicked) {
+            const { index, marker } = clicked;
+            
+            if (modifiers.altKey) {
+                // Alt+Click - toggle selection
+                if (this.typeConfig.selected.has(index)) {
+                    this.typeConfig.selected.delete(index);
+                } else {
+                    this.typeConfig.selected.add(index);
+                }
+            } else {
+                // Normal click - select this one (clear others)
+                this.typeConfig.selected.clear();
+                this.typeConfig.selected.add(index);
+                // Clear selection for other marker types
+                for (const otherType of Object.keys(markerTypes)) {
+                    if (otherType !== this.markerType && editingEnabled[otherType]) {
+                        markerTypes[otherType].selected.clear();
+                    }
+                }
+            }
+            updateSelectedCount();
+            return true;
+        }
+        return false;
+    }
+    
+    handleDragStart(screenX, screenY) {
+        if (!editingEnabled[this.markerType] || !this.typeConfig.getShowFlag()) {
+            return false;
+        }
+        
+        const clicked = getMarkerAtPoint(this.markerType, screenX, screenY);
+        if (!clicked) return false;
+        
+        const { index, marker } = clicked;
+        const selected = this.typeConfig.selected;
+        
+        // Check if we have selected markers
+        if (selected.size > 0 && selected.has(index)) {
+            // Save original positions for all selected markers
+            selected.forEach(selectedIndex => {
+                if (!this.typeConfig.originalPositions.has(selectedIndex)) {
+                    const m = this.typeConfig.getMarker(selectedIndex);
+                    this.typeConfig.originalPositions.set(selectedIndex, this.typeConfig.getOriginalData(m));
+                }
+            });
+            
+            // Store relative positions
+            if (!draggedSelectedMarkers.has(this.markerType)) {
+                draggedSelectedMarkers.set(this.markerType, new Map());
+            }
+            const offsets = draggedSelectedMarkers.get(this.markerType);
+            offsets.clear();
+            const clickedWorld = screenToWorld(screenX, screenY);
+            selected.forEach(selectedIndex => {
+                const m = this.typeConfig.getMarker(selectedIndex);
+                offsets.set(selectedIndex, {
+                    offsetX: m.x - clickedWorld.x,
+                    offsetZ: m.z - clickedWorld.z
+                });
+            });
+            
+            isDragging = true;
+            draggedMarkerType = this.markerType;
+            draggedMarkerIndex = index;
+            dragStartX = screenX;
+            dragStartY = screenY;
+            dragStartWorldX = clickedWorld.x;
+            dragStartWorldZ = clickedWorld.z;
+            return true;
+        } else {
+            // No selection - check if clicking on any marker
+            if (clicked) {
+                // Save original position
+                if (!this.typeConfig.originalPositions.has(index)) {
+                    this.typeConfig.originalPositions.set(index, this.typeConfig.getOriginalData(marker));
+                }
+                
+                isDragging = true;
+                draggedMarkerType = this.markerType;
+                draggedMarkerIndex = index;
+                dragStartX = screenX;
+                dragStartY = screenY;
+                dragStartWorldX = marker.x;
+                dragStartWorldZ = marker.z;
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    handleRadiusEdit(screenX, screenY) {
+        if (!editingEnabled[this.markerType] || !this.typeConfig.getShowFlag() || !this.typeConfig.canEditRadius) {
+            return false;
+        }
+        
+        const array = this.typeConfig.getArray();
+        for (let index = 0; index < array.length; index++) {
+            if (this.typeConfig.isDeleted(index)) continue;
+            if (!this.typeConfig.selected.has(index)) continue;
+            if (!isMarkerVisible(this.markerType, index)) continue;
+            
+            const marker = this.typeConfig.getMarker(index);
+            if (!marker || marker.radius === undefined) continue;
+            
+            const screenPos = this.typeConfig.getScreenPos(marker);
+            const screenRadius = marker.radius * viewScale;
+            
+            // Check if clicking on the radius handle
+            const handleX = screenPos.x + screenRadius;
+            const handleY = screenPos.y;
+            const handleRadius = 6;
+            
+            const dx = handleX - screenX;
+            const dy = handleY - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < handleRadius + MARKER_INTERACTION_THRESHOLD) {
+                isEditingRadius = true;
+                radiusEditMarkerType = this.markerType;
+                radiusEditIndex = index;
+                radiusEditStartRadius = marker.radius;
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    handleDelete(indices) {
+        if (!indices || indices.length === 0) return;
+        
+        const array = this.typeConfig.getArray();
+        const indicesToDelete = Array.from(indices).sort((a, b) => b - a);
+        
+        for (const index of indicesToDelete) {
+            if (index < array.length) {
+                if (this.typeConfig.new.has(index)) {
+                    // Remove new marker
+                    this.typeConfig.new.delete(index);
+                    array.splice(index, 1);
+                    // Update indices in sets
+                    this.updateIndicesAfterDeletion(index);
+                } else {
+                    // Mark as deleted
+                    this.typeConfig.deleted.add(index);
+                    if (!this.typeConfig.originalPositions.has(index)) {
+                        const marker = this.typeConfig.getMarker(index);
+                        this.typeConfig.originalPositions.set(index, this.typeConfig.getOriginalData(marker));
+                    }
+                }
+            }
+        }
+        
+        this.typeConfig.selected.clear();
+    }
+    
+    updateIndicesAfterDeletion(deletedIndex) {
+        // Update indices in originalPositions, selected, and new sets
+        const newOriginalPositions = new Map();
+        this.typeConfig.originalPositions.forEach((pos, idx) => {
+            if (idx < deletedIndex) {
+                newOriginalPositions.set(idx, pos);
+            } else if (idx > deletedIndex) {
+                newOriginalPositions.set(idx - 1, pos);
+            }
+        });
+        this.typeConfig.originalPositions = newOriginalPositions;
+        
+        const newSelected = new Set();
+        this.typeConfig.selected.forEach(idx => {
+            if (idx < deletedIndex) {
+                newSelected.add(idx);
+            } else if (idx > deletedIndex) {
+                newSelected.add(idx - 1);
+            }
+        });
+        this.typeConfig.selected = newSelected;
+        
+        const newNew = new Set();
+        this.typeConfig.new.forEach(idx => {
+            if (idx < deletedIndex) {
+                newNew.add(idx);
+            } else if (idx > deletedIndex) {
+                newNew.add(idx - 1);
+            }
+        });
+        this.typeConfig.new = newNew;
+    }
+}
+
+// Create interaction handler instances for each marker type (after class definition)
+const interactionHandlers = {};
+for (const markerType of Object.keys(markerTypes)) {
+    interactionHandlers[markerType] = new MarkerInteractionHandler(markerType, markerTypes[markerType]);
+}
+
+// Marker Renderer - unified rendering system for all marker types
+class MarkerRenderer {
+    constructor(typeConfig, ctx) {
+        this.typeConfig = typeConfig;
+        this.ctx = ctx;
+    }
+    
+    getRenderStyle(marker, index, renderState, customColor = null) {
+        const { isSelected, isHovered, isEditing, isDragging, isEditingRadius, isNew, hasUnsavedChanges } = renderState;
+        
+        // Default styles
+        let fillColor = customColor || '#0066ff';
+        let strokeColor = customColor ? this.darkenColor(customColor, 0.2) : '#0044cc';
+        let lineWidth = 2;
+        let alpha = 1.0;
+        
+        if (isEditing) {
+            if (isSelected) {
+                fillColor = isDragging ? '#ffff00' : '#ff8800';
+                strokeColor = isDragging ? '#ffffff' : '#ff6600';
+                lineWidth = 3;
+            } else if (isNew) {
+                fillColor = isDragging ? '#ffff00' : '#00ff00';
+                strokeColor = isDragging ? '#ffffff' : '#00aa00';
+                lineWidth = 3;
+            } else if (hasUnsavedChanges) {
+                fillColor = isDragging ? '#ffff00' : '#ffaa00';
+                strokeColor = isDragging ? '#ffffff' : '#ff8800';
+                lineWidth = 3;
+            } else if (customColor) {
+                // Use custom color but with editing indication
+                fillColor = customColor;
+                strokeColor = isDragging ? '#ffffff' : this.darkenColor(customColor, 0.2);
+            }
+        } else if (isHovered) {
+            if (customColor) {
+                fillColor = this.lightenColor(customColor, 0.3);
+                strokeColor = '#ffffff';
+            } else {
+                fillColor = '#00ff00';
+                strokeColor = '#00cc00';
+            }
+            lineWidth = 3;
+        }
+        
+        if (isEditingRadius) {
+            lineWidth = 3;
+        }
+        
+        return { fillColor, strokeColor, lineWidth, alpha };
+    }
+    
+    darkenColor(color, amount) {
+        // Simple color darkening - convert hex to RGB, darken, convert back
+        const hex = color.replace('#', '');
+        const r = Math.max(0, parseInt(hex.substr(0, 2), 16) * (1 - amount));
+        const g = Math.max(0, parseInt(hex.substr(2, 2), 16) * (1 - amount));
+        const b = Math.max(0, parseInt(hex.substr(4, 2), 16) * (1 - amount));
+        return `#${Math.round(r).toString(16).padStart(2, '0')}${Math.round(g).toString(16).padStart(2, '0')}${Math.round(b).toString(16).padStart(2, '0')}`;
+    }
+    
+    lightenColor(color, amount) {
+        // Simple color lightening
+        const hex = color.replace('#', '');
+        const r = Math.min(255, parseInt(hex.substr(0, 2), 16) + (255 * amount));
+        const g = Math.min(255, parseInt(hex.substr(2, 2), 16) + (255 * amount));
+        const b = Math.min(255, parseInt(hex.substr(4, 2), 16) + (255 * amount));
+        return `#${Math.round(r).toString(16).padStart(2, '0')}${Math.round(g).toString(16).padStart(2, '0')}${Math.round(b).toString(16).padStart(2, '0')}`;
+    }
+    
+    drawCircle(marker, screenPos, style, screenRadius = null) {
+        const radius = screenRadius !== null ? screenRadius : 4;
+        
+        this.ctx.save();
+        this.ctx.globalAlpha = style.alpha !== undefined ? style.alpha : 1.0;
+        this.ctx.fillStyle = style.fillColor;
+        this.ctx.strokeStyle = style.strokeColor;
+        this.ctx.lineWidth = style.lineWidth;
+        
+        this.ctx.beginPath();
+        this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+    
+    drawCircleWithRadius(marker, screenPos, style, screenRadius, baseAlpha = 0.3) {
+        // Adjust alpha based on zoom level
+        const zoomedOutAlpha = Math.min(0.6, baseAlpha + (1.0 - viewScale) * 0.3);
+        let alpha = viewScale < 1.0 ? zoomedOutAlpha : baseAlpha;
+        
+        // Adjust alpha for editing state
+        if (style.isEditing && (style.hasUnsavedChanges || style.isSelected || style.isNew)) {
+            alpha = Math.min(0.7, alpha + 0.2);
+        }
+        
+        this.ctx.save();
+        this.ctx.globalAlpha = alpha;
+        this.ctx.fillStyle = style.fillColor;
+        this.ctx.strokeStyle = style.strokeColor;
+        this.ctx.lineWidth = style.lineWidth;
+        
+        this.ctx.beginPath();
+        this.ctx.arc(screenPos.x, screenPos.y, screenRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+    
+    drawRadiusHandle(screenPos, screenRadius) {
+        this.ctx.save();
+        this.ctx.globalAlpha = 1.0;
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.lineWidth = 2;
+        
+        const handleX = screenPos.x + screenRadius;
+        const handleY = screenPos.y;
+        const handleRadius = 6;
+        
+        this.ctx.beginPath();
+        this.ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+    
+    drawRectangle(marker, screenPos, style, screenWidth, screenHeight, baseAlpha = 0.15) {
+        this.ctx.save();
+        this.ctx.globalAlpha = baseAlpha;
+        this.ctx.fillStyle = style.fillColor;
+        this.ctx.strokeStyle = style.strokeColor;
+        this.ctx.lineWidth = style.lineWidth;
+        
+        const rectX = screenPos.x - screenWidth / 2;
+        const rectY = screenPos.y - screenHeight / 2;
+        
+        this.ctx.fillRect(rectX, rectY, screenWidth, screenHeight);
+        this.ctx.strokeRect(rectX, rectY, screenWidth, screenHeight);
+        this.ctx.restore();
+    }
+    
+    render(marker, index, renderState, customColor = null) {
+        const screenPos = this.typeConfig.getScreenPos(marker);
+        
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
+            return;
+        }
+        
+        const style = this.getRenderStyle(marker, index, renderState, customColor);
+        
+        // Determine marker shape and render accordingly
+        if (this.typeConfig.canEditRadius && marker.radius !== undefined) {
+            // Circle with radius
+            const screenRadius = marker.radius * viewScale;
+            if (screenRadius < 1) return;
+            
+            // Use custom alpha for territory zones if provided
+            const baseAlpha = customColor ? 0.2 : 0.3;
+            this.drawCircleWithRadius(marker, screenPos, { ...style, ...renderState }, screenRadius, baseAlpha);
+            
+            // Draw center point marker (for territory zones and effect areas)
+            this.drawCircle(marker, screenPos, style, renderState.isHovered || renderState.isDragging || renderState.isSelected ? 6 : 4);
+            
+            // Draw radius handle when editing and selected
+            if (renderState.isEditing && renderState.isSelected) {
+                this.drawRadiusHandle(screenPos, screenRadius);
+            }
+        } else if (this.typeConfig.canEditDimensions && marker.width !== undefined && marker.height !== undefined) {
+            // Rectangle (player spawn points)
+            const screenWidth = marker.width * viewScale;
+            const screenHeight = marker.height * viewScale;
+            
+            // Customize style for player spawn points (cyan color when not editing)
+            if (!renderState.isEditing || !(renderState.hasUnsavedChanges || renderState.isSelected || renderState.isNew)) {
+                style.fillColor = '#00ffff';
+                style.strokeColor = renderState.isHovered ? '#00ffff' : '#00aaaa';
+            }
+            
+            // Draw rectangle with custom alpha
+            this.ctx.save();
+            this.ctx.globalAlpha = 0.15;
+            this.ctx.fillStyle = style.fillColor;
+            this.ctx.strokeStyle = style.strokeColor;
+            this.ctx.lineWidth = renderState.isHovered ? 2 : 1;
+            
+            const rectX = screenPos.x - screenWidth / 2;
+            const rectY = screenPos.y - screenHeight / 2;
+            
+            this.ctx.fillRect(rectX, rectY, screenWidth, screenHeight);
+            this.ctx.strokeRect(rectX, rectY, screenWidth, screenHeight);
+            this.ctx.restore();
+            
+            // Draw center marker point
+            this.drawCircle(marker, screenPos, style, renderState.isHovered || renderState.isDragging || renderState.isSelected ? 6 : 4);
+        } else {
+            // Simple point marker
+            this.drawCircle(marker, screenPos, style, renderState.isHovered || renderState.isDragging || renderState.isSelected ? 6 : 4);
+        }
+    }
+}
+
+// Global editing state (kept for backward compatibility, now delegates to state manager)
 let editingEnabled = {};
 Object.keys(markerTypes).forEach(type => {
     editingEnabled[type] = false;
+    // Sync with state manager
+    markerStateManager.setEditingEnabled(type, false);
 });
 
 // Radius editing state (for effect areas and similar)
@@ -1152,104 +1855,97 @@ function drawBackgroundImage() {
 }
 
 // Draw effect area circles
-function drawEffectAreas() {
-    if (!showEffectAreas) {
+// Generic function to draw a marker type using the renderer
+function drawMarkerType(markerType) {
+    const typeConfig = markerTypes[markerType];
+    if (!typeConfig || !typeConfig.getShowFlag()) {
         return;
     }
     
-    if (effectAreas.length === 0) {
+    const array = typeConfig.getArray();
+    if (array.length === 0) {
         return;
     }
     
-    const isEditing = editingEnabled.effectAreas;
-    const isDraggingThisType = isDragging && draggedMarkerType === 'effectAreas';
+    const isEditing = editingEnabled[markerType];
+    const isDraggingThisType = isDragging && draggedMarkerType === markerType;
+    const renderer = new MarkerRenderer(typeConfig, ctx);
     
-    const typeConfig = markerTypes.effectAreas;
-    effectAreas.forEach((area, index) => {
-        // Skip deleted effect areas
+    // Calculate offset for hover detection
+    const eventSpawnOffset = markers.length;
+    const zoneOffset = eventSpawnOffset + eventSpawns.length;
+    const regularTerritoryZoneCount = editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
+    const zombieTerritoryZoneCount = editingEnabled.zombieTerritoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
+    const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
+    
+    // Calculate offset for this marker type
+    let currentOffset = baseEditableOffset;
+    for (const type of Object.keys(markerTypes)) {
+        if (type === markerType) break;
+        if (editingEnabled[type] && markerTypes[type].getShowFlag()) {
+            currentOffset += markerTypes[type].getArray().length;
+        }
+    }
+    
+    array.forEach((marker, index) => {
+        // Skip deleted markers
         if (typeConfig.isDeleted(index)) {
             return;
         }
         
-        // Convert world coordinates to screen coordinates
-        // Note: z coordinate needs to be reversed since origin is in lower left
-        const screenPos = worldToScreen(area.x, area.z);
+        // Skip hidden markers
+        if (!isMarkerVisible(markerType, index)) {
+            return;
+        }
         
-        // Convert radius from world units (metres) to screen pixels
-        const screenRadius = area.radius * viewScale;
+        const screenPos = typeConfig.getScreenPos(marker);
         
-        // Skip if position is invalid or radius is too small
-        if (!isFinite(screenPos.x) || !isFinite(screenPos.y) || !isFinite(screenRadius) || screenRadius < 1) {
+        // Skip if position is invalid
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
             return;
         }
         
         const isSelected = typeConfig.selected.has(index);
         const hasUnsavedChanges = typeConfig.originalPositions.has(index);
         const isNew = typeConfig.new.has(index);
-        const isBeingDragged = isDraggingThisType && draggedMarkerIndex === index;
-        const isEditingRadius = radiusEditMarkerType === 'effectAreas' && radiusEditIndex === index;
+        const isBeingDragged = isDraggingThisType && (draggedMarkerIndex === index || (draggedSelectedMarkers.get(markerType) && draggedSelectedMarkers.get(markerType).has(index)));
+        const isEditingRadius = radiusEditMarkerType === markerType && radiusEditIndex === index;
+        const isHovered = hoveredMarkerIndex === currentOffset + index;
         
-        // Increase visibility when zoomed out - adjust opacity
-        // When zoomed out (viewScale < 1), make circles more visible
-        const baseAlpha = 0.3;
-        const zoomedOutAlpha = Math.min(0.6, baseAlpha + (1.0 - viewScale) * 0.3);
-        let alpha = viewScale < 1.0 ? zoomedOutAlpha : baseAlpha;
+        const renderState = {
+            isSelected,
+            isHovered,
+            isEditing,
+            isDragging: isBeingDragged,
+            isEditingRadius,
+            isNew,
+            hasUnsavedChanges
+        };
         
-        // Adjust alpha for editing state
-        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-            alpha = Math.min(0.7, alpha + 0.2);
-        }
-        
-        // Draw circle with color based on editing state
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        
-        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-            if (isSelected) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800'; // Yellow/Orange for selected
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-            } else if (isNew) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00'; // Green for new
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-            } else {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
+        // Customize style for effect areas (orange color)
+        if (markerType === 'effectAreas') {
+            const style = renderer.getRenderStyle(marker, index, renderState);
+            if (!isEditing || !(hasUnsavedChanges || isSelected || isNew)) {
+                style.fillColor = '#ff8800';
+                style.strokeColor = '#ff6600';
+            }
+            renderer.drawCircleWithRadius(marker, screenPos, style, marker.radius * viewScale, 0.3);
+            if (isEditing && isSelected) {
+                renderer.drawRadiusHandle(screenPos, marker.radius * viewScale);
             }
         } else {
-            ctx.fillStyle = '#ff8800'; // Orange
-            ctx.strokeStyle = '#ff6600'; // Slightly darker orange for border
-        }
-        
-        ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
-        
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, screenRadius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Draw radius handle when editing and selected
-        if (isEditing && isSelected) {
-            ctx.restore();
-            ctx.save();
-            ctx.globalAlpha = 1.0;
-            ctx.fillStyle = '#ffffff';
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 2;
-            
-            // Draw handle on the right side of the circle
-            const handleX = screenPos.x + screenRadius;
-            const handleY = screenPos.y;
-            const handleRadius = 6;
-            
-            ctx.beginPath();
-            ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
-        } else {
-            ctx.restore();
+            // Check if marker has custom color (for territory zones)
+            const customColor = marker.color || null;
+            renderer.render(marker, index, renderState, customColor);
         }
     });
+}
+
+function drawEffectAreas() {
+    if (!showEffectAreas) {
+        return;
+    }
+    drawMarkerType('effectAreas');
 }
 
 // Draw markers
@@ -1401,79 +2097,21 @@ function drawZombieTerritories() {
             const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('zombieTerritoryZones') && draggedSelectedMarkers.get('zombieTerritoryZones').has(flattenedIndex)));
             const isEditingRadius = radiusEditMarkerType === 'zombieTerritoryZones' && radiusEditIndex === flattenedIndex;
             
-            // Draw circle around zone marker using territory color
-            if (isFinite(screenRadius) && screenRadius > 1) {
-                ctx.save();
-                let alpha = 0.2; // Quite transparent
-                
-                // Adjust alpha for editing state
-                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-                    alpha = Math.min(0.4, alpha + 0.1);
-                }
-                
-                ctx.globalAlpha = alpha;
-                
-                // Use different colors when editing
-                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-                    if (isSelected) {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-                    } else if (isNew) {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-                    } else {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
-                    }
-                } else {
-                    ctx.fillStyle = territory.color;
-                    ctx.strokeStyle = territory.color;
-                }
-                
-                ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
-                
-                ctx.beginPath();
-                ctx.arc(zoneScreenPos.x, zoneScreenPos.y, screenRadius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                ctx.restore();
-            }
+            // Use renderer to draw zone marker with custom territory color
+            const renderer = new MarkerRenderer(typeConfig, ctx);
+            const renderState = {
+                isSelected,
+                isHovered,
+                isEditing,
+                isDragging: isBeingDragged,
+                isEditingRadius,
+                isNew,
+                hasUnsavedChanges
+            };
             
-            // Draw zone marker (center point)
-            ctx.save();
-            if (isEditing && isSelected) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-            } else if (isEditing && isNew) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-            } else if (isEditing && hasUnsavedChanges) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
-            } else {
-                ctx.fillStyle = territory.color;
-                ctx.strokeStyle = territory.color;
-            }
-            
-            ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
-            
-            ctx.beginPath();
-            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, 5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            
-            // Draw radius edit handle when editing and selected
-            if (isEditing && isSelected && typeConfig.canEditRadius) {
-                ctx.fillStyle = '#ffffff';
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.arc(zoneScreenPos.x + screenRadius, zoneScreenPos.y, 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-            }
-            
-            ctx.restore();
+            // Create a marker object with color for the renderer
+            const markerWithColor = { ...zone, color: territory.color };
+            renderer.render(markerWithColor, flattenedIndex >= 0 ? flattenedIndex : zoneIndex, renderState, territory.color);
             drawnZones++;
         });
         
@@ -1556,88 +2194,21 @@ function drawTerritories() {
             const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('territoryZones') && draggedSelectedMarkers.get('territoryZones').has(flattenedIndex)));
             const isEditingRadius = radiusEditMarkerType === 'territoryZones' && radiusEditIndex === flattenedIndex;
             
-            // Draw circle around zone marker using territory color
-            if (isFinite(screenRadius) && screenRadius > 1) {
-                ctx.save();
-                let alpha = 0.2; // Quite transparent
-                
-                // Adjust alpha for editing state
-                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-                    alpha = Math.min(0.4, alpha + 0.1);
-                }
-                
-                ctx.globalAlpha = alpha;
-                
-                // Use different colors when editing
-                if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-                    if (isSelected) {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-                    } else if (isNew) {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-                    } else {
-                        ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
-                        ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
-                    }
-                } else {
-                    ctx.fillStyle = territory.color;
-                    ctx.strokeStyle = territory.color;
-                }
-                
-                ctx.lineWidth = isSelected || isEditingRadius ? 3 : 2;
-                
-                ctx.beginPath();
-                ctx.arc(zoneScreenPos.x, zoneScreenPos.y, screenRadius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                ctx.restore();
-                drawnTerritories++;
-                
-                // Draw radius handle when editing and selected
-                if (isEditing && isSelected && typeConfig.canEditRadius) {
-                    ctx.save();
-                    ctx.globalAlpha = 1.0;
-                    ctx.fillStyle = '#ffffff';
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = 2;
-                    
-                    // Draw handle on the right side of the circle
-                    const handleX = zoneScreenPos.x + screenRadius;
-                    const handleY = zoneScreenPos.y;
-                    const handleRadius = 6;
-                    
-                    ctx.beginPath();
-                    ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.stroke();
-                    ctx.restore();
-                }
-            }
+            // Use renderer to draw zone marker with custom territory color
+            const renderer = new MarkerRenderer(typeConfig, ctx);
+            const renderState = {
+                isSelected,
+                isHovered,
+                isEditing,
+                isDragging: isBeingDragged,
+                isEditingRadius,
+                isNew,
+                hasUnsavedChanges
+            };
             
-            // Draw zone marker using territory color
-            if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-                if (isSelected) {
-                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800';
-                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-                } else if (isNew) {
-                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00';
-                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-                } else {
-                    ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00';
-                    ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
-                }
-            } else {
-                ctx.fillStyle = territory.color;
-                ctx.strokeStyle = isHovered ? '#ffffff' : territory.color;
-            }
-            ctx.lineWidth = isHovered || isBeingDragged || isSelected ? 3 : 2;
-            
-            ctx.beginPath();
-            ctx.arc(zoneScreenPos.x, zoneScreenPos.y, isHovered || isBeingDragged ? 6 : 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
+            // Create a marker object with color for the renderer
+            const markerWithColor = { ...zone, color: territory.color };
+            renderer.render(markerWithColor, flattenedIndex >= 0 ? flattenedIndex : zoneIndex, renderState, territory.color);
             drawnZones++;
         });
         
@@ -1647,81 +2218,10 @@ function drawTerritories() {
 
 // Draw player spawn point markers and rectangles
 function drawPlayerSpawnPoints() {
-    if (!showPlayerSpawnPoints || playerSpawnPoints.length === 0) {
+    if (!showPlayerSpawnPoints) {
         return;
     }
-    
-    // Calculate offset for hover detection
-    const spawnPointOffset = markers.length + eventSpawns.length + 
-        territories.reduce((sum, t) => sum + t.zones.length, 0);
-    
-    const isEditing = editingEnabled.playerSpawnPoints;
-    const isDraggingThisType = isDragging && draggedMarkerType === 'playerSpawnPoints';
-    
-    const typeConfig = markerTypes.playerSpawnPoints;
-    const offsets = draggedSelectedMarkers.get('playerSpawnPoints');
-    playerSpawnPoints.forEach((spawnPoint, index) => {
-        // Skip deleted spawn points (they'll be removed on save)
-        if (typeConfig.isDeleted(index)) {
-            return;
-        }
-        
-        const screenPos = worldToScreen(spawnPoint.x, spawnPoint.z);
-        
-        // Skip if position is invalid
-        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
-            return;
-        }
-        
-        const isHovered = hoveredMarkerIndex === spawnPointOffset + index;
-        const isBeingDragged = isDraggingThisType && (draggedMarkerIndex === index || (offsets && offsets.has(index)));
-        const isSelected = typeConfig.selected.has(index);
-        const hasUnsavedChanges = typeConfig.originalPositions.has(index);
-        const isNew = typeConfig.new.has(index);
-        
-        // Draw rectangle (more transparent)
-        const screenWidth = spawnPoint.width * viewScale;
-        const screenHeight = spawnPoint.height * viewScale;
-        
-        ctx.save();
-        ctx.globalAlpha = 0.15; // More transparent
-        ctx.fillStyle = '#00ffff'; // Cyan color
-        ctx.strokeStyle = isHovered ? '#00ffff' : '#00aaaa';
-        ctx.lineWidth = isHovered ? 2 : 1;
-        
-        // Draw rectangle centered on the spawn point
-        const rectX = screenPos.x - screenWidth / 2;
-        const rectY = screenPos.y - screenHeight / 2;
-        
-        ctx.fillRect(rectX, rectY, screenWidth, screenHeight);
-        ctx.strokeRect(rectX, rectY, screenWidth, screenHeight);
-        
-        ctx.restore();
-        
-        // Draw marker (more visible)
-        // Use different color if editing and has unsaved changes or if selected
-        if (isEditing && (hasUnsavedChanges || isSelected || isNew)) {
-            if (isSelected) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ff8800'; // Yellow/Orange for selected
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff6600';
-            } else if (isNew) {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#00ff00'; // Green for new
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#00aa00';
-            } else {
-                ctx.fillStyle = isBeingDragged ? '#ffff00' : '#ffaa00'; // Yellow/Orange for unsaved
-                ctx.strokeStyle = isBeingDragged ? '#ffffff' : '#ff8800';
-            }
-        } else {
-            ctx.fillStyle = isHovered ? '#00ffff' : '#00aaaa';
-            ctx.strokeStyle = isHovered ? '#ffffff' : '#008888';
-        }
-        ctx.lineWidth = isHovered || isBeingDragged || isSelected ? 3 : 2;
-        
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, isHovered || isBeingDragged ? 6 : 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-    });
+    drawMarkerType('playerSpawnPoints');
 }
 
 // Format a value for tooltip display (handles arrays/lists)
@@ -1762,10 +2262,15 @@ function drawTooltip() {
     }
     
     // Determine what type of marker we're hovering over
-    let marker, isEventSpawn, isZone, isPlayerSpawnPoint;
+    let marker, isEventSpawn, isZone, isPlayerSpawnPoint, isZombieTerritory, hoveredMarkerType = null, hoveredMarkerIndexInType = -1;
     const eventSpawnOffset = markers.length;
     const zoneOffset = eventSpawnOffset + eventSpawns.length;
-    const baseEditableOffset = zoneOffset + (editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + t.zones.length, 0));
+    // Calculate offsets for regular and zombie territories when not editing
+    const regularTerritoryZoneCount = editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
+    const zombieTerritoryZoneCount = editingEnabled.zombieTerritoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
+    const regularTerritoryZoneOffset = zoneOffset;
+    const zombieTerritoryZoneOffset = zoneOffset + regularTerritoryZoneCount;
+    const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
     
     // Check editable marker types first (when editing is enabled)
     let foundInEditable = false;
@@ -1779,8 +2284,11 @@ function drawTooltip() {
                 const index = hoveredMarkerIndex - currentOffset;
                 if (!typeConfig.isDeleted(index)) {
                     marker = typeConfig.getMarker(index);
+                    hoveredMarkerType = markerType;
+                    hoveredMarkerIndexInType = index;
                     isEventSpawn = false;
                     isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones');
+                    isZombieTerritory = (markerType === 'zombieTerritoryZones');
                     isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
                     foundInEditable = true;
                     break;
@@ -1804,6 +2312,7 @@ function drawTooltip() {
             marker = markers[hoveredMarkerIndex];
             isEventSpawn = false;
             isZone = false;
+            isZombieTerritory = false;
             isPlayerSpawnPoint = false;
         } else if (hoveredMarkerIndex < zoneOffset) {
             // Event spawn
@@ -1822,17 +2331,23 @@ function drawTooltip() {
             marker = eventSpawns[eventSpawnIndex];
             isEventSpawn = true;
             isZone = false;
+            isZombieTerritory = false;
             isPlayerSpawnPoint = false;
-        } else if (hoveredMarkerIndex < baseEditableOffset) {
-            // Zone marker (when not editing)
+        } else if (hoveredMarkerIndex >= regularTerritoryZoneOffset && hoveredMarkerIndex < zombieTerritoryZoneOffset) {
+            // Regular territory zone marker (when not editing)
             // Check if territories are enabled
             if (!showTerritories) {
                 return; // Don't show tooltip if territories are hidden
             }
-            let zoneIndex = hoveredMarkerIndex - zoneOffset;
+            let zoneIndex = hoveredMarkerIndex - regularTerritoryZoneOffset;
             let found = false;
             for (const territory of territories) {
-                if (visibleTerritories.size > 0 && !visibleTerritories.has(territories.indexOf(territory))) {
+                // Skip zombie territories
+                if (isZombieTerritoryType(territory.territory_type)) {
+                    continue;
+                }
+                const territoryIndex = territories.indexOf(territory);
+                if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
                     continue; // Skip hidden territories
                 }
                 if (zoneIndex < territory.zones.length) {
@@ -1847,6 +2362,38 @@ function drawTooltip() {
             }
             isEventSpawn = false;
             isZone = true;
+            isZombieTerritory = false;
+            isPlayerSpawnPoint = false;
+        } else if (hoveredMarkerIndex >= zombieTerritoryZoneOffset && hoveredMarkerIndex < baseEditableOffset) {
+            // Zombie territory zone marker (when not editing)
+            // Check if territories are enabled
+            if (!showTerritories) {
+                return; // Don't show tooltip if territories are hidden
+            }
+            let zoneIndex = hoveredMarkerIndex - zombieTerritoryZoneOffset;
+            let found = false;
+            for (const territory of territories) {
+                // Only check zombie territories
+                if (!isZombieTerritoryType(territory.territory_type)) {
+                    continue;
+                }
+                const territoryIndex = territories.indexOf(territory);
+                if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
+                    continue; // Skip hidden territories
+                }
+                if (zoneIndex < territory.zones.length) {
+                    marker = territory.zones[zoneIndex];
+                    found = true;
+                    break;
+                }
+                zoneIndex -= territory.zones.length;
+            }
+            if (!found) {
+                return;
+            }
+            isEventSpawn = false;
+            isZone = true;
+            isZombieTerritory = true;
             isPlayerSpawnPoint = false;
         } else {
             // Check non-editable spawn points
@@ -1855,8 +2402,11 @@ function drawTooltip() {
                 const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
                 if (spawnPointIndex < playerSpawnPoints.length) {
                     marker = playerSpawnPoints[spawnPointIndex];
+                    hoveredMarkerType = 'playerSpawnPoints';
+                    hoveredMarkerIndexInType = spawnPointIndex;
                     isEventSpawn = false;
                     isZone = false;
+                    isZombieTerritory = false;
                     isPlayerSpawnPoint = true;
                 }
             }
@@ -1871,65 +2421,64 @@ function drawTooltip() {
         return; // Don't draw tooltip if marker is undefined
     }
     
-    // Build tooltip content - initially only name and coordinates
-    const lines = [];
+    // Build tooltip content using marker type configuration if available
+    let lines = [];
     
-    // Name on first line
-    if (isPlayerSpawnPoint) {
-        lines.push('Player Spawn Point');
-    } else if (marker.name) {
-        lines.push(marker.name);
+    // If this is an editable marker type with tooltip configuration, use it
+    if (hoveredMarkerType && markerTypes[hoveredMarkerType] && markerTypes[hoveredMarkerType].getTooltipLines) {
+        lines = markerTypes[hoveredMarkerType].getTooltipLines(marker);
     } else {
-        lines.push('(Unnamed)');
-    }
-    
-    // Empty line separator
-    lines.push('');
-    
-    // Coordinates on separate lines
-    if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
-        lines.push(`X: ${marker.x.toFixed(2)} m`);
-        lines.push(`Y: ${marker.y.toFixed(2)} m`);
-        lines.push(`Z: ${marker.z.toFixed(2)} m`);
-    }
-    
-    // Display rectangle dimensions for player spawn points
-    if (isPlayerSpawnPoint && marker.width !== undefined && marker.height !== undefined) {
-        lines.push('');
-        lines.push(`Rectangle Width: ${marker.width.toFixed(2)} m`);
-        lines.push(`Rectangle Height: ${marker.height.toFixed(2)} m`);
-    }
-    
-    // Display radius for zones and effect areas
-    if (isZone && marker.radius !== undefined) {
-        lines.push('');
-        lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
-    }
-    
-    // Display usage if available
-    // Usage can be a string, array, or in proto_children
-    const usageNames = [];
-    
-    // Check direct usage property (from mapgrouppos.xml)
-    if (marker.usage) {
-        if (Array.isArray(marker.usage)) {
-            marker.usage.forEach(u => {
-                if (typeof u === 'object' && u.name) {
-                    usageNames.push(u.name);
-                } else if (typeof u === 'string' && u.trim()) {
-                    usageNames.push(u.trim());
-                }
-            });
-        } else if (typeof marker.usage === 'object' && marker.usage.name) {
-            usageNames.push(marker.usage.name);
-        } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
-            usageNames.push(marker.usage.trim());
+        // Fallback to legacy tooltip generation for non-editable markers
+        // Name on first line
+        if (isPlayerSpawnPoint) {
+            lines.push('Player Spawn Point');
+        } else if (marker.name) {
+            lines.push(marker.name);
+        } else {
+            lines.push('(Unnamed)');
         }
-    }
-    
-    // Check proto_children for usage (from mapgroupproto.xml)
-    if (marker.proto_children && typeof marker.proto_children === 'object') {
-        if (marker.proto_children.usage) {
+        
+        // Empty line separator
+        lines.push('');
+        
+        // Coordinates on separate lines
+        if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+            lines.push(`X: ${marker.x.toFixed(2)} m`);
+            lines.push(`Y: ${marker.y.toFixed(2)} m`);
+            lines.push(`Z: ${marker.z.toFixed(2)} m`);
+        }
+        
+        // Display rectangle dimensions for player spawn points
+        if (isPlayerSpawnPoint && marker.width !== undefined && marker.height !== undefined) {
+            lines.push('');
+            lines.push(`Rectangle Width: ${marker.width.toFixed(2)} m`);
+            lines.push(`Rectangle Height: ${marker.height.toFixed(2)} m`);
+        }
+        
+        // Display radius for zones and effect areas
+        if (isZone && marker.radius !== undefined) {
+            lines.push('');
+            lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
+        }
+        
+        // Display usage if available (for regular markers and event spawns)
+        const usageNames = [];
+        if (marker.usage) {
+            if (Array.isArray(marker.usage)) {
+                marker.usage.forEach(u => {
+                    if (typeof u === 'object' && u.name) {
+                        usageNames.push(u.name);
+                    } else if (typeof u === 'string' && u.trim()) {
+                        usageNames.push(u.trim());
+                    }
+                });
+            } else if (typeof marker.usage === 'object' && marker.usage.name) {
+                usageNames.push(marker.usage.name);
+            } else if (typeof marker.usage === 'string' && marker.usage.trim()) {
+                usageNames.push(marker.usage.trim());
+            }
+        }
+        if (marker.proto_children && typeof marker.proto_children === 'object' && marker.proto_children.usage) {
             const usage = marker.proto_children.usage;
             if (Array.isArray(usage)) {
                 usage.forEach(u => {
@@ -1945,100 +2494,90 @@ function drawTooltip() {
                 usageNames.push(usage.trim());
             }
         }
-    }
-    
-    // Remove duplicates and display usage names if found
-    const uniqueUsageNames = [...new Set(usageNames)];
-    if (uniqueUsageNames.length > 0) {
-        lines.push('');
-        lines.push('Usage:');
-        uniqueUsageNames.forEach(name => {
-            lines.push(`  • ${name}`);
-        });
-    }
-    
-    // Display categories for event spawns
-    if (isEventSpawn && marker.categories && Array.isArray(marker.categories) && marker.categories.length > 0) {
-        lines.push('');
-        lines.push('Category:');
-        marker.categories.forEach(cat => {
-            lines.push(`  • ${cat}`);
-        });
-    }
-    
-    // Display territory info for zones
-    if (isZone) {
-        // Find which territory this zone belongs to
-        for (const territory of territories) {
-            if (territory.zones.some(z => z === marker)) {
-                lines.push('');
-                lines.push(`Territory: ${territory.name}`);
-                lines.push(`Territory Type: ${territory.territory_type}`);
-                break;
-            }
-        }
-    }
-    
-    // Display container elements by name
-    const containerNames = [];
-    
-    // Check proto_children for container elements
-    if (marker.proto_children && typeof marker.proto_children === 'object') {
-        // Look for container or containers in proto_children
-        if (marker.proto_children.container) {
-            const container = marker.proto_children.container;
-            if (Array.isArray(container)) {
-                container.forEach(c => {
-                    if (typeof c === 'object' && c.name) {
-                        containerNames.push(c.name);
-                    } else if (typeof c === 'string' && c) {
-                        containerNames.push(c);
-                    }
-                });
-            } else if (typeof container === 'object' && container.name) {
-                containerNames.push(container.name);
-            } else if (typeof container === 'string' && container) {
-                containerNames.push(container);
-            }
-        }
-        if (marker.proto_children.containers) {
-            const containers = marker.proto_children.containers;
-            if (Array.isArray(containers)) {
-                containers.forEach(c => {
-                    if (typeof c === 'object' && c.name) {
-                        containerNames.push(c.name);
-                    } else if (typeof c === 'string' && c) {
-                        containerNames.push(c);
-                    }
-                });
-            }
-        }
-    }
-    
-    // Also check if container is a direct property
-    if (marker.container) {
-        if (Array.isArray(marker.container)) {
-            marker.container.forEach(c => {
-                if (typeof c === 'object' && c.name) {
-                    containerNames.push(c.name);
-                } else if (typeof c === 'string' && c) {
-                    containerNames.push(c);
-                }
+        const uniqueUsageNames = [...new Set(usageNames)];
+        if (uniqueUsageNames.length > 0) {
+            lines.push('');
+            lines.push('Usage:');
+            uniqueUsageNames.forEach(name => {
+                lines.push(`  • ${name}`);
             });
-        } else if (typeof marker.container === 'object' && marker.container.name) {
-            containerNames.push(marker.container.name);
-        } else if (typeof marker.container === 'string' && marker.container) {
-            containerNames.push(marker.container);
         }
-    }
-    
-    // Display container names if found
-    if (containerNames.length > 0) {
-        lines.push('');
-        lines.push('Containers:');
-        containerNames.forEach(name => {
-            lines.push(`  • ${name}`);
-        });
+        
+        // Display categories for event spawns
+        if (isEventSpawn && marker.categories && Array.isArray(marker.categories) && marker.categories.length > 0) {
+            lines.push('');
+            lines.push('Category:');
+            marker.categories.forEach(cat => {
+                lines.push(`  • ${cat}`);
+            });
+        }
+        
+        // Display territory info for zones (non-zombie, when not editing)
+        if (isZone && !isZombieTerritory) {
+            for (const territory of territories) {
+                if (territory.zones.some(z => z === marker)) {
+                    lines.push('');
+                    lines.push(`Territory: ${territory.name}`);
+                    lines.push(`Territory Type: ${territory.territory_type}`);
+                    break;
+                }
+            }
+        }
+        
+        // Display container elements by name
+        const containerNames = [];
+        if (marker.proto_children && typeof marker.proto_children === 'object') {
+            if (marker.proto_children.container) {
+                const container = marker.proto_children.container;
+                if (Array.isArray(container)) {
+                    container.forEach(c => {
+                        if (typeof c === 'object' && c.name) {
+                            containerNames.push(c.name);
+                        } else if (typeof c === 'string' && c) {
+                            containerNames.push(c);
+                        }
+                    });
+                } else if (typeof container === 'object' && container.name) {
+                    containerNames.push(container.name);
+                } else if (typeof container === 'string' && container) {
+                    containerNames.push(container);
+                }
+            }
+            if (marker.proto_children.containers) {
+                const containers = marker.proto_children.containers;
+                if (Array.isArray(containers)) {
+                    containers.forEach(c => {
+                        if (typeof c === 'object' && c.name) {
+                            containerNames.push(c.name);
+                        } else if (typeof c === 'string' && c) {
+                            containerNames.push(c);
+                        }
+                    });
+                }
+            }
+        }
+        if (marker.container) {
+            if (Array.isArray(marker.container)) {
+                marker.container.forEach(c => {
+                    if (typeof c === 'object' && c.name) {
+                        containerNames.push(c.name);
+                    } else if (typeof c === 'string' && c) {
+                        containerNames.push(c);
+                    }
+                });
+            } else if (typeof marker.container === 'object' && marker.container.name) {
+                containerNames.push(marker.container.name);
+            } else if (typeof marker.container === 'string' && marker.container) {
+                containerNames.push(marker.container);
+            }
+        }
+        if (containerNames.length > 0) {
+            lines.push('');
+            lines.push('Containers:');
+            containerNames.forEach(name => {
+                lines.push(`  • ${name}`);
+            });
+        }
     }
     
     if (lines.length === 0) return;
@@ -2129,6 +2668,51 @@ function drawMarquee() {
 }
 
 // Main draw function
+// Drawing order configuration - defines the order and stages of drawing
+const DRAW_ORDER = [
+    { stage: 'background', type: 'background', condition: () => showBackgroundImage, draw: () => {
+        if (useWebGL && gl && backgroundCanvas && backgroundImage) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(0.18, 0.20, 0.25, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            drawBackgroundImageWebGL();
+        } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
+            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            backgroundCtx.fillStyle = '#2E3440';
+            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+            const oldCtx = ctx;
+            ctx = backgroundCtx;
+            drawBackgroundImage();
+            ctx = oldCtx;
+        }
+    }},
+    { stage: 'background', type: 'background-clear', condition: () => !showBackgroundImage, draw: () => {
+        if (useWebGL && gl && backgroundCanvas) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(0.18, 0.20, 0.25, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        } else if (backgroundCtx && backgroundCanvas) {
+            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            backgroundCtx.fillStyle = '#2E3440';
+            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+        }
+    }},
+    { stage: 'main', type: 'clear', condition: () => true, draw: () => {
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    }},
+    { stage: 'main', type: 'grid', condition: () => true, draw: drawGrid },
+    { stage: 'main', type: 'markers', condition: () => true, draw: drawMarkers },
+    { stage: 'main', type: 'event-spawns', condition: () => true, draw: drawEventSpawns },
+    { stage: 'main', type: 'territories', condition: () => true, draw: drawTerritories },
+    { stage: 'main', type: 'zombie-territories', condition: () => true, draw: drawZombieTerritories },
+    { stage: 'main', type: 'player-spawn-points', condition: () => true, draw: drawPlayerSpawnPoints },
+    { stage: 'main', type: 'effect-areas', condition: () => true, draw: drawEffectAreas },
+    { stage: 'overlay', type: 'marquee', condition: () => true, draw: drawMarquee },
+    { stage: 'overlay', type: 'tooltip', condition: () => true, draw: drawTooltip }
+];
+
 function draw() {
     // Cancel any pending animation frame
     if (animationFrameId) {
@@ -2137,53 +2721,12 @@ function draw() {
     }
     needsRedraw = false;
     
-    // Draw background image to background canvas (only if showBackgroundImage is true)
-    if (showBackgroundImage) {
-        if (useWebGL && gl && backgroundCanvas && backgroundImage) {
-            // Clear and draw background on WebGL canvas
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            gl.viewport(0, 0, canvasWidth, canvasHeight);
-            gl.clearColor(0.18, 0.20, 0.25, 1.0); // nord0: #2E3440 (background when no image)
-            gl.clear(gl.COLOR_BUFFER_BIT);
-            drawBackgroundImageWebGL(); // Draw background on WebGL canvas
-        } else if (backgroundCtx && backgroundCanvas && backgroundImage) {
-            // Clear and draw background on 2D canvas
-            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-            // Fill with nord0 background first
-            backgroundCtx.fillStyle = '#2E3440'; // nord0
-            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
-            const oldCtx = ctx;
-            ctx = backgroundCtx; // Temporarily use background context
-            drawBackgroundImage();
-            ctx = oldCtx; // Restore main context
-        }
-    } else {
-        // Hide background image by clearing the background canvas
-        if (useWebGL && gl && backgroundCanvas) {
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            gl.viewport(0, 0, canvasWidth, canvasHeight);
-            gl.clearColor(0.18, 0.20, 0.25, 1.0); // nord0: #2E3440
-            gl.clear(gl.COLOR_BUFFER_BIT);
-        } else if (backgroundCtx && backgroundCanvas) {
-            backgroundCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-            backgroundCtx.fillStyle = '#2E3440'; // nord0
-            backgroundCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // Execute drawing stages in configured order
+    for (const item of DRAW_ORDER) {
+        if (item.condition && item.condition()) {
+            item.draw();
         }
     }
-    
-    // Clear main canvas (transparent - background image shows through from background canvas)
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    
-    // Draw grid, markers, event spawns, territories, player spawn points, effect areas, marquee on main canvas
-    drawGrid();
-    drawMarkers();
-    drawEventSpawns(); // Draw event spawn markers (after regular markers)
-    drawTerritories(); // Draw territory circles and zone markers (non-zombie)
-    drawZombieTerritories(); // Draw zombie territory circles and zone markers
-    drawPlayerSpawnPoints(); // Draw player spawn point markers and rectangles
-    drawEffectAreas(); // Draw effect area circles (after markers so they're on top)
-    drawMarquee();
-    drawTooltip();
 }
 
 // Handle mouse down
@@ -2196,10 +2739,10 @@ function handleMouseDown(e) {
     const y = (e.clientY - rect.top) * scaleY;
     
     if (e.button === 0) { // Left click
-        // Check if clicking on a marker first
-        // Use consistent threshold for marker interaction
+        // Check if clicking on any marker (regular or editable)
         let clickedMarker = false;
         
+        // Check regular markers
         markers.forEach((marker, index) => {
             if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
                 return; // Skip hidden markers
@@ -2214,12 +2757,28 @@ function handleMouseDown(e) {
             }
         });
         
+        // Check editable marker types using interaction handlers
+        if (!clickedMarker) {
+            for (const markerType of Object.keys(markerTypes)) {
+                const handler = interactionHandlers[markerType];
+                if (handler && editingEnabled[markerType] && markerTypes[markerType].getShowFlag()) {
+                    const clicked = getMarkerAtPoint(markerType, x, y);
+                    if (clicked !== null) {
+                        // Use interaction handler for click
+                        if (handler.handleClick(x, y, { altKey: e.altKey })) {
+                            clickedMarker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
         if (clickedMarker) {
             // Single click selection on marker
             selectAtPoint(x, y, e.altKey);
         } else {
-            // Start marquee selection
-            // Don't clear selection here - deselection only happens for markers in the marquee
+            // Clicking on empty space - start marquee selection
             isMarqueeSelecting = true;
             marqueeStartX = x;
             marqueeStartY = y;
@@ -2248,6 +2807,24 @@ function handleMouseUp(e) {
         if (rectWidth > 5 && rectHeight > 5) {
             // Alt key means deselect mode, otherwise add to selection
             selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, !e.altKey);
+        } else {
+            // Rectangle too small - treat as single click on empty space
+            // Clear selection for all editable types and regular markers
+            const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
+            
+            if (isEditingAnyType) {
+                // Clear selection for all editable types
+                for (const markerType of Object.keys(markerTypes)) {
+                    const typeConfig = markerTypes[markerType];
+                    if (editingEnabled[markerType]) {
+                        typeConfig.selected.clear();
+                    }
+                }
+            } else {
+                // Clear selection for regular markers
+                selectedMarkers.clear();
+            }
+            updateSelectedCount();
         }
         
         isMarqueeSelecting = false;
@@ -2256,14 +2833,32 @@ function handleMouseUp(e) {
     }
 }
 
+// Clean up selections by removing hidden markers
+function cleanupHiddenSelections() {
+    // Clean up regular markers
+    const visibleSelected = new Set();
+    selectedMarkers.forEach(index => {
+        if (visibleMarkers.size === 0 || visibleMarkers.has(index)) {
+            visibleSelected.add(index);
+        }
+    });
+    selectedMarkers = visibleSelected;
+    
+    // Clean up editable marker types
+    for (const markerType of Object.keys(markerTypes)) {
+        const typeConfig = markerTypes[markerType];
+        const visibleSelected = new Set();
+        typeConfig.selected.forEach(index => {
+            if (isMarkerVisible(markerType, index)) {
+                visibleSelected.add(index);
+            }
+        });
+        typeConfig.selected = visibleSelected;
+    }
+}
+
 // Select markers within rectangle
 function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSelection = true) {
-    // Only clear selection if not adding to selection (deselect mode)
-    if (!addToSelection) {
-        // In deselect mode, we'll remove markers from selection instead of clearing all
-        // Don't clear here - we'll deselect markers in the rectangle
-    }
-    
     // Convert rectangle bounds to world coordinates
     const topLeft = screenToWorld(rectX, rectY);
     const bottomRight = screenToWorld(rectX + rectWidth, rectY + rectHeight);
@@ -2277,17 +2872,25 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
     // If editing is enabled for a specific type, only allow selection of that type
     const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
     
+    // Clear selection first if not in add mode (normal marquee replaces selection)
+    if (addToSelection && !isEditingAnyType) {
+        // For normal markers, clear selection when starting new marquee (unless Alt is held)
+        selectedMarkers.clear();
+    }
+    
     // Select or deselect markers within the rectangle (only if not editing)
     if (!isEditingAnyType) {
         markers.forEach((marker, index) => {
-            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
+            // Only select visible markers
+            if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) {
                 return; // Skip hidden markers
             }
             
+            // Check if marker center is within rectangle
             if (marker.x >= minX && marker.x <= maxX &&
                 marker.z >= minZ && marker.z <= maxZ) {
                 if (addToSelection) {
-                    // Add to selection
+                    // Add to selection (only if visible)
                     selectedMarkers.add(index);
                 } else {
                     // Remove from selection (deselect mode)
@@ -2298,26 +2901,44 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
     }
     
     // Select markers for each editable type if editing is enabled
+    // First, clear selections for editable types if in normal mode (replace selection)
+    if (addToSelection && isEditingAnyType) {
+        for (const markerType of Object.keys(markerTypes)) {
+            const typeConfig = markerTypes[markerType];
+            if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
+                // Normal marquee selection replaces selection (Alt not held)
+                typeConfig.selected.clear();
+            }
+        }
+    }
+    
+    // Now select/deselect markers within rectangle for editable types
     for (const markerType of Object.keys(markerTypes)) {
         const typeConfig = markerTypes[markerType];
         if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
             const array = typeConfig.getArray();
             array.forEach((marker, index) => {
                 if (typeConfig.isDeleted(index)) return;
-                if (!isMarkerVisible(markerType, index)) return; // Skip hidden markers
+                // CRITICAL: Only select visible markers
+                if (!isMarkerVisible(markerType, index)) return;
                 
                 // Check if marker center is within rectangle
                 if (marker.x >= minX && marker.x <= maxX &&
                     marker.z >= minZ && marker.z <= maxZ) {
                     if (addToSelection) {
+                        // Add to selection (only if visible)
                         typeConfig.selected.add(index);
                     } else {
+                        // Remove from selection (deselect mode)
                         typeConfig.selected.delete(index);
                     }
                 }
             });
         }
     }
+    
+    // Clean up any hidden markers that might have been selected
+    cleanupHiddenSelections();
 }
 
 // Handle wheel (zoom)
@@ -2387,23 +3008,30 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
     const array = typeConfig.getArray();
     for (let index = 0; index < array.length; index++) {
         if (typeConfig.isDeleted(index)) continue;
-        if (!isMarkerVisible(markerType, index)) continue; // Skip hidden markers
+        // CRITICAL: Only allow selection of visible markers
+        if (!isMarkerVisible(markerType, index)) continue;
         
         const marker = typeConfig.getMarker(index);
         const screenPos = typeConfig.getScreenPos(marker);
         
         if (typeConfig.isPointOnMarker(marker, screenX, screenY, screenPos)) {
             if (altKey) {
-                // Alt key pressed - toggle selection
+                // Alt key pressed - toggle selection (only if visible)
                 if (typeConfig.selected.has(index)) {
                     typeConfig.selected.delete(index);
                 } else {
-                    typeConfig.selected.add(index);
+                    // Only add if still visible
+                    if (isMarkerVisible(markerType, index)) {
+                        typeConfig.selected.add(index);
+                    }
                 }
             } else {
                 // Normal mode - select this one (clear others of same type and other types)
                 typeConfig.selected.clear();
-                typeConfig.selected.add(index);
+                // Only add if visible
+                if (isMarkerVisible(markerType, index)) {
+                    typeConfig.selected.add(index);
+                }
                 // Clear selection for other marker types
                 for (const otherType of Object.keys(markerTypes)) {
                     if (otherType !== markerType && editingEnabled[otherType]) {
@@ -2411,6 +3039,8 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
                     }
                 }
             }
+            // Clean up any hidden markers from selection
+            cleanupHiddenSelections();
             updateSelectedCount();
             return true;
         }
@@ -2875,7 +3505,16 @@ function handleDrag(screenX, screenY) {
                     
                     // Ensure minimum radius
                     if (newRadius > 1.0) {
+                        const oldRadius = marker.radius;
                         marker.radius = newRadius;
+                        
+                        // Emit event
+                        markerEvents.emit('marker:resized', {
+                            markerType: radiusEditMarkerType,
+                            index: radiusEditIndex,
+                            oldRadius,
+                            newRadius
+                        });
                         
                         // For territory zones, sync radius change back to territories array
                         if (radiusEditMarkerType === 'territoryZones') {
@@ -2971,22 +3610,40 @@ function handleDragEnd() {
     // Round positions to 2 decimal places when placing the marker(s)
     const offsets = draggedSelectedMarkers.get(draggedMarkerType);
     if (offsets && offsets.size > 0) {
-        // Round all selected markers
+        // Round all selected markers and emit events
         offsets.forEach((offset, index) => {
             const marker = typeConfig.getMarker(index);
             if (marker) {
+                const oldPos = { x: marker.x, y: marker.y, z: marker.z };
                 marker.x = Math.round(marker.x * 100) / 100;
                 if (marker.y !== undefined) marker.y = Math.round(marker.y * 100) / 100;
                 marker.z = Math.round(marker.z * 100) / 100;
+                
+                // Emit move event
+                markerEvents.emit('marker:moved', {
+                    markerType: draggedMarkerType,
+                    index,
+                    oldPos,
+                    newPos: { x: marker.x, y: marker.y, z: marker.z }
+                });
             }
         });
     } else if (draggedMarkerIndex >= 0) {
         // Single marker
         const marker = typeConfig.getMarker(draggedMarkerIndex);
         if (marker) {
+            const oldPos = { x: marker.x, y: marker.y, z: marker.z };
             marker.x = Math.round(marker.x * 100) / 100;
             if (marker.y !== undefined) marker.y = Math.round(marker.y * 100) / 100;
             marker.z = Math.round(marker.z * 100) / 100;
+            
+            // Emit move event
+            markerEvents.emit('marker:moved', {
+                markerType: draggedMarkerType,
+                index: draggedMarkerIndex,
+                oldPos,
+                newPos: { x: marker.x, y: marker.y, z: marker.z }
+            });
             
             // For territory zones, sync changes back to territories array
             if (draggedMarkerType === 'territoryZones') {
@@ -3147,12 +3804,14 @@ function deleteSelectedMarkers(markerType) {
                 }
             } else {
                 // Mark as deleted (don't remove from array yet, will be removed on save)
+                const marker = typeConfig.getMarker(index);
                 typeConfig.deleted.add(index);
                 // Store original position for restore
                 if (!typeConfig.originalPositions.has(index)) {
-                    const marker = typeConfig.getMarker(index);
                     typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
                 }
+                // Emit event
+                markerEvents.emit('marker:deleted', { markerType, index, marker });
             }
         }
     }
@@ -3184,6 +3843,9 @@ function addMarkerAt(markerType, screenX, screenY) {
     
     // Mark as new
     typeConfig.new.add(newIndex);
+    
+    // Emit event
+    markerEvents.emit('marker:created', { markerType, index: newIndex, marker: newMarker });
     
     // For zombie territory zones, ensure the zone is properly synced to territories
     if (markerType === 'zombieTerritoryZones') {
@@ -3299,6 +3961,7 @@ function addMarkerAt(markerType, screenX, screenY) {
     // Select the newly added marker
     typeConfig.selected.clear();
     typeConfig.selected.add(newIndex);
+    markerEvents.emit('marker:selected', { markerType, index: newIndex });
     updateSelectedCount();
     requestDraw();
 }
@@ -3654,6 +4317,9 @@ async function saveMarkerChanges(markerType) {
                 flattenTerritoryZones();
             }
             
+            // Emit event
+            markerEvents.emit('marker:changes:saved', { markerType });
+            
             return { success: true, message: `Saved changes to ${typeConfig.getDisplayName()}` };
         } else {
             return { success: false, message: data.error || 'Failed to save' };
@@ -3761,6 +4427,9 @@ function restoreMarkerPositions(markerType) {
         marker.id = idx;
     });
     
+    // Emit event
+    markerEvents.emit('marker:changes:discarded', { markerType });
+    
     // Update UI
     updateSelectedCount();
     requestDraw();
@@ -3832,6 +4501,9 @@ async function handleEditingToggle(markerType, enabled) {
 
 // Update selected count display
 function updateSelectedCount() {
+    // Clean up hidden selections before counting
+    cleanupHiddenSelections();
+    
     let count = selectedMarkers.size;
     // Add counts from all editable marker types
     for (const markerType of Object.keys(markerTypes)) {
@@ -4295,6 +4967,10 @@ async function loadGroups() {
 // Load background image
 function loadBackgroundImage() {
     const input = document.getElementById('backgroundImage');
+    if (!input) {
+        console.error('Background image input element not found');
+        return;
+    }
     input.click();
 }
 

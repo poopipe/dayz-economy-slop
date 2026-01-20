@@ -988,21 +988,21 @@ function displayTable() {
         if (!cell) return;
         
         e.preventDefault();
-        if (cell.classList.contains('valueflags-cell')) {
-            openValueflagsEditor(cell);
-        } else if (cell.classList.contains('usageflags-cell')) {
-            openUsageflagsEditor(cell);
-        } else if (cell.classList.contains('flags-cell')) {
-            openFlagsEditor(cell);
-        } else if (cell.classList.contains('categories-cell')) {
-            openCategoriesEditor(cell);
-        } else if (cell.classList.contains('itemclass-cell')) {
-            openItemclassEditor(cell);
-        } else if (cell.classList.contains('itemtags-cell')) {
-            openItemtagsEditor(cell);
-        } else {
-            makeCellEditable(cell);
-        }
+            if (cell.classList.contains('valueflags-cell')) {
+                openValueflagsEditor(cell);
+            } else if (cell.classList.contains('usageflags-cell')) {
+                openUsageflagsEditor(cell);
+            } else if (cell.classList.contains('flags-cell')) {
+                openFlagsEditor(cell);
+            } else if (cell.classList.contains('categories-cell')) {
+                openCategoriesEditor(cell);
+            } else if (cell.classList.contains('itemclass-cell')) {
+                openItemclassEditor(cell);
+            } else if (cell.classList.contains('itemtags-cell')) {
+                openItemtagsEditor(cell);
+            } else {
+                makeCellEditable(cell);
+            }
     };
     
     container.addEventListener('dblclick', dblclickHandler);

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfglimitsdefinition>
+    <categories>
+        <category name="books" />
+        <category name="clothes" />
+        <category name="containers" />
+        <category name="explosives" />
+        <category name="food" />
+        <category name="lootboxweapons" />
+        <category name="tools" />
+        <category name="vehiclesparts" />
+        <category name="weapons" />
+    </categories>
+    <usageflags>
+        <usage name="Coast" />
+        <usage name="ContaminatedArea" />
+        <usage name="Farm" />
+        <usage name="Firefighter" />
+        <usage name="Historical" />
+        <usage name="Hunting" />
+        <usage name="Industrial" />
+        <usage name="LootBox" />
+        <usage name="Lunapark" />
+        <usage name="Medic" />
+        <usage name="Military" />
+        <usage name="OdinShipwreck" />
+        <usage name="Office" />
+        <usage name="Police" />
+        <usage name="Prison" />
+        <usage name="School" />
+        <usage name="SeasonalEvent" />
+        <usage name="Town" />
+        <usage name="Village" />
+    </usageflags>
+    <valueflags>
+        <value name="Mercenary3" />
+        <value name="Tier1" />
+        <value name="Tier2" />
+        <value name="Tier3" />
+        <value name="Tier4" />
+        <value name="Unique" />
+    </valueflags>
+</cfglimitsdefinition>

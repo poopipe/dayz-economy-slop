@@ -98,6 +98,29 @@
                             </p>
                             <button id="saveTerritoryZonesBtn" style="margin-top: 8px; padding: 6px 12px; background: var(--nord10); color: white; border: none; border-radius: 4px; cursor: pointer;">Save Changes</button>
                         </div>
+                        <label>
+                            <input type="checkbox" id="editZombieTerritoryZones"> Enable editing: Zombie Territory Zones
+                        </label>
+                        <p style="font-size: 12px; color: var(--nord4); margin-top: 5px; margin-bottom: 0;">
+                            When enabled, drag to move, drag edge/handle to resize radius. Configure zone parameters using the list boxes below.
+                        </p>
+                        <div id="zombieTerritoryZoneEditControls" style="display: none; margin-top: 10px;">
+                            <p style="font-size: 11px; color: var(--nord4); margin-top: 5px; margin-bottom: 5px;">
+                                <strong>Add:</strong> Ctrl+Click (Cmd+Click on Mac) to add zone at cursor<br>
+                                <strong>Move:</strong> Click and drag center of circle<br>
+                                <strong>Resize:</strong> Click and drag edge or handle (white dot) to change radius<br>
+                                <strong>Delete:</strong> Select zones and press Delete/Backspace
+                            </p>
+                            <div id="zombieZoneParameterControls" style="margin-top: 10px;">
+                                <p style="font-size: 11px; color: var(--nord4); margin-bottom: 8px;">
+                                    <strong>Zone Parameters (for selected zones):</strong>
+                                </p>
+                                <!-- Placeholder for multiple list boxes - will be populated dynamically -->
+                                <div id="zombieZoneParameterListBoxes"></div>
+                            </div>
+                            <button id="saveZombieTerritoryZonesBtn" style="margin-top: 8px; padding: 6px 12px; background: var(--nord10); color: white; border: none; border-radius: 4px; cursor: pointer;">Save Changes</button>
+                            <button id="discardZombieTerritoryZonesBtn" style="margin-top: 8px; margin-left: 8px; padding: 6px 12px; background: var(--nord3); color: white; border: none; border-radius: 4px; cursor: pointer;">Discard Changes</button>
+                        </div>
                     </div>
                     
                     <div class="control-group">
