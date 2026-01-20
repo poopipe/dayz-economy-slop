@@ -59,6 +59,13 @@ let isPanning = false;
 let isZooming = false;
 let needsRedraw = false;
 
+// Radius editing state (for effect areas and similar)
+let isEditingRadius = false;
+let radiusEditMarkerType = null;
+let radiusEditIndex = -1;
+let radiusEditStartRadius = 0;
+let radiusEditSelectedMarkers = new Set(); // Store all selected markers for multi-marker radius editing
+
 // Generic marker editing system
 const markerTypes = {
     playerSpawnPoints: {
@@ -760,18 +767,20 @@ class MarkerInteractionHandler {
                 }
             });
             
-            // Store relative positions
+            // Store relative positions relative to the marker being dragged (not the click position)
             if (!draggedSelectedMarkers.has(this.markerType)) {
                 draggedSelectedMarkers.set(this.markerType, new Map());
             }
             const offsets = draggedSelectedMarkers.get(this.markerType);
             offsets.clear();
-            const clickedWorld = screenToWorld(screenX, screenY);
+            // Use the actual marker position as the reference point, not the click position
+            const draggedMarkerX = marker.x;
+            const draggedMarkerZ = marker.z;
             selected.forEach(selectedIndex => {
                 const m = this.typeConfig.getMarker(selectedIndex);
                 offsets.set(selectedIndex, {
-                    offsetX: m.x - clickedWorld.x,
-                    offsetZ: m.z - clickedWorld.z
+                    offsetX: m.x - draggedMarkerX,
+                    offsetZ: m.z - draggedMarkerZ
                 });
             });
             
@@ -780,8 +789,9 @@ class MarkerInteractionHandler {
             draggedMarkerIndex = index;
             dragStartX = screenX;
             dragStartY = screenY;
-            dragStartWorldX = clickedWorld.x;
-            dragStartWorldZ = clickedWorld.z;
+            // Store the actual marker position, not the click position
+            dragStartWorldX = draggedMarkerX;
+            dragStartWorldZ = draggedMarkerZ;
             return true;
         } else {
             // No selection - check if clicking on any marker
@@ -835,6 +845,30 @@ class MarkerInteractionHandler {
                 radiusEditMarkerType = this.markerType;
                 radiusEditIndex = index;
                 radiusEditStartRadius = marker.radius;
+                dragStartX = screenX;
+                dragStartY = screenY;
+                
+                // Store all selected markers for multi-marker radius editing
+                radiusEditSelectedMarkers.clear();
+                if (this.typeConfig.selected.size > 0) {
+                    // Store original positions for all selected markers
+                    for (const selectedIndex of this.typeConfig.selected) {
+                        if (selectedIndex < array.length && !this.typeConfig.isDeleted(selectedIndex)) {
+                            radiusEditSelectedMarkers.add(selectedIndex);
+                            if (!this.typeConfig.originalPositions.has(selectedIndex)) {
+                                const m = this.typeConfig.getMarker(selectedIndex);
+                                this.typeConfig.originalPositions.set(selectedIndex, this.typeConfig.getOriginalData(m));
+                            }
+                        }
+                    }
+                } else {
+                    // No selection - just edit this one marker
+                    radiusEditSelectedMarkers.add(index);
+                    if (!this.typeConfig.originalPositions.has(index)) {
+                        this.typeConfig.originalPositions.set(index, this.typeConfig.getOriginalData(marker));
+                    }
+                }
+                
                 return true;
             }
         }
@@ -1377,12 +1411,6 @@ Object.keys(markerTypes).forEach(type => {
     // Sync with state manager
     markerStateManager.setEditingEnabled(type, false);
 });
-
-// Radius editing state (for effect areas and similar)
-let isEditingRadius = false;
-let radiusEditMarkerType = null;
-let radiusEditIndex = -1;
-let radiusEditStartRadius = 0;
 
 // Drag state
 let isDragging = false;
@@ -3499,18 +3527,20 @@ function tryStartDragForType(markerType, screenX, screenY) {
                     }
                 }
                 
-                // Store the relative positions of all selected markers
+                // Store the relative positions of all selected markers relative to the marker being dragged
                 if (!draggedSelectedMarkers.has(markerType)) {
                     draggedSelectedMarkers.set(markerType, new Map());
                 }
                 const offsets = draggedSelectedMarkers.get(markerType);
                 offsets.clear();
-                const clickedWorld = screenToWorld(screenX, screenY);
+                // Use the actual marker position as the reference point, not the click position
+                const draggedMarkerX = marker.x;
+                const draggedMarkerZ = marker.z;
                 for (const selectedIndex of selected) {
                     const m = typeConfig.getMarker(selectedIndex);
                     offsets.set(selectedIndex, {
-                        offsetX: m.x - clickedWorld.x,
-                        offsetZ: m.z - clickedWorld.z
+                        offsetX: m.x - draggedMarkerX,
+                        offsetZ: m.z - draggedMarkerZ
                     });
                 }
                 
@@ -3519,8 +3549,9 @@ function tryStartDragForType(markerType, screenX, screenY) {
                 draggedMarkerIndex = index;
                 dragStartX = screenX;
                 dragStartY = screenY;
-                dragStartWorldX = clickedWorld.x;
-                dragStartWorldZ = clickedWorld.z;
+                // Store the actual marker position, not the click position
+                dragStartWorldX = draggedMarkerX;
+                dragStartWorldZ = draggedMarkerZ;
                 
                 return true;
             }
@@ -3587,22 +3618,29 @@ function handleDrag(screenX, screenY) {
                     
                     // Ensure minimum radius
                     if (newRadius > 1.0) {
+                        // Apply the new radius to all selected markers
                         const oldRadius = marker.radius;
-                        marker.radius = newRadius;
-                        
-                        // Emit event
-                        markerEvents.emit('marker:resized', {
-                            markerType: radiusEditMarkerType,
-                            index: radiusEditIndex,
-                            oldRadius,
-                            newRadius
-                        });
-                        
-                        // For territory zones, sync radius change back to territories array
-                        if (radiusEditMarkerType === 'territoryZones') {
-                            syncTerritoryZoneToTerritories(radiusEditIndex);
-                        } else if (radiusEditMarkerType === 'zombieTerritoryZones') {
-                            syncZombieTerritoryZoneToTerritories(radiusEditIndex);
+                        for (const selectedIndex of radiusEditSelectedMarkers) {
+                            const selectedMarker = typeConfig.getMarker(selectedIndex);
+                            if (selectedMarker && selectedMarker.radius !== undefined) {
+                                const previousRadius = selectedMarker.radius;
+                                selectedMarker.radius = newRadius;
+                                
+                                // Emit event for each marker
+                                markerEvents.emit('marker:resized', {
+                                    markerType: radiusEditMarkerType,
+                                    index: selectedIndex,
+                                    oldRadius: previousRadius,
+                                    newRadius
+                                });
+                                
+                                // For territory zones, sync radius change back to territories array
+                                if (radiusEditMarkerType === 'territoryZones') {
+                                    syncTerritoryZoneToTerritories(selectedIndex);
+                                } else if (radiusEditMarkerType === 'zombieTerritoryZones') {
+                                    syncZombieTerritoryZoneToTerritories(selectedIndex);
+                                }
+                            }
                         }
                     }
                 }
@@ -3670,19 +3708,30 @@ function handleDrag(screenX, screenY) {
 // Handle drag end
 function handleDragEnd() {
     if (isEditingRadius) {
-        // Round radius to 2 decimal places
+        // Round radius to 2 decimal places for all selected markers
         if (radiusEditMarkerType && radiusEditIndex >= 0) {
             const typeConfig = markerTypes[radiusEditMarkerType];
             if (typeConfig && typeConfig.canEditRadius) {
-                const marker = typeConfig.getMarker(radiusEditIndex);
-                if (marker && marker.radius !== undefined) {
-                    marker.radius = Math.round(marker.radius * 100) / 100;
+                // Round all selected markers' radii
+                for (const selectedIndex of radiusEditSelectedMarkers) {
+                    const marker = typeConfig.getMarker(selectedIndex);
+                    if (marker && marker.radius !== undefined) {
+                        marker.radius = Math.round(marker.radius * 100) / 100;
+                        
+                        // For territory zones, sync radius change back to territories array
+                        if (radiusEditMarkerType === 'territoryZones') {
+                            syncTerritoryZoneToTerritories(selectedIndex);
+                        } else if (radiusEditMarkerType === 'zombieTerritoryZones') {
+                            syncZombieTerritoryZoneToTerritories(selectedIndex);
+                        }
+                    }
                 }
             }
         }
         isEditingRadius = false;
         radiusEditMarkerType = null;
         radiusEditIndex = -1;
+        radiusEditSelectedMarkers.clear();
         requestDraw();
         return;
     }
@@ -4116,9 +4165,25 @@ function tryStartRadiusEdit(markerType, screenX, screenY) {
             dragStartX = screenX;
             dragStartY = screenY;
             
-            // Store original position if not already stored
-            if (!typeConfig.originalPositions.has(index)) {
-                typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
+            // Store all selected markers for multi-marker radius editing
+            radiusEditSelectedMarkers.clear();
+            if (typeConfig.selected.size > 0) {
+                // Store original positions for all selected markers
+                for (const selectedIndex of typeConfig.selected) {
+                    if (selectedIndex < array.length && !typeConfig.isDeleted(selectedIndex)) {
+                        radiusEditSelectedMarkers.add(selectedIndex);
+                        if (!typeConfig.originalPositions.has(selectedIndex)) {
+                            const m = typeConfig.getMarker(selectedIndex);
+                            typeConfig.originalPositions.set(selectedIndex, typeConfig.getOriginalData(m));
+                        }
+                    }
+                }
+            } else {
+                // No selection - just edit this one marker
+                radiusEditSelectedMarkers.add(index);
+                if (!typeConfig.originalPositions.has(index)) {
+                    typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
+                }
             }
             
             return true;
@@ -4139,8 +4204,25 @@ function tryStartRadiusEdit(markerType, screenX, screenY) {
             dragStartX = screenX;
             dragStartY = screenY;
             
-            if (!typeConfig.originalPositions.has(index)) {
-                typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
+            // Store all selected markers for multi-marker radius editing
+            radiusEditSelectedMarkers.clear();
+            if (typeConfig.selected.size > 0) {
+                // Store original positions for all selected markers
+                for (const selectedIndex of typeConfig.selected) {
+                    if (selectedIndex < array.length && !typeConfig.isDeleted(selectedIndex)) {
+                        radiusEditSelectedMarkers.add(selectedIndex);
+                        if (!typeConfig.originalPositions.has(selectedIndex)) {
+                            const m = typeConfig.getMarker(selectedIndex);
+                            typeConfig.originalPositions.set(selectedIndex, typeConfig.getOriginalData(m));
+                        }
+                    }
+                }
+            } else {
+                // No selection - just edit this one marker
+                radiusEditSelectedMarkers.add(index);
+                if (!typeConfig.originalPositions.has(index)) {
+                    typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
+                }
             }
             
             return true;
@@ -4194,10 +4276,6 @@ function tryStartDragRadiusEditable(markerType, screenX, screenY) {
                 dragStartX = screenX;
                 dragStartY = screenY;
                 
-                const clickedWorld = screenToWorld(screenX, screenY);
-                dragStartWorldX = clickedWorld.x;
-                dragStartWorldZ = clickedWorld.z;
-                
                 // Store original positions for all selected markers
                 for (const selectedIndex of typeConfig.selected) {
                     if (!typeConfig.originalPositions.has(selectedIndex)) {
@@ -4205,6 +4283,27 @@ function tryStartDragRadiusEditable(markerType, screenX, screenY) {
                         typeConfig.originalPositions.set(selectedIndex, typeConfig.getOriginalData(m));
                     }
                 }
+                
+                // Store relative positions relative to the marker being dragged
+                if (!draggedSelectedMarkers.has(markerType)) {
+                    draggedSelectedMarkers.set(markerType, new Map());
+                }
+                const offsets = draggedSelectedMarkers.get(markerType);
+                offsets.clear();
+                // Use the actual marker position as the reference point
+                const draggedMarkerX = marker.x;
+                const draggedMarkerZ = marker.z;
+                for (const selectedIndex of typeConfig.selected) {
+                    const m = typeConfig.getMarker(selectedIndex);
+                    offsets.set(selectedIndex, {
+                        offsetX: m.x - draggedMarkerX,
+                        offsetZ: m.z - draggedMarkerZ
+                    });
+                }
+                
+                // Store the actual marker position, not the click position
+                dragStartWorldX = draggedMarkerX;
+                dragStartWorldZ = draggedMarkerZ;
                 
                 return true;
             }
