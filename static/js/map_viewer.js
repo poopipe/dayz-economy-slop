@@ -52,6 +52,8 @@ let marqueeCurrentY = 0;
 let backgroundCanvas = null;
 let backgroundCtx = null;
 let backgroundCacheValid = false;
+let overlayCanvas = null;
+let overlayCtx = null;
 let animationFrameId = null;
 let isPanning = false;
 let isZooming = false;
@@ -1441,6 +1443,27 @@ function initCanvas() {
         }
     }
     
+    // Get or create overlay canvas for marquee/tooltip
+    overlayCanvas = document.getElementById('overlayCanvas');
+    if (overlayCanvas) {
+        // Set pointer-events to none so mouse events pass through to marker canvas
+        overlayCanvas.style.pointerEvents = 'none';
+        overlayCtx = overlayCanvas.getContext('2d');
+    } else {
+        // Create overlay canvas dynamically if not in HTML
+        overlayCanvas = document.createElement('canvas');
+        overlayCanvas.id = 'overlayCanvas';
+        overlayCanvas.style.position = 'absolute';
+        overlayCanvas.style.top = '0';
+        overlayCanvas.style.left = '0';
+        overlayCanvas.style.zIndex = '3';
+        overlayCanvas.style.pointerEvents = 'none';
+        overlayCanvas.style.width = '100%';
+        overlayCanvas.style.height = '100%';
+        canvas.parentElement.appendChild(overlayCanvas);
+        overlayCtx = overlayCanvas.getContext('2d');
+    }
+    
     // Set canvas size
     resizeCanvas();
     
@@ -1568,10 +1591,10 @@ function initCanvas() {
             hoveredMarkerIndex = -1; // Clear hover when panning
             requestDraw();
         } else if (isMarqueeSelecting) {
-            // Update marquee rectangle
+            // Update marquee rectangle - use overlay canvas for fast updates
             marqueeCurrentX = x;
             marqueeCurrentY = y;
-            requestDraw();
+            drawMarquee(); // Direct call to overlay canvas, no full redraw
         } else {
             // Check for hover
             updateHoveredMarker(x, y);
@@ -1653,6 +1676,12 @@ function resizeCanvas() {
     if (backgroundCanvas) {
         backgroundCanvas.width = canvasWidth;
         backgroundCanvas.height = canvasHeight;
+    }
+    
+    // Resize overlay canvas if it exists
+    if (overlayCanvas) {
+        overlayCanvas.width = canvasWidth;
+        overlayCanvas.height = canvasHeight;
     }
     
     // Update WebGL viewport if using WebGL
@@ -2868,8 +2897,13 @@ function drawTooltip() {
     });
 }
 
-// Draw marquee selection rectangle
+// Draw marquee selection rectangle on overlay canvas
 function drawMarquee() {
+    if (!overlayCtx) return;
+    
+    // Clear overlay canvas
+    overlayCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    
     if (!isMarqueeSelecting) return;
     
     const rectX = Math.min(marqueeStartX, marqueeCurrentX);
@@ -2877,18 +2911,18 @@ function drawMarquee() {
     const rectWidth = Math.abs(marqueeCurrentX - marqueeStartX);
     const rectHeight = Math.abs(marqueeCurrentY - marqueeStartY);
     
-    // Draw selection rectangle
-    ctx.strokeStyle = '#0066ff';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(rectX, rectY, rectWidth, rectHeight);
+    // Draw selection rectangle on overlay canvas
+    overlayCtx.strokeStyle = '#0066ff';
+    overlayCtx.lineWidth = 2;
+    overlayCtx.setLineDash([5, 5]);
+    overlayCtx.strokeRect(rectX, rectY, rectWidth, rectHeight);
     
     // Draw semi-transparent fill
-    ctx.fillStyle = 'rgba(0, 102, 255, 0.1)';
-    ctx.fillRect(rectX, rectY, rectWidth, rectHeight);
+    overlayCtx.fillStyle = 'rgba(0, 102, 255, 0.1)';
+    overlayCtx.fillRect(rectX, rectY, rectWidth, rectHeight);
     
     // Reset line dash
-    ctx.setLineDash([]);
+    overlayCtx.setLineDash([]);
 }
 
 // Main draw function
@@ -2975,7 +3009,7 @@ function handleMouseDown(e) {
             marqueeStartY = y;
             marqueeCurrentX = x;
             marqueeCurrentY = y;
-            requestDraw();
+            drawMarquee(); // Draw initial marquee on overlay canvas
         }
     }
 }
@@ -3006,6 +3040,10 @@ function handleMouseUp(e) {
         }
         
         isMarqueeSelecting = false;
+        // Clear overlay canvas when marquee ends
+        if (overlayCtx) {
+            overlayCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        }
         updateSelectedCount();
         draw();
     }

@@ -802,7 +802,7 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
     # Load type categories (with error handling to prevent crashes)
     type_categories = {}
     try:
-        type_categories = load_type_categories(economycore_file_path)
+    type_categories = load_type_categories(economycore_file_path)
     except Exception as cat_error:
         import traceback
         print(f"Error loading type categories (continuing without them): {cat_error}")
@@ -939,7 +939,7 @@ def get_event_spawns():
         
         print(f"Loading event spawns from: {event_spawns_file}")
         try:
-            event_spawns = load_event_spawns(str(event_spawns_file), economycore_file_path)
+        event_spawns = load_event_spawns(str(event_spawns_file), economycore_file_path)
         except Exception as load_error:
             import traceback
             print(f"Error in load_event_spawns: {load_error}")
