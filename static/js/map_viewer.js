@@ -907,6 +907,265 @@ for (const markerType of Object.keys(markerTypes)) {
     interactionHandlers[markerType] = new MarkerInteractionHandler(markerType, markerTypes[markerType]);
 }
 
+// Selection Manager - unified selection system for all marker types
+class SelectionManager {
+    constructor() {
+        this.activeEditingType = null;
+    }
+    
+    // Get the currently active editing type (only one should be active)
+    getActiveEditingType() {
+        for (const markerType of Object.keys(markerTypes)) {
+            if (editingEnabled[markerType] && markerTypes[markerType].getShowFlag()) {
+                return markerType;
+            }
+        }
+        return null;
+    }
+    
+    // Check if a marker can be selected (visible and of correct type)
+    canSelectMarker(markerType, index) {
+        // Must be visible
+        if (markerType === 'regular') {
+            // Check if markers are shown at all
+            if (!showMarkers) {
+                return false;
+            }
+            // Check visibility filter (if filters are active, marker must be in visibleMarkers set)
+            if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) {
+                return false;
+            }
+        } else {
+            if (!isMarkerVisible(markerType, index)) {
+                return false;
+            }
+        }
+        
+        // If editing mode is active, only allow selection of active type
+        const activeType = this.getActiveEditingType();
+        if (activeType !== null && markerType !== activeType && markerType !== 'regular') {
+            return false;
+        }
+        
+        // If editing mode is active, don't allow selection of regular markers
+        if (activeType !== null && markerType === 'regular') {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Select a marker (with visibility and type checks)
+    selectMarker(markerType, index, options = {}) {
+        const { altKey = false, clearOthers = true } = options;
+        
+        if (!this.canSelectMarker(markerType, index)) {
+            return false;
+        }
+        
+        if (markerType === 'regular') {
+            if (altKey) {
+                // Toggle selection
+                if (selectedMarkers.has(index)) {
+                    selectedMarkers.delete(index);
+                } else {
+                    selectedMarkers.add(index);
+                }
+            } else {
+                // Replace selection
+                if (clearOthers) {
+                    this.clearAllSelections();
+                }
+                selectedMarkers.add(index);
+            }
+            return true;
+        }
+        
+        const typeConfig = markerTypes[markerType];
+        if (!typeConfig) return false;
+        
+        if (altKey) {
+            // Toggle selection
+            if (typeConfig.selected.has(index)) {
+                typeConfig.selected.delete(index);
+            } else {
+                typeConfig.selected.add(index);
+            }
+        } else {
+            // Replace selection
+            if (clearOthers) {
+                this.clearAllSelections();
+            }
+            typeConfig.selected.add(index);
+        }
+        
+        return true;
+    }
+    
+    // Clear all selections
+    clearAllSelections() {
+        // Clear regular markers
+        selectedMarkers.clear();
+        
+        // Clear all editable marker types
+        for (const markerType of Object.keys(markerTypes)) {
+            markerTypes[markerType].selected.clear();
+        }
+    }
+    
+    // Clear selections for a specific type
+    clearSelectionsForType(markerType) {
+        if (markerType === 'regular') {
+            selectedMarkers.clear();
+        } else {
+            const typeConfig = markerTypes[markerType];
+            if (typeConfig) {
+                typeConfig.selected.clear();
+            }
+        }
+    }
+    
+    // Clean up hidden markers from selections
+    cleanupHiddenSelections() {
+        // Regular markers
+        const visibleSelected = new Set();
+        selectedMarkers.forEach(index => {
+            if (visibleMarkers.size === 0 || visibleMarkers.has(index)) {
+                visibleSelected.add(index);
+            }
+        });
+        selectedMarkers = visibleSelected;
+        
+        // Editable marker types
+        for (const markerType of Object.keys(markerTypes)) {
+            const typeConfig = markerTypes[markerType];
+            const visibleSelected = new Set();
+            typeConfig.selected.forEach(index => {
+                if (isMarkerVisible(markerType, index)) {
+                    visibleSelected.add(index);
+                }
+            });
+            typeConfig.selected = visibleSelected;
+        }
+    }
+    
+    // Select markers in rectangle
+    selectInRectangle(rectX, rectY, rectWidth, rectHeight, options = {}) {
+        const { altKey = false } = options;
+        const addToSelection = !altKey;
+        
+        // Convert rectangle to world coordinates
+        const topLeft = screenToWorld(rectX, rectY);
+        const bottomRight = screenToWorld(rectX + rectWidth, rectY + rectHeight);
+        const minX = Math.min(topLeft.x, bottomRight.x);
+        const maxX = Math.max(topLeft.x, bottomRight.x);
+        const minZ = Math.min(topLeft.z, bottomRight.z);
+        const maxZ = Math.max(topLeft.z, bottomRight.z);
+        
+        const activeType = this.getActiveEditingType();
+        
+        // If in editing mode, only work with active type
+        if (activeType !== null) {
+            // Clear selection for active type if replacing
+            if (addToSelection) {
+                this.clearSelectionsForType(activeType);
+            }
+            
+            const typeConfig = markerTypes[activeType];
+            const array = typeConfig.getArray();
+            
+            array.forEach((marker, index) => {
+                if (typeConfig.isDeleted(index)) return;
+                if (!this.canSelectMarker(activeType, index)) return;
+                
+                // Check if marker is within rectangle
+                if (marker.x >= minX && marker.x <= maxX &&
+                    marker.z >= minZ && marker.z <= maxZ) {
+                    if (addToSelection) {
+                        typeConfig.selected.add(index);
+                    } else {
+                        typeConfig.selected.delete(index);
+                    }
+                }
+            });
+        } else {
+            // Not in editing mode - work with regular markers
+            if (addToSelection) {
+                selectedMarkers.clear();
+            }
+            
+            markers.forEach((marker, index) => {
+                if (!this.canSelectMarker('regular', index)) return;
+                
+                if (marker.x >= minX && marker.x <= maxX &&
+                    marker.z >= minZ && marker.z <= maxZ) {
+                    if (addToSelection) {
+                        selectedMarkers.add(index);
+                    } else {
+                        selectedMarkers.delete(index);
+                    }
+                }
+            });
+        }
+        
+        this.cleanupHiddenSelections();
+    }
+    
+    // Select marker at point
+    selectAtPoint(screenX, screenY, options = {}) {
+        const { altKey = false } = options;
+        const activeType = this.getActiveEditingType();
+        
+        // If in editing mode, only check active type
+        if (activeType !== null) {
+            const typeConfig = markerTypes[activeType];
+            const array = typeConfig.getArray();
+            
+            for (let index = 0; index < array.length; index++) {
+                if (typeConfig.isDeleted(index)) continue;
+                if (!this.canSelectMarker(activeType, index)) continue;
+                
+                const marker = typeConfig.getMarker(index);
+                const screenPos = typeConfig.getScreenPos(marker);
+                
+                if (typeConfig.isPointOnMarker(marker, screenX, screenY, screenPos)) {
+                    this.selectMarker(activeType, index, { altKey, clearOthers: !altKey });
+                    // Clear other types when selecting (unless Alt is held)
+                    if (!altKey) {
+                        for (const otherType of Object.keys(markerTypes)) {
+                            if (otherType !== activeType && editingEnabled[otherType]) {
+                                this.clearSelectionsForType(otherType);
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+        } else {
+            // Not in editing mode - check regular markers
+            for (let index = 0; index < markers.length; index++) {
+                if (!this.canSelectMarker('regular', index)) continue;
+                
+                const marker = markers[index];
+                const screenPos = worldToScreen(marker.x, marker.z);
+                const dx = screenPos.x - screenX;
+                const dy = screenPos.y - screenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < MARKER_INTERACTION_THRESHOLD) {
+                    this.selectMarker('regular', index, { altKey, clearOthers: !altKey });
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+}
+
+// Create global selection manager instance
+const selectionManager = new SelectionManager();
+
 // Marker Renderer - unified rendering system for all marker types
 class MarkerRenderer {
     constructor(typeConfig, ctx) {
@@ -1276,45 +1535,10 @@ function initCanvas() {
                 return;
             }
             
-            // Check if clicking on any editable marker to select it
-            let clickedOnEditableMarker = false;
-            for (const markerType of Object.keys(markerTypes)) {
-                if (editingEnabled[markerType] && selectAtPointForType(markerType, x, y, e.altKey)) {
-                    clickedOnEditableMarker = true;
-                    // Clear selection for other marker types when selecting this one (unless Alt is held)
-                    if (!e.altKey) {
-                        for (const otherType of Object.keys(markerTypes)) {
-                            if (otherType !== markerType && editingEnabled[otherType]) {
-                                markerTypes[otherType].selected.clear();
-                            }
-                        }
-                    }
-                    updateSelectedCount();
-                    requestDraw();
-                    e.preventDefault();
-                    return;
-                }
-            }
-            
-            // If clicking on empty space in edit mode, clear all selections
-            if (!clickedOnEditableMarker) {
-                const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
-                if (isEditingAnyType) {
-                    // Clear all editable marker selections when clicking empty space
-                    for (const markerType of Object.keys(markerTypes)) {
-                        if (editingEnabled[markerType]) {
-                            markerTypes[markerType].selected.clear();
-                        }
-                    }
-                    updateSelectedCount();
-                    requestDraw();
-                    e.preventDefault();
-                    return;
-                } else {
-                    // Not in edit mode - allow normal selection/marquee
-                    handleMouseDown(e);
-                }
-            }
+            // Selection is now handled by SelectionManager in handleMouseDown
+            // This code path is no longer needed as handleMouseDown handles all selection logic
+            // If we reach here, it means we didn't handle the click above, so delegate to handleMouseDown
+            handleMouseDown(e);
         }
     });
     
@@ -2739,46 +2963,13 @@ function handleMouseDown(e) {
     const y = (e.clientY - rect.top) * scaleY;
     
     if (e.button === 0) { // Left click
-        // Check if clicking on any marker (regular or editable)
-        let clickedMarker = false;
-        
-        // Check regular markers
-        markers.forEach((marker, index) => {
-            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
-                return; // Skip hidden markers
-            }
-            const screenPos = worldToScreen(marker.x, marker.z);
-            const dx = screenPos.x - x;
-            const dy = screenPos.y - y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < MARKER_INTERACTION_THRESHOLD) {
-                clickedMarker = true;
-            }
-        });
-        
-        // Check editable marker types using interaction handlers
-        if (!clickedMarker) {
-            for (const markerType of Object.keys(markerTypes)) {
-                const handler = interactionHandlers[markerType];
-                if (handler && editingEnabled[markerType] && markerTypes[markerType].getShowFlag()) {
-                    const clicked = getMarkerAtPoint(markerType, x, y);
-                    if (clicked !== null) {
-                        // Use interaction handler for click
-                        if (handler.handleClick(x, y, { altKey: e.altKey })) {
-                            clickedMarker = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (clickedMarker) {
-            // Single click selection on marker
-            selectAtPoint(x, y, e.altKey);
+        // Check for marker click first using selection manager
+        if (selectionManager.selectAtPoint(x, y, { altKey: e.altKey })) {
+            // Marker was selected
+            updateSelectedCount();
+            requestDraw();
         } else {
-            // Clicking on empty space - start marquee selection
+            // Empty space - start marquee selection
             isMarqueeSelecting = true;
             marqueeStartX = x;
             marqueeStartY = y;
@@ -2805,26 +2996,13 @@ function handleMouseUp(e) {
         
         // Only select if rectangle is large enough (avoid accidental selection on click)
         if (rectWidth > 5 && rectHeight > 5) {
-            // Alt key means deselect mode, otherwise add to selection
-            selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, !e.altKey);
+            // Valid marquee - select markers using selection manager
+            selectionManager.selectInRectangle(rectX, rectY, rectWidth, rectHeight, {
+                altKey: e.altKey
+            });
         } else {
-            // Rectangle too small - treat as single click on empty space
-            // Clear selection for all editable types and regular markers
-            const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
-            
-            if (isEditingAnyType) {
-                // Clear selection for all editable types
-                for (const markerType of Object.keys(markerTypes)) {
-                    const typeConfig = markerTypes[markerType];
-                    if (editingEnabled[markerType]) {
-                        typeConfig.selected.clear();
-                    }
-                }
-            } else {
-                // Clear selection for regular markers
-                selectedMarkers.clear();
-            }
-            updateSelectedCount();
+            // Small rectangle - treat as empty click
+            selectionManager.clearAllSelections();
         }
         
         isMarqueeSelecting = false;
@@ -2833,112 +3011,16 @@ function handleMouseUp(e) {
     }
 }
 
-// Clean up selections by removing hidden markers
+// Clean up selections by removing hidden markers (delegates to SelectionManager)
 function cleanupHiddenSelections() {
-    // Clean up regular markers
-    const visibleSelected = new Set();
-    selectedMarkers.forEach(index => {
-        if (visibleMarkers.size === 0 || visibleMarkers.has(index)) {
-            visibleSelected.add(index);
-        }
-    });
-    selectedMarkers = visibleSelected;
-    
-    // Clean up editable marker types
-    for (const markerType of Object.keys(markerTypes)) {
-        const typeConfig = markerTypes[markerType];
-        const visibleSelected = new Set();
-        typeConfig.selected.forEach(index => {
-            if (isMarkerVisible(markerType, index)) {
-                visibleSelected.add(index);
-            }
-        });
-        typeConfig.selected = visibleSelected;
-    }
+    selectionManager.cleanupHiddenSelections();
 }
 
-// Select markers within rectangle
+// Select markers within rectangle (delegates to SelectionManager)
 function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSelection = true) {
-    // Convert rectangle bounds to world coordinates
-    const topLeft = screenToWorld(rectX, rectY);
-    const bottomRight = screenToWorld(rectX + rectWidth, rectY + rectHeight);
-    
-    // Get rectangle bounds in world space
-    const minX = Math.min(topLeft.x, bottomRight.x);
-    const maxX = Math.max(topLeft.x, bottomRight.x);
-    const minZ = Math.min(topLeft.z, bottomRight.z);
-    const maxZ = Math.max(topLeft.z, bottomRight.z);
-    
-    // If editing is enabled for a specific type, only allow selection of that type
-    const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
-    
-    // Clear selection first if not in add mode (normal marquee replaces selection)
-    if (addToSelection && !isEditingAnyType) {
-        // For normal markers, clear selection when starting new marquee (unless Alt is held)
-        selectedMarkers.clear();
-    }
-    
-    // Select or deselect markers within the rectangle (only if not editing)
-    if (!isEditingAnyType) {
-        markers.forEach((marker, index) => {
-            // Only select visible markers
-            if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) {
-                return; // Skip hidden markers
-            }
-            
-            // Check if marker center is within rectangle
-            if (marker.x >= minX && marker.x <= maxX &&
-                marker.z >= minZ && marker.z <= maxZ) {
-                if (addToSelection) {
-                    // Add to selection (only if visible)
-                    selectedMarkers.add(index);
-                } else {
-                    // Remove from selection (deselect mode)
-                    selectedMarkers.delete(index);
-                }
-            }
-        });
-    }
-    
-    // Select markers for each editable type if editing is enabled
-    // First, clear selections for editable types if in normal mode (replace selection)
-    if (addToSelection && isEditingAnyType) {
-        for (const markerType of Object.keys(markerTypes)) {
-            const typeConfig = markerTypes[markerType];
-            if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
-                // Normal marquee selection replaces selection (Alt not held)
-                typeConfig.selected.clear();
-            }
-        }
-    }
-    
-    // Now select/deselect markers within rectangle for editable types
-    for (const markerType of Object.keys(markerTypes)) {
-        const typeConfig = markerTypes[markerType];
-        if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
-            const array = typeConfig.getArray();
-            array.forEach((marker, index) => {
-                if (typeConfig.isDeleted(index)) return;
-                // CRITICAL: Only select visible markers
-                if (!isMarkerVisible(markerType, index)) return;
-                
-                // Check if marker center is within rectangle
-                if (marker.x >= minX && marker.x <= maxX &&
-                    marker.z >= minZ && marker.z <= maxZ) {
-                    if (addToSelection) {
-                        // Add to selection (only if visible)
-                        typeConfig.selected.add(index);
-                    } else {
-                        // Remove from selection (deselect mode)
-                        typeConfig.selected.delete(index);
-                    }
-                }
-            });
-        }
-    }
-    
-    // Clean up any hidden markers that might have been selected
-    cleanupHiddenSelections();
+    selectionManager.selectInRectangle(rectX, rectY, rectWidth, rectHeight, {
+        altKey: !addToSelection
+    });
 }
 
 // Handle wheel (zoom)
@@ -3049,52 +3131,14 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
     return false;
 }
 
-// Select marker at point
+// Select marker at point (delegates to SelectionManager)
 function selectAtPoint(screenX, screenY, altKey = false) {
-    // Use consistent threshold for marker interaction
-    let found = false;
-    
-    // Check if editing is enabled for any type
-    const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
-    
-    // Check each editable marker type
-    for (const markerType of Object.keys(markerTypes)) {
-        if (selectAtPointForType(markerType, screenX, screenY, altKey)) {
-            found = true;
-            break; // Only select one at a time
-        }
+    const found = selectionManager.selectAtPoint(screenX, screenY, { altKey });
+    if (found) {
+        updateSelectedCount();
+        draw();
     }
-    
-    // Check regular markers if no editable marker was clicked and not editing
-    if (!found && !isEditingAnyType) {
-        markers.forEach((marker, index) => {
-            if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
-                return; // Skip hidden markers
-            }
-            
-            const screenPos = worldToScreen(marker.x, marker.z);
-            const dx = screenPos.x - screenX;
-            const dy = screenPos.y - screenY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < MARKER_INTERACTION_THRESHOLD) {
-                if (altKey) {
-                    // Alt key pressed - deselect mode
-                    selectedMarkers.delete(index);
-                } else {
-                    // Normal mode - add to selection
-                    selectedMarkers.add(index);
-                }
-                found = true;
-            }
-        });
-    }
-    
-    // Don't clear selection on empty click - only deselect when Alt is pressed
-    // Empty clicks do nothing by default
-    
-    updateSelectedCount();
-    draw();
+    return found;
 }
 
 // Update hovered marker
@@ -3579,7 +3623,10 @@ function handleDrag(screenX, screenY) {
         }
     }
     
+    // Force immediate redraw for smooth visual feedback during drag
     requestDraw();
+    // Also call draw() directly for immediate feedback
+    draw();
 }
 
 // Handle drag end
@@ -4443,9 +4490,19 @@ async function handleEditingToggle(markerType, enabled) {
     
     editingEnabled[markerType] = enabled;
     
-    // When disabling editing, clear selection for this type
-    if (!enabled) {
-        typeConfig.selected.clear();
+    // When enabling editing, clear selections for other types using SelectionManager
+    if (enabled) {
+        // Clear selections for all other types
+        for (const otherType of Object.keys(markerTypes)) {
+            if (otherType !== markerType) {
+                selectionManager.clearSelectionsForType(otherType);
+            }
+        }
+        // Also clear regular markers
+        selectionManager.clearSelectionsForType('regular');
+    } else {
+        // When disabling editing, clear selection for this type
+        selectionManager.clearSelectionsForType(markerType);
     }
     
     // Show/hide edit controls
@@ -4477,7 +4534,7 @@ async function handleEditingToggle(markerType, enabled) {
                 // Restore original positions
                 restoreMarkerPositions(markerType);
                 // Clear selection after restore
-                typeConfig.selected.clear();
+                selectionManager.clearSelectionsForType(markerType);
             } else {
                 // User wants to keep changes - re-enable editing
                 editingEnabled[markerType] = true;
@@ -4490,7 +4547,7 @@ async function handleEditingToggle(markerType, enabled) {
             }
         } else {
             // No changes, but clear selection when disabling editing
-            typeConfig.selected.clear();
+            selectionManager.clearSelectionsForType(markerType);
         }
         
         // Update display after clearing selection
@@ -4502,7 +4559,7 @@ async function handleEditingToggle(markerType, enabled) {
 // Update selected count display
 function updateSelectedCount() {
     // Clean up hidden selections before counting
-    cleanupHiddenSelections();
+    selectionManager.cleanupHiddenSelections();
     
     let count = selectedMarkers.size;
     // Add counts from all editable marker types
@@ -4516,7 +4573,7 @@ function updateSelectedCount() {
 
 // Clear all selected markers
 function clearSelection() {
-    selectedMarkers.clear();
+    selectionManager.clearAllSelections();
     updateSelectedCount();
     draw();
 }
