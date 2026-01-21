@@ -1,6 +1,6 @@
-# Economy Editor
+# XML Data Viewer
 
-A comprehensive web-based toolkit for managing and visualizing DayZ server mission file data. Features a database-backed XML editor and an interactive 2D map viewer with advanced filtering capabilities.
+A comprehensive web-based toolkit for managing and visualizing DayZ server mission file data. Features a database-backed XML editor and an interactive 2D map viewer with advanced filtering and editing capabilities.
 
 This application was written by an LLM in Cursor, an AI-powered code editor. The codebase was developed through iterative conversation and refinement, with the AI assistant handling implementation, debugging, and feature additions based on user requirements.
 
@@ -74,7 +74,7 @@ This application was written by an LLM in Cursor, an AI-powered code editor. The
    python run_launcher.py
    ```
 
-## Startup Instructions
+## Running the Application
 
 ### Using the Launcher (Recommended)
 
@@ -102,10 +102,10 @@ To change ports, edit the `run_*.py` files and modify the `port` parameter in `a
 
 ## Overview
 
-Economy Editor consists of three integrated applications:
+XML Data Viewer consists of three integrated applications:
 
 - **Economy Editor** - Database-backed XML element editor for managing economy configuration files
-- **Map Viewer** - Interactive 2D map visualization tool for viewing spawn points, territories, and markers
+- **Map Viewer** - Interactive 2D map visualization and editing tool for viewing and modifying spawn points, territories, and markers
 - **Launcher** - Unified entry point providing seamless navigation between applications
 
 ## Features
@@ -146,46 +146,37 @@ Economy Editor consists of three integrated applications:
 
 ### Map Viewer
 
+#### Visualization Features
+
 - **Multi-Layer Visualization**
-  - Group markers from `mapgrouppos.xml`
+  - Group markers from `mapgrouppos.xml` (blue markers)
   - Event spawn markers from `cfgeventspawns.xml` (purple markers)
-  - Territory zones and bounding circles from `env/*.xml` files
-  - Effect area circles from `cfgeffectareas.json`
+  - Territory zones and bounding circles from `env/*.xml` files (color-coded by territory type)
+  - Effect area circles from `cfgeffectareas.json` (orange circles)
+  - Player spawn points from `cfgplayerspawnpoints.xml` (rectangular markers)
 
 - **Interactive Controls**
-  - Pan with middle mouse button or space + drag
-  - Zoom with mouse wheel
-  - Click to select markers
-  - Marquee selection for multiple markers
-  - Hover tooltips with detailed information
-
-- **Advanced Filtering System**
-  - Filter group markers by usage and group name
-  - Filter event spawns by type
-  - Filter territories by type and name
-  - Display/Hide filter logic for intuitive combination
-  - Invert filters with checkbox controls
-  - Multiple filters with OR logic
-  - Filter state persistence in localStorage
-
-- **Background Image Support**
-  - Upload custom background images
-  - Adjustable image dimensions (metres)
-  - Opacity slider (0-100%) with WebGL acceleration
-  - Show/hide background image toggle
-  - Image persistence across sessions
+  - **Pan**: Middle mouse button or Space + drag
+  - **Zoom**: Mouse wheel
+  - **Select**: Click on markers or use marquee selection (drag to create selection rectangle)
+  - **Hover**: Tooltips with detailed marker information
+  - **Right-click**: Copy location coordinates to clipboard
 
 - **Visualization Features**
   - Grid overlay with 100m and 1km lines
-  - Color-coded markers (blue for groups, purple for event spawns)
+  - Color-coded markers by type
   - Territory bounding circles with unique colors per territory type
   - Effect area circles with transparency
   - Selected marker highlighting
   - Hover effects
+  - Radius handles for editable markers in edit mode
 
-- **Data Export**
-  - Copy selected markers' XML to clipboard
-  - Multi-marker selection support
+- **Background Image Support**
+  - Upload custom background images (PNG, JPG, JPEG, GIF, BMP, WEBP)
+  - Adjustable image dimensions (metres)
+  - Opacity slider (0-100%) with WebGL acceleration
+  - Show/hide background image toggle
+  - Image persistence across sessions
 
 - **Display Controls**
   - Toggle grid visibility
@@ -193,8 +184,87 @@ Economy Editor consists of three integrated applications:
   - Toggle event spawn visibility
   - Toggle territory visibility
   - Toggle effect area visibility
+  - Toggle player spawn points visibility
   - Toggle background image visibility
   - All settings persist in localStorage
+
+#### Advanced Filtering System
+
+- **Group Marker Filters**
+  - Filter by usage (multiple selections)
+  - Filter by group name (search and select)
+  - Display/Hide filter logic
+  - Multiple filters with OR logic
+  - Filter state persistence
+
+- **Event Spawn Filters**
+  - Filter by event spawn type
+  - "Is One Of" or "Is Not One Of" criteria
+  - Multiple filters with OR logic
+
+- **Territory Filters**
+  - Filter by territory type
+  - Filter by territory name
+  - Multiple filters with OR logic
+
+#### Editing Features
+
+The Map Viewer includes comprehensive editing capabilities for various marker types:
+
+- **Player Spawn Points** (`cfgplayerspawnpoints.xml`)
+  - Enable editing mode via checkbox
+  - **Add**: Ctrl+Click (Cmd+Click on Mac) to add spawn point at cursor
+  - **Move**: Click and drag to move marker
+  - **Resize**: Drag corners to resize rectangle (width/height)
+  - **Delete**: Select markers and press Delete/Backspace
+  - **Save Changes**: Saves to `cfgplayerspawnpoints.xml`
+  - **Discard Changes**: Restores all changes made since entering edit mode
+
+- **Effect Areas** (`cfgeffectareas.json`)
+  - Enable editing mode via checkbox
+  - **Add**: Ctrl+Click to add effect area at cursor
+  - **Move**: Click and drag center of circle
+  - **Resize**: Click and drag edge or handle (white dot) to change radius
+  - **Delete**: Select effect areas and press Delete/Backspace
+  - **Save Changes**: Saves to `cfgeffectareas.json`
+  - **Discard Changes**: Restores all changes made since entering edit mode
+
+- **Territory Zones** (`env/*.xml` files)
+  - Enable editing mode via checkbox
+  - **Territory Type Selector**: Choose territory type for new zones
+  - **Add**: Ctrl+Click to add zone at cursor (uses selected territory type)
+  - **Move**: Click and drag center of circle
+  - **Resize**: Click and drag edge or handle (white dot) to change radius
+  - **Delete**: Select zones and press Delete/Backspace
+  - **Save Changes**: Saves to appropriate `env/*.xml` files
+  - **Discard Changes**: Restores all changes made since entering edit mode
+
+- **Zombie Territory Zones** (`env/*.xml` files)
+  - Enable editing mode via checkbox
+  - **Add**: Ctrl+Click to add zone at cursor
+  - **Move**: Click and drag center of circle
+  - **Resize**: Click and drag edge or handle (white dot) to change radius
+  - **Delete**: Select zones and press Delete/Backspace
+  - **Zone Parameters**: Configure zone parameters using list boxes (for selected zones)
+  - **Save Changes**: Saves to appropriate `env/*.xml` files
+  - **Discard Changes**: Restores all changes made since entering edit mode
+
+**Multi-Marker Editing:**
+- Select multiple markers using Ctrl+Click or marquee selection
+- When moving a marker, all selected markers move together while retaining relative positions
+- When adjusting radius, all selected markers are assigned the same radius value
+- Changes are tracked and can be saved or discarded
+
+**Edit Mode Behavior:**
+- Only one marker type can be edited at a time
+- When enabling edit mode for a type, other types' edit modes are disabled
+- Unsaved changes prompt confirmation when disabling edit mode
+- Visual indicators show selected, new, modified, and deleted markers
+
+- **Data Export**
+  - Copy selected markers' XML to clipboard
+  - Multi-marker selection support
+  - Right-click on map to copy location coordinates
 
 ### Launcher
 
@@ -233,29 +303,140 @@ Economy Editor consists of three integrated applications:
 
 ### Map Viewer
 
+#### Basic Usage
+
 1. **Load Markers:**
-   - Enter your mission directory path
-   - Click "Load Markers" to load all marker data
+   - Enter your mission directory path (e.g., `E:\DayZ_Servers\Server\mpmissions\dayzOffline.nyheim`)
+   - Click "Load Markers" to load all marker data from:
+     - `mapgrouppos.xml` (group markers)
+     - `cfgeventspawns.xml` (event spawns)
+     - `env/*.xml` (territories)
+     - `cfgeffectareas.json` (effect areas)
+     - `cfgplayerspawnpoints.xml` (player spawn points)
 
 2. **Navigate:**
    - **Pan**: Middle mouse button or Space + drag
    - **Zoom**: Mouse wheel
-   - **Select**: Click on markers or use marquee selection
+   - **Select**: Click on markers or use marquee selection (drag to create selection rectangle)
+   - **Right-click**: Copy location coordinates to clipboard
 
 3. **Filter Markers:**
    - Use filter sections for groups, event spawns, and territories
    - Add multiple filters with "Display" or "Hide" logic
    - Toggle filter inversion with checkboxes
+   - Filters persist across sessions
 
 4. **Background Image:**
    - Click "Load Image" to upload a map background
-   - Set image dimensions in metres
-   - Adjust opacity with the slider
+   - Set image dimensions in metres (width and height)
+   - Adjust opacity with the slider (0-100%)
    - Toggle visibility with checkbox
+   - Click "Clear Image" to remove background
 
 5. **Export:**
    - Select markers (click or marquee)
    - Click "Copy Selected XML" to copy to clipboard
+
+#### Editing Markers
+
+1. **Enable Edit Mode:**
+   - Check the "Enable editing" checkbox for the marker type you want to edit
+   - Edit controls will appear below the checkbox
+   - Only one marker type can be edited at a time
+
+2. **Add Markers:**
+   - Hold Ctrl (Cmd on Mac) and click on the map where you want to add a marker
+   - For territory zones, select the territory type from the dropdown first
+
+3. **Move Markers:**
+   - Click and drag the center of the marker
+   - For circles (effect areas, territory zones), drag the center point
+   - For rectangles (player spawn points), drag anywhere on the marker
+   - Multiple selected markers move together while maintaining relative positions
+
+4. **Resize Markers:**
+   - **Circles** (effect areas, territory zones): Click and drag the edge or the white handle dot
+   - **Rectangles** (player spawn points): Drag the corners
+   - When multiple markers are selected, all selected markers get the same radius/dimensions
+
+5. **Delete Markers:**
+   - Select one or more markers (click or marquee)
+   - Press Delete or Backspace
+   - Markers are marked for deletion (will be removed on save)
+
+6. **Save Changes:**
+   - Click "Save Changes" button in the edit controls
+   - Changes are written to the appropriate XML/JSON files
+   - Success message confirms the save operation
+
+7. **Discard Changes:**
+   - Click "Discard Changes" button to revert all changes made since entering edit mode
+   - This restores original positions, removes newly added markers, and restores deleted markers
+   - All change tracking is cleared
+
+8. **Disable Edit Mode:**
+   - Uncheck the "Enable editing" checkbox
+   - If there are unsaved changes, you'll be prompted to discard them
+   - Selections are cleared when disabling edit mode
+
+## How It Works
+
+### Architecture
+
+The application uses a client-server architecture:
+
+- **Backend**: Flask (Python) web framework serving REST API endpoints
+- **Frontend**: Vanilla JavaScript with HTML5 Canvas for rendering
+- **Data Storage**: XML/JSON files in mission directory, SQLite database for Economy Editor
+- **Communication**: RESTful API endpoints for data loading and saving
+
+### Map Viewer Rendering
+
+The Map Viewer uses a multi-layer canvas system:
+
+1. **Background Canvas**: Renders background images with WebGL acceleration
+2. **Marker Canvas**: Renders all markers, territories, and effect areas
+3. **Overlay Canvas**: Renders temporary UI elements (marquee selection, tooltips)
+
+This separation allows for optimized rendering - the overlay canvas can be updated without redrawing the entire scene.
+
+### Marker Editing System
+
+The editing system uses a unified architecture:
+
+- **Marker Types Configuration**: Each marker type (player spawn points, effect areas, territory zones, zombie territory zones) has a configuration object defining its capabilities and behavior
+- **EditControlsManager**: Dynamically generates UI controls for each marker type based on configuration
+- **State Management**: Tracks original positions, new markers, deleted markers, and modifications
+- **Event System**: Publishes events for marker changes (created, deleted, moved, resized, selected)
+- **Selection Manager**: Centralized selection logic that enforces visibility and edit mode restrictions
+- **Interaction Handlers**: Unified system for handling clicks, drags, and radius editing
+
+### File Structure
+
+The Map Viewer reads and writes to these files:
+
+- `mapgrouppos.xml` - Group marker positions (read-only visualization)
+- `mapgroupproto.xml` - Group prototypes (read-only, for matching with positions)
+- `cfgeventspawns.xml` - Event spawn markers (read-only visualization)
+- `cfgeffectareas.json` - Effect area definitions (read/write)
+- `cfgplayerspawnpoints.xml` - Player spawn point positions (read/write)
+- `env/*.xml` - Territory zone definitions (read/write)
+
+### API Endpoints
+
+**Map Viewer API:**
+
+- `GET /api/groups` - Load group markers from `mapgrouppos.xml`
+- `GET /api/event-spawns` - Load event spawns from `cfgeventspawns.xml`
+- `GET /api/territories` - Load territories from `env/*.xml` files
+- `GET /api/effect-areas` - Load effect areas from `cfgeffectareas.json`
+- `GET /api/player-spawn-points` - Load player spawn points from `cfgplayerspawnpoints.xml`
+- `POST /api/effect-areas/save` - Save effect areas to `cfgeffectareas.json`
+- `POST /api/player-spawn-points/save` - Save player spawn points to `cfgplayerspawnpoints.xml`
+- `POST /api/territories/save` - Save territory zones to `env/*.xml` files
+- `POST /api/upload-background-image` - Upload background image
+- `GET /api/background-image/<image_id>` - Retrieve background image
+- `DELETE /api/delete-background-image/<image_id>` - Delete background image
 
 ## Project Structure
 
@@ -269,20 +450,20 @@ Economy Editor consists of three integrated applications:
 ├── run_launcher.py            # Launcher startup script
 ├── setup.bat                  # Automated setup script
 ├── start_all_apps.bat         # Startup script for all apps
-├── requirements.txt          # Python dependencies
+├── requirements.txt           # Python dependencies
 ├── static/
 │   ├── css/
 │   │   ├── economy_editor.css # Economy Editor styles (Nord theme)
-│   │   ├── map_viewer.css      # Map Viewer styles (Nord theme)
-│   │   └── launcher.css        # Launcher styles (Nord theme)
+│   │   ├── map_viewer.css     # Map Viewer styles (Nord theme)
+│   │   └── launcher.css       # Launcher styles (Nord theme)
 │   └── js/
-│       ├── economy_editor.js   # Economy Editor frontend logic
-│       ├── map_viewer.js       # Map Viewer frontend logic
+│       ├── economy_editor.js  # Economy Editor frontend logic
+│       ├── map_viewer.js       # Map Viewer frontend logic (6500+ lines)
 │       └── launcher.js         # Launcher frontend logic
 ├── templates/
-│   ├── economy_editor.html     # Economy Editor UI
-│   ├── map_viewer.html         # Map Viewer UI
-│   └── launcher.html           # Launcher UI
+│   ├── economy_editor.html    # Economy Editor UI
+│   ├── map_viewer.html        # Map Viewer UI
+│   └── launcher.html          # Launcher UI
 └── uploads/
     └── background_images/      # Uploaded background images
 ```
@@ -327,6 +508,24 @@ Economy Editor consists of three integrated applications:
 - Ensure "Show Background Image" checkbox is checked
 - Check that image was uploaded successfully
 - Verify image dimensions are set correctly
+
+### Markers Not Loading
+- Verify mission directory path is correct
+- Check that required XML/JSON files exist in the mission directory
+- Check browser console for error messages
+- Verify file permissions (read access required)
+
+### Edit Mode Not Working
+- Ensure you've enabled editing for the marker type via checkbox
+- Check that markers are visible (not filtered out)
+- Verify you have write permissions to the mission directory
+- Check browser console for error messages
+
+### Changes Not Saving
+- Verify write permissions to mission directory
+- Check that XML/JSON files are not locked by another process
+- Review server console for error messages
+- Ensure mission directory path is correct
 
 ## Stopping Applications
 
