@@ -393,3 +393,4 @@ function handleEditingToggle(markerType, enabled) {
 4. **Performance**: Centralized cleanup and validation
 5. **Extensibility**: Easy to add new selection features
 
+

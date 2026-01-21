@@ -145,7 +145,12 @@ const markerTypes = {
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
-        originalPositions: new Map()
+        originalPositions: new Map(),
+        // UI configuration
+        uiConfig: {
+            showDiscardButton: false,
+            customControls: []
+        }
     },
     effectAreas: {
         getArray: () => effectAreas,
@@ -255,7 +260,12 @@ const markerTypes = {
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
-        originalPositions: new Map()
+        originalPositions: new Map(),
+        // UI configuration
+        uiConfig: {
+            showDiscardButton: false,
+            customControls: []
+        }
     },
     territoryZones: {
         getArray: () => territoryZones,
@@ -407,7 +417,25 @@ const markerTypes = {
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
-        originalPositions: new Map()
+        originalPositions: new Map(),
+        // UI configuration
+        uiConfig: {
+            showDiscardButton: false,
+            customControls: [
+                {
+                    type: 'select',
+                    id: 'territoryTypeSelect',
+                    label: 'Territory Type for New Zones:',
+                    getOptions: () => {
+                        const typeNames = getAllTerritoryTypeNames();
+                        return typeNames.map(name => ({ value: name, label: name }));
+                    },
+                    onChange: (e) => {
+                        selectedTerritoryType = e.target.value;
+                    }
+                }
+            ]
+        }
     },
     zombieTerritoryZones: {
         getArray: () => zombieTerritoryZones,
@@ -528,7 +556,19 @@ const markerTypes = {
         selected: new Set(),
         deleted: new Set(),
         new: new Set(),
-        originalPositions: new Map()
+        originalPositions: new Map(),
+        // UI configuration
+        uiConfig: {
+            showDiscardButton: true,
+            customControls: [
+                {
+                    type: 'listboxes',
+                    containerId: 'zombieZoneParameterControls',
+                    listBoxesId: 'zombieZoneParameterListBoxes',
+                    label: 'Zone Parameters (for selected zones):'
+                }
+            ]
+        }
     }
 };
 
@@ -1201,6 +1241,336 @@ class SelectionManager {
 
 // Create global selection manager instance
 const selectionManager = new SelectionManager();
+
+// Edit Controls Manager - unified UI system for edit mode controls
+class EditControlsManager {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        this.activeControls = new Map(); // Map<markerType, HTMLElement>
+        if (!this.container) {
+            console.error(`EditControlsManager: Container ${containerId} not found`);
+        }
+    }
+    
+    // Create edit controls for a marker type
+    createControls(markerType, config) {
+        const typeConfig = markerTypes[markerType];
+        if (!typeConfig) return null;
+        
+        // Create wrapper div
+        const wrapper = document.createElement('div');
+        wrapper.id = typeConfig.getEditControlsId();
+        wrapper.className = 'edit-controls';
+        wrapper.style.display = 'none';
+        wrapper.style.marginTop = '10px';
+        
+        // Add custom controls first (if any) - they go before instructions
+        if (config.customControls && config.customControls.length > 0) {
+            const customContainer = document.createElement('div');
+            customContainer.className = 'custom-controls';
+            config.customControls.forEach(control => {
+                const controlElement = this.createCustomControl(control);
+                if (controlElement) {
+                    customContainer.appendChild(controlElement);
+                }
+            });
+            wrapper.appendChild(customContainer);
+        }
+        
+        // Add instructions
+        const instructions = this.createInstructions(config.instructions);
+        wrapper.appendChild(instructions);
+        
+        // Add action buttons
+        const buttonContainer = this.createButtonContainer(markerType, config);
+        wrapper.appendChild(buttonContainer);
+        
+        return wrapper;
+    }
+    
+    createInstructions(instructions) {
+        const p = document.createElement('p');
+        p.className = 'edit-instructions';
+        p.style.fontSize = '11px';
+        p.style.color = 'var(--nord4)';
+        p.style.marginTop = '5px';
+        p.style.marginBottom = '5px';
+        
+        instructions.forEach((instruction, index) => {
+            if (index > 0) {
+                p.appendChild(document.createElement('br'));
+            }
+            const strong = document.createElement('strong');
+            strong.textContent = `${instruction.label}: `;
+            p.appendChild(strong);
+            p.appendChild(document.createTextNode(instruction.text));
+        });
+        
+        return p;
+    }
+    
+    createCustomControl(controlConfig) {
+        switch (controlConfig.type) {
+            case 'select':
+                return this.createSelectControl(controlConfig);
+            case 'listboxes':
+                return this.createListBoxesControl(controlConfig);
+            default:
+                return null;
+        }
+    }
+    
+    createSelectControl(config) {
+        const container = document.createElement('div');
+        
+        const label = document.createElement('label');
+        label.setAttribute('for', config.id);
+        label.style.fontSize = '11px';
+        label.style.color = 'var(--nord4)';
+        label.style.display = 'block';
+        label.style.marginBottom = '5px';
+        
+        const strong = document.createElement('strong');
+        strong.textContent = config.label;
+        label.appendChild(strong);
+        container.appendChild(label);
+        
+        const select = document.createElement('select');
+        select.id = config.id;
+        select.style.width = '100%';
+        select.style.padding = '4px';
+        select.style.marginBottom = '8px';
+        select.style.fontSize = '11px';
+        select.style.background = 'var(--nord1)';
+        select.style.color = 'var(--nord4)';
+        select.style.border = '1px solid var(--nord3)';
+        select.style.borderRadius = '4px';
+        
+        // Populate options
+        if (config.getOptions) {
+            try {
+                const options = config.getOptions();
+                if (options && options.length > 0) {
+                    options.forEach(option => {
+                        const opt = document.createElement('option');
+                        opt.value = option.value;
+                        opt.textContent = option.label;
+                        select.appendChild(opt);
+                    });
+                } else {
+                    // No options available yet - add placeholder
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Loading...';
+                    select.appendChild(opt);
+                }
+            } catch (error) {
+                console.error('Error getting options for select:', error);
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Loading...';
+                select.appendChild(opt);
+            }
+        } else if (config.options) {
+            config.options.forEach(option => {
+                const opt = document.createElement('option');
+                opt.value = option.value;
+                opt.textContent = option.label;
+                select.appendChild(opt);
+            });
+        } else {
+            // Placeholder option
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Loading...';
+            select.appendChild(opt);
+        }
+        
+        // Register change handler if provided
+        if (config.onChange) {
+            select.addEventListener('change', config.onChange);
+        }
+        
+        container.appendChild(select);
+        return container;
+    }
+    
+    createListBoxesControl(config) {
+        const container = document.createElement('div');
+        container.id = config.containerId;
+        container.style.marginTop = '10px';
+        
+        const label = document.createElement('p');
+        label.style.fontSize = '11px';
+        label.style.color = 'var(--nord4)';
+        label.style.marginBottom = '8px';
+        
+        const strong = document.createElement('strong');
+        strong.textContent = config.label;
+        label.appendChild(strong);
+        container.appendChild(label);
+        
+        const listBoxesContainer = document.createElement('div');
+        listBoxesContainer.id = config.listBoxesId;
+        container.appendChild(listBoxesContainer);
+        
+        return container;
+    }
+    
+    createButtonContainer(markerType, config) {
+        const container = document.createElement('div');
+        container.className = 'edit-buttons';
+        container.style.marginTop = '8px';
+        
+        // Save button (always present)
+        const saveBtn = document.createElement('button');
+        saveBtn.id = `save${this.capitalize(markerType)}Btn`;
+        saveBtn.textContent = 'Save Changes';
+        saveBtn.style.padding = '6px 12px';
+        saveBtn.style.background = 'var(--nord10)';
+        saveBtn.style.color = 'white';
+        saveBtn.style.border = 'none';
+        saveBtn.style.borderRadius = '4px';
+        saveBtn.style.cursor = 'pointer';
+        saveBtn.addEventListener('click', async () => {
+            const result = await saveMarkerChanges(markerType);
+            if (result.success) {
+                updateStatus(result.message);
+                markerTypes[markerType].selected.clear();
+                updateSelectedCount();
+                draw();
+            } else {
+                updateStatus(`Error saving: ${result.message}`, true);
+            }
+        });
+        container.appendChild(saveBtn);
+        
+        // Discard button (if configured)
+        if (config.showDiscardButton) {
+            const discardBtn = document.createElement('button');
+            discardBtn.id = `discard${this.capitalize(markerType)}Btn`;
+            discardBtn.textContent = 'Discard Changes';
+            discardBtn.style.marginLeft = '8px';
+            discardBtn.style.padding = '6px 12px';
+            discardBtn.style.background = 'var(--nord3)';
+            discardBtn.style.color = 'white';
+            discardBtn.style.border = 'none';
+            discardBtn.style.borderRadius = '4px';
+            discardBtn.style.cursor = 'pointer';
+            discardBtn.addEventListener('click', () => {
+                restoreMarkerPositions(markerType);
+                updateSelectedCount();
+                draw();
+            });
+            container.appendChild(discardBtn);
+        }
+        
+        return container;
+    }
+    
+    capitalize(str) {
+        // Convert camelCase to PascalCase for button IDs
+        // e.g., "playerSpawnPoints" -> "PlayerSpawnPoints"
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+    
+    showControls(markerType) {
+        const controls = this.activeControls.get(markerType);
+        if (controls) {
+            controls.style.display = 'block';
+        }
+    }
+    
+    hideControls(markerType) {
+        const controls = this.activeControls.get(markerType);
+        if (controls) {
+            controls.style.display = 'none';
+        }
+    }
+    
+    getControlsElement(markerType) {
+        return this.activeControls.get(markerType);
+    }
+    
+    // Initialize all controls on page load
+    initialize() {
+        if (!this.container) {
+            console.error('EditControlsManager: Cannot initialize - container not found');
+            return;
+        }
+        
+        Object.keys(markerTypes).forEach(markerType => {
+            const typeConfig = markerTypes[markerType];
+            const config = this.getUIConfig(markerType);
+            const controls = this.createControls(markerType, config);
+            if (controls) {
+                // Insert controls after the checkbox and description paragraph
+                // We'll need to find the right place in the DOM
+                this.container.appendChild(controls);
+                this.activeControls.set(markerType, controls);
+            }
+        });
+    }
+    
+    // Get UI configuration for a marker type
+    getUIConfig(markerType) {
+        const typeConfig = markerTypes[markerType];
+        if (!typeConfig) {
+            return { instructions: [], showDiscardButton: false, customControls: [] };
+        }
+        
+        // Use uiConfig if defined, otherwise generate from typeConfig
+        if (typeConfig.uiConfig) {
+            const config = { ...typeConfig.uiConfig };
+            // Ensure instructions are set
+            if (!config.instructions) {
+                config.instructions = this.getDefaultInstructions(markerType);
+            }
+            return config;
+        }
+        
+        // Fallback: generate default config
+        return {
+            instructions: this.getDefaultInstructions(markerType),
+            showDiscardButton: false,
+            customControls: []
+        };
+    }
+    
+    getDefaultInstructions(markerType) {
+        const typeConfig = markerTypes[markerType];
+        if (!typeConfig) return [];
+        
+        const canEditRadius = typeConfig.canEditRadius;
+        const canEditDimensions = typeConfig.canEditDimensions;
+        
+        const instructions = [
+            { label: 'Add', text: 'Ctrl+Click (Cmd+Click on Mac) to add marker at cursor' }
+        ];
+        
+        if (canEditRadius) {
+            instructions.push(
+                { label: 'Move', text: 'Click and drag center of circle' },
+                { label: 'Resize', text: 'Click and drag edge or handle (white dot) to change radius' }
+            );
+        } else if (canEditDimensions) {
+            instructions.push(
+                { label: 'Move', text: 'Click and drag to move marker' },
+                { label: 'Resize', text: 'Drag corners to resize rectangle' }
+            );
+        } else {
+            instructions.push(
+                { label: 'Move', text: 'Click and drag to move marker' }
+            );
+        }
+        
+        instructions.push(
+            { label: 'Delete', text: 'Select markers and press Delete/Backspace' }
+        );
+        
+        return instructions;
+    }
+}
 
 // Marker Renderer - unified rendering system for all marker types
 class MarkerRenderer {
@@ -4642,12 +5012,12 @@ async function handleEditingToggle(markerType, enabled) {
         selectionManager.clearSelectionsForType(markerType);
     }
     
-    // Show/hide edit controls
-    const editControlsId = typeConfig.getEditControlsId();
-    if (editControlsId) {
-        const editControls = document.getElementById(editControlsId);
-        if (editControls) {
-            editControls.style.display = enabled ? 'block' : 'none';
+    // Show/hide edit controls using EditControlsManager
+    if (editControlsManager) {
+        if (enabled) {
+            editControlsManager.showControls(markerType);
+        } else {
+            editControlsManager.hideControls(markerType);
         }
     }
     
@@ -5003,6 +5373,8 @@ async function loadTerritories() {
             flattenTerritoryZones();
             // Populate territory type selector for editing
             populateTerritoryTypeSelector();
+            // Also update the selector in EditControlsManager if it exists
+            updateTerritoryTypeSelectorOptions();
             // Always show territory filter section (even if empty, so user knows it exists)
             const territoryFilterSection = document.getElementById('territoryFilterSection');
             if (territoryFilterSection) {
@@ -5504,6 +5876,40 @@ function populateTerritoryTypeSelector() {
     if (!typeSelect) return;
     
     typeSelect.innerHTML = '';
+    const typeNames = getAllTerritoryTypeNames();
+    
+    if (typeNames.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No territory types available';
+        typeSelect.appendChild(option);
+        return;
+    }
+    
+    typeNames.forEach(typeName => {
+        const option = document.createElement('option');
+        option.value = typeName;
+        option.textContent = typeName;
+        typeSelect.appendChild(option);
+    });
+    
+    // Set default selection to first type if nothing selected
+    if (!selectedTerritoryType || !typeNames.includes(selectedTerritoryType)) {
+        selectedTerritoryType = typeNames[0];
+        typeSelect.value = selectedTerritoryType;
+    } else {
+        typeSelect.value = selectedTerritoryType;
+    }
+}
+
+// Update territory type selector options dynamically (for EditControlsManager)
+function updateTerritoryTypeSelectorOptions() {
+    const typeSelect = document.getElementById('territoryTypeSelect');
+    if (!typeSelect) return;
+    
+    // Clear existing options
+    typeSelect.innerHTML = '';
+    
     const typeNames = getAllTerritoryTypeNames();
     
     if (typeNames.length === 0) {
@@ -6284,12 +6690,79 @@ async function restoreSavedState() {
     }
 }
 
+// Initialize edit markers UI (checkboxes and controls)
+function initializeEditMarkersUI() {
+    const container = document.getElementById('editMarkersContainer');
+    if (!container) {
+        console.error('editMarkersContainer not found');
+        return;
+    }
+    
+    // Create checkboxes and descriptions for each marker type
+    Object.keys(markerTypes).forEach(markerType => {
+        const typeConfig = markerTypes[markerType];
+        
+        // Create checkbox label
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = typeConfig.getEditCheckboxId();
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(` Enable editing: ${typeConfig.getDisplayName()}`));
+        container.appendChild(label);
+        
+        // Create description paragraph
+        const desc = document.createElement('p');
+        desc.style.fontSize = '12px';
+        desc.style.color = 'var(--nord4)';
+        desc.style.marginTop = '5px';
+        desc.style.marginBottom = '0';
+        
+        // Generate description based on capabilities
+        let description = 'When enabled, ';
+        if (typeConfig.canEditRadius) {
+            description += 'drag to move, drag edge/handle to resize radius. ';
+        } else if (typeConfig.canEditDimensions) {
+            description += 'drag markers to move them. ';
+        } else {
+            description += 'drag markers to move them. ';
+        }
+        description += 'Use Save button to save changes.';
+        if (markerType === 'zombieTerritoryZones') {
+            description = 'When enabled, drag to move, drag edge/handle to resize radius. Configure zone parameters using the list boxes below.';
+        }
+        
+        desc.textContent = description;
+        container.appendChild(desc);
+        
+        // Add event listener for checkbox
+        checkbox.addEventListener('change', async (e) => {
+            await handleEditingToggle(markerType, e.target.checked);
+            // Populate territory type selector when enabling territory zones editing
+            if (markerType === 'territoryZones' && e.target.checked) {
+                populateTerritoryTypeSelector();
+            }
+            draw();
+        });
+    });
+    
+    // Initialize EditControlsManager
+    editControlsManager = new EditControlsManager('editMarkersContainer');
+    editControlsManager.initialize();
+}
+
+// Global EditControlsManager instance
+let editControlsManager = null;
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
     initCanvas();
     
     // Setup background image handler
     setupBackgroundImageHandler();
+    
+    // Initialize edit markers UI
+    initializeEditMarkersUI();
     
     // Restore saved state
     restoreSavedState();
@@ -6321,148 +6794,8 @@ document.addEventListener('DOMContentLoaded', () => {
         saveFilterAndDisplaySettings();
     });
     
-    // Editing toggle
-    const editPlayerSpawnPointsCheckbox = document.getElementById('editPlayerSpawnPoints');
-    if (editPlayerSpawnPointsCheckbox) {
-        editPlayerSpawnPointsCheckbox.addEventListener('change', async (e) => {
-            await handleEditingToggle('playerSpawnPoints', e.target.checked);
-            draw();
-        });
-    }
-    
-    const editEffectAreasCheckbox = document.getElementById('editEffectAreas');
-    if (editEffectAreasCheckbox) {
-        editEffectAreasCheckbox.addEventListener('change', async (e) => {
-            await handleEditingToggle('effectAreas', e.target.checked);
-            draw();
-        });
-    }
-    
-    const editTerritoryZonesCheckbox = document.getElementById('editTerritoryZones');
-    if (editTerritoryZonesCheckbox) {
-        editTerritoryZonesCheckbox.addEventListener('change', async (e) => {
-            await handleEditingToggle('territoryZones', e.target.checked);
-            // Populate territory type selector when enabling editing
-            if (e.target.checked) {
-                populateTerritoryTypeSelector();
-            }
-            draw();
-        });
-    }
-    
-    const editZombieTerritoryZonesCheckbox = document.getElementById('editZombieTerritoryZones');
-    if (editZombieTerritoryZonesCheckbox) {
-        editZombieTerritoryZonesCheckbox.addEventListener('change', async (e) => {
-            await handleEditingToggle('zombieTerritoryZones', e.target.checked);
-            draw();
-        });
-    }
-    
-    // Territory type selector change handler
-    const territoryTypeSelect = document.getElementById('territoryTypeSelect');
-    if (territoryTypeSelect) {
-        territoryTypeSelect.addEventListener('change', (e) => {
-            selectedTerritoryType = e.target.value;
-        });
-    }
-    
-    // Save button handlers
-    const savePlayerSpawnPointsBtn = document.getElementById('savePlayerSpawnPointsBtn');
-    if (savePlayerSpawnPointsBtn) {
-        savePlayerSpawnPointsBtn.addEventListener('click', async () => {
-            const result = await saveMarkerChanges('playerSpawnPoints');
-            if (result.success) {
-                updateStatus(result.message);
-                markerTypes.playerSpawnPoints.selected.clear();
-                updateSelectedCount();
-                draw();
-            } else {
-                updateStatus(`Error saving: ${result.message}`, true);
-            }
-        });
-    }
-    
-    const saveEffectAreasBtn = document.getElementById('saveEffectAreasBtn');
-    if (saveEffectAreasBtn) {
-        saveEffectAreasBtn.addEventListener('click', async () => {
-            const result = await saveMarkerChanges('effectAreas');
-            if (result.success) {
-                updateStatus(result.message);
-                markerTypes.effectAreas.selected.clear();
-                updateSelectedCount();
-                draw();
-            } else {
-                updateStatus(`Error saving: ${result.message}`, true);
-            }
-        });
-    }
-    
-    const saveTerritoryZonesBtn = document.getElementById('saveTerritoryZonesBtn');
-    if (saveTerritoryZonesBtn) {
-        saveTerritoryZonesBtn.addEventListener('click', async () => {
-            const result = await saveMarkerChanges('territoryZones');
-            if (result.success) {
-                updateStatus(result.message);
-                markerTypes.territoryZones.selected.clear();
-                updateSelectedCount();
-                draw();
-            } else {
-                updateStatus(`Error saving: ${result.message}`, true);
-            }
-        });
-    }
-    
-    const saveZombieTerritoryZonesBtn = document.getElementById('saveZombieTerritoryZonesBtn');
-    if (saveZombieTerritoryZonesBtn) {
-        saveZombieTerritoryZonesBtn.addEventListener('click', async () => {
-            const result = await saveMarkerChanges('zombieTerritoryZones');
-            if (result.success) {
-                updateStatus(result.message);
-                markerTypes.zombieTerritoryZones.selected.clear();
-                updateSelectedCount();
-                draw();
-            } else {
-                updateStatus(`Error saving: ${result.message}`, true);
-            }
-        });
-    }
-    
-    const discardZombieTerritoryZonesBtn = document.getElementById('discardZombieTerritoryZonesBtn');
-    if (discardZombieTerritoryZonesBtn) {
-        discardZombieTerritoryZonesBtn.addEventListener('click', () => {
-            restoreMarkerPositions('zombieTerritoryZones');
-            updateSelectedCount();
-            draw();
-        });
-    }
-    
-    // Add discard button handlers for other marker types if they exist
-    const discardTerritoryZonesBtn = document.getElementById('discardTerritoryZonesBtn');
-    if (discardTerritoryZonesBtn) {
-        discardTerritoryZonesBtn.addEventListener('click', () => {
-            restoreMarkerPositions('territoryZones');
-            updateSelectedCount();
-            draw();
-        });
-    }
-    
-    const discardPlayerSpawnPointsBtn = document.getElementById('discardPlayerSpawnPointsBtn');
-    if (discardPlayerSpawnPointsBtn) {
-        discardPlayerSpawnPointsBtn.addEventListener('click', () => {
-            restoreMarkerPositions('playerSpawnPoints');
-            updateSelectedCount();
-            draw();
-        });
-    }
-    
-    const discardEffectAreasBtn = document.getElementById('discardEffectAreasBtn');
-    if (discardEffectAreasBtn) {
-        discardEffectAreasBtn.addEventListener('click', () => {
-            restoreMarkerPositions('effectAreas');
-            updateSelectedCount();
-            draw();
-        });
-    }
+    // Note: Edit controls and button handlers are now created dynamically by EditControlsManager
+    // Checkboxes are created by initializeEditMarkersUI()
     
     const showTerritoriesCheckbox = document.getElementById('showTerritories');
     if (showTerritoriesCheckbox) {

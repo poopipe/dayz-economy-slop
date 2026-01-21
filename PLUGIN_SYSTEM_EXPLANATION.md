@@ -490,3 +490,4 @@ The plugin/extension system transforms marker type management from a **modificat
 
 The investment of ~350 lines of code pays off immediately with the first new marker type and continues to provide value as the system grows.
 
+
