@@ -29,6 +29,19 @@ let showTerritories = true;
 let territoryZones = []; // Flattened array of all zones for editing (legacy - kept for compatibility)
 let zoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 let selectedTerritoryType = ''; // Selected territory type for new zones
+
+// Store previous visibility state when filtering to single marker type
+let previousVisibilityState = {
+    showMarkers: true,
+    showEventSpawns: true,
+    showTerritories: true,
+    showEffectAreas: true,
+    showPlayerSpawnPoints: true,
+    activeTerritoryFilters: []
+};
+let isFilteredToSingleType = false;
+let filteredMarkerType = null; // Track which marker type is currently filtered
+let filterCheckboxEnabled = false; // Track if the filter checkbox is checked (persists across type switches)
 let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing (legacy - kept for compatibility)
 let zombieZoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 
@@ -1282,6 +1295,10 @@ class EditControlsManager {
             wrapper.appendChild(customContainer);
         }
         
+        // Add "Show only this type" checkbox
+        const filterCheckbox = this.createFilterCheckbox(markerType);
+        wrapper.appendChild(filterCheckbox);
+        
         // Add instructions
         const instructions = this.createInstructions(config.instructions);
         wrapper.appendChild(instructions);
@@ -1291,6 +1308,35 @@ class EditControlsManager {
         wrapper.appendChild(buttonContainer);
         
         return wrapper;
+    }
+    
+    createFilterCheckbox(markerType) {
+        const container = document.createElement('div');
+        container.style.marginBottom = '10px';
+        
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.cursor = 'pointer';
+        label.style.fontSize = '12px';
+        label.style.color = 'var(--nord4)';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `filterToType_${markerType}`;
+        checkbox.style.marginRight = '6px';
+        checkbox.style.cursor = 'pointer';
+        
+        checkbox.addEventListener('change', (e) => {
+            filterCheckboxEnabled = e.target.checked; // Update global preference
+            handleFilterToSingleType(markerType, e.target.checked);
+        });
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode('Show only this marker type'));
+        
+        container.appendChild(label);
+        return container;
     }
     
     createInstructions(instructions) {
@@ -5115,6 +5161,12 @@ async function handleEditingToggle(markerType, enabled) {
                 if (editControlsManager) {
                     editControlsManager.hideControls(otherType);
                 }
+                // Don't disable the filter when switching types - just update checkbox state
+                // The filter will be updated to the new type below
+                const otherFilterCheckbox = document.getElementById(`filterToType_${otherType}`);
+                if (otherFilterCheckbox) {
+                    otherFilterCheckbox.checked = false;
+                }
             }
         }
         // Also clear regular markers
@@ -5122,6 +5174,21 @@ async function handleEditingToggle(markerType, enabled) {
     }
     
     editingEnabled[markerType] = enabled;
+    
+    // When enabling editing, ensure the marker type is visible
+    if (enabled) {
+        // Unhide the marker type if it's currently hidden
+        if (markerType === 'playerSpawnPoints' && !showPlayerSpawnPoints) {
+            showPlayerSpawnPoints = true;
+            updateVisibilityCheckboxes();
+        } else if (markerType === 'effectAreas' && !showEffectAreas) {
+            showEffectAreas = true;
+            updateVisibilityCheckboxes();
+        } else if ((markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_')) && !showTerritories) {
+            showTerritories = true;
+            updateVisibilityCheckboxes();
+        }
+    }
     
     // When disabling editing, clear selection for this type
     if (!enabled) {
@@ -5131,10 +5198,40 @@ async function handleEditingToggle(markerType, enabled) {
     // Show/hide edit controls using EditControlsManager
     if (editControlsManager) {
         if (enabled) {
+            // If filter is currently enabled for a different type, update it to this type
+            if (filterCheckboxEnabled && isFilteredToSingleType && filteredMarkerType !== markerType) {
+                // Update filter to new type without disabling it first
+                handleFilterToSingleType(markerType, true);
+            }
+            
             // Show controls for this type and hide all others
             editControlsManager.showControlsForType(markerType);
+            
+            // Use setTimeout to ensure the controls are visible before accessing the checkbox
+            setTimeout(() => {
+                // Update filter checkbox state to reflect global preference
+                const filterCheckbox = document.getElementById(`filterToType_${markerType}`);
+                if (filterCheckbox) {
+                    filterCheckbox.checked = filterCheckboxEnabled;
+                    // If filter is enabled but not yet applied to this type, apply it
+                    if (filterCheckboxEnabled && (!isFilteredToSingleType || filteredMarkerType !== markerType)) {
+                        handleFilterToSingleType(markerType, true);
+                    }
+                }
+            }, 0);
         } else {
             editControlsManager.hideControls(markerType);
+            // Only disable filter if user explicitly disabled editing AND filter is not enabled globally
+            // When switching types, we don't want to disable the filter
+            if (filteredMarkerType === markerType && isFilteredToSingleType && !filterCheckboxEnabled) {
+                // User explicitly unchecked the filter, so disable it
+                handleFilterToSingleType(markerType, false);
+            }
+            // Update checkbox state (uncheck it)
+            const filterCheckbox = document.getElementById(`filterToType_${markerType}`);
+            if (filterCheckbox) {
+                filterCheckbox.checked = false;
+            }
         }
     }
     
@@ -5195,6 +5292,159 @@ async function handleEditingToggle(markerType, enabled) {
         // Update display after clearing selection
         updateSelectedCount();
         draw();
+    }
+}
+
+// Handle filtering to show only a single marker type
+function handleFilterToSingleType(markerType, enabled) {
+    const typeConfig = markerTypes[markerType];
+    if (!typeConfig) return;
+    
+    if (enabled) {
+        // Only save visibility state if we're not already filtering (to preserve original state)
+        // This allows us to switch between types while filtering without losing the original state
+        if (!isFilteredToSingleType) {
+            previousVisibilityState = {
+                showMarkers: showMarkers,
+                showEventSpawns: showEventSpawns,
+                showTerritories: showTerritories,
+                showEffectAreas: showEffectAreas,
+                showPlayerSpawnPoints: showPlayerSpawnPoints,
+                activeTerritoryFilters: JSON.parse(JSON.stringify(activeTerritoryFilters)) // Deep copy
+            };
+        }
+        isFilteredToSingleType = true;
+        filteredMarkerType = markerType;
+        filterCheckboxEnabled = true; // Track that filter is enabled
+        
+        // Handle territory type-specific filtering
+        if (markerType.startsWith('territoryType_')) {
+            const territoryType = markerType.replace('territoryType_', '');
+            // Clear existing territory filters
+            activeTerritoryFilters = [];
+            // Add filter for this specific territory type
+            activeTerritoryFilters.push({
+                type: 'territoryType',
+                criteria: 'isOneOf',
+                values: [territoryType],
+                inverted: false
+            });
+            showTerritories = true;
+            // Hide all other marker types
+            showMarkers = false;
+            showEventSpawns = false;
+            showEffectAreas = false;
+            showPlayerSpawnPoints = false;
+        } else if (markerType === 'zombieTerritoryZones') {
+            // For zombie territories, filter to show only zombie territory types
+            activeTerritoryFilters = [];
+            // Get all zombie territory types
+            const zombieTypes = new Set();
+            territories.forEach(territory => {
+                if (isZombieTerritoryType(territory.territory_type)) {
+                    zombieTypes.add(territory.territory_type);
+                }
+            });
+            if (zombieTypes.size > 0) {
+                activeTerritoryFilters.push({
+                    type: 'territoryType',
+                    criteria: 'isOneOf',
+                    values: Array.from(zombieTypes),
+                    inverted: false
+                });
+            }
+            showTerritories = true;
+            // Hide all other marker types
+            showMarkers = false;
+            showEventSpawns = false;
+            showEffectAreas = false;
+            showPlayerSpawnPoints = false;
+        } else {
+            // For non-territory marker types, use show flags
+            // Determine which show flag to set based on marker type
+            if (markerType === 'playerSpawnPoints') {
+                showPlayerSpawnPoints = true;
+            } else if (markerType === 'effectAreas') {
+                showEffectAreas = true;
+            }
+            
+            // Hide all other marker types
+            showMarkers = false;
+            showEventSpawns = false;
+            showTerritories = false;
+            
+            // Hide other marker types based on what the current type is
+            if (markerType !== 'playerSpawnPoints') {
+                showPlayerSpawnPoints = false;
+            }
+            if (markerType !== 'effectAreas') {
+                showEffectAreas = false;
+            }
+        }
+        
+        // Apply filters (this will update visibleTerritories for territory types)
+        applyFilters();
+        
+        // Update UI checkboxes
+        updateVisibilityCheckboxes();
+        
+        // Update territory filter UI
+        updateTerritoryFilterUI();
+        
+        // Redraw
+        draw();
+    } else {
+        // Restore previous visibility state only if we're actually disabling the filter
+        // (not just switching types)
+        showMarkers = previousVisibilityState.showMarkers;
+        showEventSpawns = previousVisibilityState.showEventSpawns;
+        showTerritories = previousVisibilityState.showTerritories;
+        showEffectAreas = previousVisibilityState.showEffectAreas;
+        showPlayerSpawnPoints = previousVisibilityState.showPlayerSpawnPoints;
+        activeTerritoryFilters = JSON.parse(JSON.stringify(previousVisibilityState.activeTerritoryFilters)); // Deep copy
+        isFilteredToSingleType = false;
+        filteredMarkerType = null;
+        filterCheckboxEnabled = false; // Track that filter is disabled
+        
+        // Apply filters to restore territory visibility
+        applyFilters();
+        
+        // Update UI checkboxes
+        updateVisibilityCheckboxes();
+        
+        // Update territory filter UI
+        updateTerritoryFilterUI();
+        
+        // Redraw
+        draw();
+    }
+}
+
+// Update visibility checkboxes in the UI to reflect current state
+function updateVisibilityCheckboxes() {
+    const showMarkersCheckbox = document.getElementById('showMarkers');
+    if (showMarkersCheckbox) {
+        showMarkersCheckbox.checked = showMarkers;
+    }
+    
+    const showEventSpawnsCheckbox = document.getElementById('showEventSpawns');
+    if (showEventSpawnsCheckbox) {
+        showEventSpawnsCheckbox.checked = showEventSpawns;
+    }
+    
+    const showTerritoriesCheckbox = document.getElementById('showTerritories');
+    if (showTerritoriesCheckbox) {
+        showTerritoriesCheckbox.checked = showTerritories;
+    }
+    
+    const showEffectAreasCheckbox = document.getElementById('showEffectAreas');
+    if (showEffectAreasCheckbox) {
+        showEffectAreasCheckbox.checked = showEffectAreas;
+    }
+    
+    const showPlayerSpawnPointsCheckbox = document.getElementById('showPlayerSpawnPoints');
+    if (showPlayerSpawnPointsCheckbox) {
+        showPlayerSpawnPointsCheckbox.checked = showPlayerSpawnPoints;
     }
 }
 
