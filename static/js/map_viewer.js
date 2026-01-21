@@ -148,7 +148,7 @@ const markerTypes = {
         originalPositions: new Map(),
         // UI configuration
         uiConfig: {
-            showDiscardButton: false,
+            showDiscardButton: true,
             customControls: []
         }
     },
@@ -263,7 +263,7 @@ const markerTypes = {
         originalPositions: new Map(),
         // UI configuration
         uiConfig: {
-            showDiscardButton: false,
+            showDiscardButton: true,
             customControls: []
         }
     },
@@ -420,7 +420,7 @@ const markerTypes = {
         originalPositions: new Map(),
         // UI configuration
         uiConfig: {
-            showDiscardButton: false,
+            showDiscardButton: true,
             customControls: [
                 {
                     type: 'select',
