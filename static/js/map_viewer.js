@@ -26,11 +26,16 @@ let territories = []; // Territories from env/*.xml files
 let visibleTerritories = new Set(); // For filtering territories
 let activeTerritoryFilters = []; // Separate filters for territories
 let showTerritories = true;
-let territoryZones = []; // Flattened array of all zones for editing
+let territoryZones = []; // Flattened array of all zones for editing (legacy - kept for compatibility)
 let zoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 let selectedTerritoryType = ''; // Selected territory type for new zones
-let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing
+let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing (legacy - kept for compatibility)
 let zombieZoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
+
+// Territory type-specific editing system
+let territoryTypeZones = {}; // Map<territoryType, zoneArray>
+let territoryTypeZoneMaps = {}; // Map<territoryType, Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>>
+let territoryTypeMarkerTypes = {}; // Map<territoryType, markerTypeConfig> - dynamically created marker types
 let missionDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -1481,6 +1486,20 @@ class EditControlsManager {
         }
     }
     
+    // Show controls for a specific marker type and hide all others
+    showControlsForType(markerType) {
+        // Hide all controls first
+        this.activeControls.forEach((controls, type) => {
+            controls.style.display = 'none';
+        });
+        
+        // Show controls for the specified type
+        const controls = this.activeControls.get(markerType);
+        if (controls) {
+            controls.style.display = 'block';
+        }
+    }
+    
     hideControls(markerType) {
         const controls = this.activeControls.get(markerType);
         if (controls) {
@@ -2525,8 +2544,28 @@ function drawMarkerType(markerType) {
     // Calculate offset for hover detection
     const eventSpawnOffset = markers.length;
     const zoneOffset = eventSpawnOffset + eventSpawns.length;
-    const regularTerritoryZoneCount = editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
-    const zombieTerritoryZoneCount = editingEnabled.zombieTerritoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
+    
+    // Calculate territory zone counts - exclude zones that are being edited via territory type-specific marker types
+    let regularTerritoryZoneCount = 0;
+    let zombieTerritoryZoneCount = 0;
+    
+    // Count zones that are NOT being edited via territory type-specific marker types
+    territories.forEach(territory => {
+        const isZombie = isZombieTerritoryType(territory.territory_type);
+        const territoryTypeKey = `territoryType_${territory.territory_type}`;
+        const isBeingEditedByType = editingEnabled[territoryTypeKey];
+        
+        if (isZombie) {
+            if (!editingEnabled.zombieTerritoryZones && !isBeingEditedByType) {
+                zombieTerritoryZoneCount += territory.zones.length;
+            }
+        } else {
+            if (!editingEnabled.territoryZones && !isBeingEditedByType) {
+                regularTerritoryZoneCount += territory.zones.length;
+            }
+        }
+    });
+    
     const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
     
     // Calculate offset for this marker type
@@ -2771,6 +2810,7 @@ function drawZombieTerritories() {
 }
 
 // Draw territory circles and zone markers (non-zombie)
+// Now uses territory type-specific marker types
 function drawTerritories() {
     if (!showTerritories) {
         return;
@@ -2780,90 +2820,18 @@ function drawTerritories() {
         return;
     }
     
-    const isEditing = editingEnabled.territoryZones;
-    const isDraggingThisType = isDragging && draggedMarkerType === 'territoryZones';
-    const typeConfig = markerTypes.territoryZones;
-    
-    let drawnTerritories = 0;
-    let drawnZones = 0;
-    let zoneIndexOffset = markers.length + eventSpawns.length;
-    
-    territories.forEach((territory, territoryIndex) => {
+    // Draw each territory type using its marker type
+    const typeNames = getAllTerritoryTypeNames();
+    typeNames.forEach(territoryType => {
         // Skip zombie territories - they're drawn separately
-        if (isZombieTerritoryType(territory.territory_type)) {
+        if (isZombieTerritoryType(territoryType)) {
             return;
         }
         
-        // Check if territory is visible (filtered)
-        if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
-            return; // Skip hidden territories
+        const typeKey = `territoryType_${territoryType}`;
+        if (markerTypes[typeKey]) {
+            drawMarkerType(typeKey);
         }
-        
-        // Draw zone markers and circles within territory
-        territory.zones.forEach((zone, zoneIndex) => {
-            // Find flattened index for this zone
-            let flattenedIndex = -1;
-            zoneToTerritoryMap.forEach((value, key) => {
-                if (value.territoryIndex === territoryIndex && value.zoneIndex === zoneIndex) {
-                    flattenedIndex = key;
-                }
-            });
-            
-            // If mapping not found, try to find by matching zone data (for newly added zones)
-            if (flattenedIndex < 0 && isEditing) {
-                territoryZones.forEach((tz, idx) => {
-                    if (tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
-                        tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex) {
-                        flattenedIndex = idx;
-                    }
-                });
-            }
-            
-            // Skip deleted zones when editing
-            if (isEditing && flattenedIndex >= 0 && typeConfig.isDeleted(flattenedIndex)) {
-                return;
-            }
-            
-            const zoneScreenPos = worldToScreen(zone.x, zone.z);
-            
-            if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
-                return;
-            }
-            
-            // Calculate offset for hover detection (markers + event spawns + previous zones)
-            const zoneMarkerIndex = zoneIndexOffset + zoneIndex;
-            const isHovered = hoveredMarkerIndex === zoneMarkerIndex;
-            
-            // Get zone radius (default to 50 if not provided for backward compatibility)
-            const zoneRadius = zone.radius || 50.0;
-            const screenRadius = zoneRadius * viewScale;
-            
-            // Check editing state if editing is enabled
-            const isSelected = isEditing && flattenedIndex >= 0 && typeConfig.selected.has(flattenedIndex);
-            const hasUnsavedChanges = isEditing && flattenedIndex >= 0 && typeConfig.originalPositions.has(flattenedIndex);
-            const isNew = isEditing && flattenedIndex >= 0 && typeConfig.new.has(flattenedIndex);
-            const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('territoryZones') && draggedSelectedMarkers.get('territoryZones').has(flattenedIndex)));
-            const isEditingRadius = radiusEditMarkerType === 'territoryZones' && radiusEditIndex === flattenedIndex;
-            
-            // Use renderer to draw zone marker with custom territory color
-            const renderer = new MarkerRenderer(typeConfig, ctx);
-            const renderState = {
-                isSelected,
-                isHovered,
-                isEditing,
-                isDragging: isBeingDragged,
-                isEditingRadius,
-                isNew,
-                hasUnsavedChanges
-            };
-            
-            // Create a marker object with color for the renderer
-            const markerWithColor = { ...zone, color: territory.color };
-            renderer.render(markerWithColor, flattenedIndex >= 0 ? flattenedIndex : zoneIndex, renderState, territory.color);
-            drawnZones++;
-        });
-        
-        zoneIndexOffset += territory.zones.length;
     });
 }
 
@@ -2917,8 +2885,24 @@ function drawTooltip() {
     const eventSpawnOffset = markers.length;
     const zoneOffset = eventSpawnOffset + eventSpawns.length;
     // Calculate offsets for regular and zombie territories when not editing
-    const regularTerritoryZoneCount = editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
-    const zombieTerritoryZoneCount = editingEnabled.zombieTerritoryZones ? 0 : territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
+    // Exclude zones that are being edited via territory type-specific marker types
+    let regularTerritoryZoneCount = 0;
+    let zombieTerritoryZoneCount = 0;
+    territories.forEach(territory => {
+        const isZombie = isZombieTerritoryType(territory.territory_type);
+        const territoryTypeKey = `territoryType_${territory.territory_type}`;
+        const isBeingEditedByType = editingEnabled[territoryTypeKey];
+        
+        if (isZombie) {
+            if (!editingEnabled.zombieTerritoryZones && !isBeingEditedByType) {
+                zombieTerritoryZoneCount += territory.zones.length;
+            }
+        } else {
+            if (!editingEnabled.territoryZones && !isBeingEditedByType) {
+                regularTerritoryZoneCount += territory.zones.length;
+            }
+        }
+    });
     const regularTerritoryZoneOffset = zoneOffset;
     const zombieTerritoryZoneOffset = zoneOffset + regularTerritoryZoneCount;
     const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
@@ -2938,8 +2922,8 @@ function drawTooltip() {
                     hoveredMarkerType = markerType;
                     hoveredMarkerIndexInType = index;
                     isEventSpawn = false;
-                    isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones');
-                    isZombieTerritory = (markerType === 'zombieTerritoryZones');
+                    isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_'));
+                    isZombieTerritory = (markerType === 'zombieTerritoryZones' || (markerType.startsWith('territoryType_') && isZombieTerritoryType(markerType.replace('territoryType_', ''))));
                     isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
                     foundInEditable = true;
                     break;
@@ -3510,6 +3494,17 @@ function isMarkerVisible(markerType, index) {
             return visibleTerritories.has(territoryIndex);
         }
         return true; // No filters = all visible
+    } else if (markerType.startsWith('territoryType_')) {
+        // Check if the territory containing this zone is visible (for territory type-specific marker types)
+        const territoryType = markerType.replace('territoryType_', '');
+        const mapEntry = territoryTypeZoneMaps[territoryType]?.get(index);
+        if (!mapEntry) return true; // If no mapping, assume visible
+        const territoryIndex = mapEntry.territoryIndex;
+        // If filters are active, check visibility set
+        if (visibleTerritories.size > 0) {
+            return visibleTerritories.has(territoryIndex);
+        }
+        return true; // No filters = all visible
     }
     // For other types, check if the type is shown
     const typeConfig = markerTypes[markerType];
@@ -3624,10 +3619,17 @@ function updateHoveredMarker(screenX, screenY) {
         });
     }
     
-    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing territory zones
+    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing territory zones or territory type-specific zones
     if (showTerritories && !editingEnabled.territoryZones) {
         let zoneIndexOffset = markers.length + eventSpawns.length;
         territories.forEach((territory, territoryIndex) => {
+            // Skip zones that are being edited via territory type-specific marker types
+            const territoryTypeKey = `territoryType_${territory.territory_type}`;
+            if (editingEnabled[territoryTypeKey]) {
+                zoneIndexOffset += territory.zones.length; // Skip zones in territories being edited by type
+                return;
+            }
+            
             if (!visibleTerritories.has(territoryIndex) && visibleTerritories.size > 0) {
                 zoneIndexOffset += territory.zones.length; // Skip zones in hidden territories
                 return;
@@ -3653,13 +3655,28 @@ function updateHoveredMarker(screenX, screenY) {
     if (!isDragging && !isEditingRadius) {
         let offset = markers.length + eventSpawns.length;
         
-        // If not editing territory zones, add zone offset (non-zombie)
+        // If not editing territory zones, add zone offset (non-zombie, excluding zones being edited by type)
         if (!editingEnabled.territoryZones) {
-            offset += territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
+            offset += territories.reduce((sum, t) => {
+                const territoryTypeKey = `territoryType_${t.territory_type}`;
+                if (isZombieTerritoryType(t.territory_type) || editingEnabled[territoryTypeKey]) {
+                    return sum;
+                }
+                return sum + t.zones.length;
+            }, 0);
         }
-        // If not editing zombie territory zones, add zombie zone offset
+        // If not editing zombie territory zones, add zombie zone offset (excluding zones being edited by type)
         if (!editingEnabled.zombieTerritoryZones) {
-            offset += territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? t.zones.length : 0), 0);
+            offset += territories.reduce((sum, t) => {
+                if (!isZombieTerritoryType(t.territory_type)) {
+                    return sum;
+                }
+                const territoryTypeKey = `territoryType_${t.territory_type}`;
+                if (editingEnabled[territoryTypeKey]) {
+                    return sum;
+                }
+                return sum + t.zones.length;
+            }, 0);
         }
         
         for (const markerType of Object.keys(markerTypes)) {
@@ -3669,6 +3686,10 @@ function updateHoveredMarker(screenX, screenY) {
                 continue;
             }
             if (markerType === 'zombieTerritoryZones' && !editingEnabled.zombieTerritoryZones) {
+                continue;
+            }
+            // Skip territory type-specific marker types if not editing
+            if (markerType.startsWith('territoryType_') && !editingEnabled[markerType]) {
                 continue;
             }
             
@@ -3761,7 +3782,7 @@ async function handleRightClick(screenX, screenY) {
                     const index = hoveredMarkerIndex - currentOffset;
                     if (!typeConfig.isDeleted(index)) {
                         marker = typeConfig.getMarker(index);
-                        if (markerType === 'territoryZones') {
+                        if (markerType === 'territoryZones' || markerType.startsWith('territoryType_')) {
                             locationSource = 'zone';
                         } else if (markerType === 'zombieTerritoryZones') {
                             locationSource = 'zombie zone';
@@ -4242,6 +4263,20 @@ function deleteSelectedMarkers(markerType) {
                         // Remove mapping
                         zoneToTerritoryMap.delete(index);
                     }
+                } else if (markerType.startsWith('territoryType_') && marker) {
+                    // For territory type-specific marker types, remove from territories array
+                    const territoryType = markerType.replace('territoryType_', '');
+                    const mapEntry = territoryTypeZoneMaps[territoryType]?.get(index);
+                    if (mapEntry) {
+                        const { territoryIndex, zoneIndex } = mapEntry;
+                        if (territoryIndex >= 0 && territoryIndex < territories.length &&
+                            zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+                            // Remove from territories array
+                            territories[territoryIndex].zones.splice(zoneIndex, 1);
+                        }
+                        // Remove mapping
+                        territoryTypeZoneMaps[territoryType].delete(index);
+                    }
                 }
                 
                 typeConfig.new.delete(index);
@@ -4305,6 +4340,24 @@ function deleteSelectedMarkers(markerType) {
                     newMap.forEach((value, key) => {
                         zoneToTerritoryMap.set(key, value);
                     });
+                } else if (markerType.startsWith('territoryType_')) {
+                    // Update mappings for territory type-specific marker types
+                    const territoryType = markerType.replace('territoryType_', '');
+                    const map = territoryTypeZoneMaps[territoryType];
+                    if (map) {
+                        const newMap = new Map();
+                        map.forEach((value, key) => {
+                            if (key < index) {
+                                newMap.set(key, value);
+                            } else if (key > index) {
+                                newMap.set(key - 1, value);
+                            }
+                        });
+                        territoryTypeZoneMaps[territoryType].clear();
+                        newMap.forEach((value, key) => {
+                            territoryTypeZoneMaps[territoryType].set(key, value);
+                        });
+                    }
                 }
             } else {
                 // Mark as deleted (don't remove from array yet, will be removed on save)
@@ -4459,7 +4512,15 @@ function addMarkerAt(markerType, screenX, screenY) {
         newMarker.color = territory.color;
         
         // Set mapping using the correct flattened index (newIndex)
-        zoneToTerritoryMap.set(newIndex, { territoryIndex: targetTerritoryIndex, zoneIndex: zoneIndex });
+        if (markerType.startsWith('territoryType_')) {
+            const territoryType = markerType.replace('territoryType_', '');
+            if (!territoryTypeZoneMaps[territoryType]) {
+                territoryTypeZoneMaps[territoryType] = new Map();
+            }
+            territoryTypeZoneMaps[territoryType].set(newIndex, { territoryIndex: targetTerritoryIndex, zoneIndex: zoneIndex });
+        } else {
+            zoneToTerritoryMap.set(newIndex, { territoryIndex: targetTerritoryIndex, zoneIndex: zoneIndex });
+        }
     }
     
     // Select the newly added marker
@@ -4766,12 +4827,17 @@ async function saveMarkerChanges(markerType) {
         const array = typeConfig.getArray();
         
         // Special handling for territory zones - need to update territories first
+        const isTerritoryTypeMarker = markerType.startsWith('territoryType_');
         if (markerType === 'territoryZones') {
             // Update territories from flattened zones before saving
             updateTerritoriesFromZones();
         } else if (markerType === 'zombieTerritoryZones') {
             // Update zombie territories from flattened zones before saving
             updateZombieTerritoriesFromZones();
+        } else if (isTerritoryTypeMarker) {
+            // Update territories from zones for this specific territory type
+            const territoryType = markerType.replace('territoryType_', '');
+            updateTerritoriesFromZonesForType(territoryType);
         }
         
         // Prepare data for save - only include markers that have changes
@@ -4781,7 +4847,7 @@ async function saveMarkerChanges(markerType) {
         const newIndices = Array.from(typeConfig.new);
         const modifiedIndices = Array.from(typeConfig.originalPositions.keys());
         
-        if (markerType === 'territoryZones') {
+        if (markerType === 'territoryZones' || isTerritoryTypeMarker) {
             // Only include zones that are modified, deleted, or new
             const allChangedIndices = new Set([...deletedIndices, ...newIndices, ...modifiedIndices]);
             allChangedIndices.forEach(idx => {
@@ -4800,7 +4866,7 @@ async function saveMarkerChanges(markerType) {
             dataKey = 'spawn_points';
         } else if (markerType === 'effectAreas') {
             dataKey = 'effect_areas';
-        } else if (markerType === 'territoryZones') {
+        } else if (markerType === 'territoryZones' || isTerritoryTypeMarker) {
             dataKey = 'zones';
         }
         
@@ -4812,7 +4878,7 @@ async function saveMarkerChanges(markerType) {
         };
         
         // For territory zones, also send territories structure
-        if (markerType === 'territoryZones') {
+        if (markerType === 'territoryZones' || isTerritoryTypeMarker) {
             requestBody.territories = territories.map(t => ({
                 id: t.id,
                 name: t.name,
@@ -4869,6 +4935,12 @@ async function saveMarkerChanges(markerType) {
                 updateTerritoriesFromZones();
                 // Re-flatten to ensure consistency
                 flattenTerritoryZones();
+            } else if (isTerritoryTypeMarker) {
+                // Update territories from zones for this specific territory type
+                const territoryType = markerType.replace('territoryType_', '');
+                updateTerritoriesFromZonesForType(territoryType);
+                // Re-flatten to ensure consistency (this will update all territory type arrays)
+                flattenTerritoryZones();
             }
             
             // Emit event
@@ -4891,7 +4963,8 @@ function restoreMarkerPositions(markerType) {
     const array = typeConfig.getArray();
     
     // For territory zones, we need to handle the nested structure
-    if (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones') {
+    const isTerritoryTypeMarker = markerType.startsWith('territoryType_');
+    if (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones' || isTerritoryTypeMarker) {
         // Remove newly added markers from both flattened array and territories array
         const newIndices = Array.from(typeConfig.new).sort((a, b) => b - a);
         for (const index of newIndices) {
@@ -4919,6 +4992,21 @@ function restoreMarkerPositions(markerType) {
                     // Sync back to territories array
                     if (markerType === 'territoryZones') {
                         syncTerritoryZoneToTerritories(index);
+                    } else if (isTerritoryTypeMarker) {
+                        const territoryType = markerType.replace('territoryType_', '');
+                        const mapEntry = territoryTypeZoneMaps[territoryType]?.get(index);
+                        if (mapEntry) {
+                            const { territoryIndex, zoneIndex } = mapEntry;
+                            if (territoryIndex >= 0 && territoryIndex < territories.length &&
+                                zoneIndex >= 0 && zoneIndex < territories[territoryIndex].zones.length) {
+                                const territoryZone = territories[territoryIndex].zones[zoneIndex];
+                                territoryZone.x = marker.x;
+                                territoryZone.y = marker.y;
+                                territoryZone.z = marker.z;
+                                territoryZone.radius = marker.radius;
+                                territoryZone.xml = marker.xml || `<zone x="${marker.x}" z="${marker.z}" r="${marker.radius}"/>`;
+                            }
+                        }
                     } else {
                         syncZombieTerritoryZoneToTerritories(index);
                     }
@@ -4927,7 +5015,7 @@ function restoreMarkerPositions(markerType) {
         });
         
         // Rebuild mappings after removing new markers
-        if (markerType === 'territoryZones') {
+        if (markerType === 'territoryZones' || isTerritoryTypeMarker) {
             flattenTerritoryZones();
         } else {
             // For zombie territories, we need to rebuild the flattened array
@@ -4995,27 +5083,56 @@ async function handleEditingToggle(markerType, enabled) {
     const typeConfig = markerTypes[markerType];
     if (!typeConfig) return;
     
-    editingEnabled[markerType] = enabled;
-    
-    // When enabling editing, clear selections for other types using SelectionManager
+    // If enabling, first disable all other types
     if (enabled) {
-        // Clear selections for all other types
+        // Disable all other marker types
         for (const otherType of Object.keys(markerTypes)) {
-            if (otherType !== markerType) {
+            if (otherType !== markerType && editingEnabled[otherType]) {
+                // Check for unsaved changes before disabling
+                const otherTypeConfig = markerTypes[otherType];
+                if (otherTypeConfig) {
+                    const hasChanges = otherTypeConfig.originalPositions.size > 0 || 
+                                      otherTypeConfig.deleted.size > 0 || 
+                                      otherTypeConfig.new.size > 0;
+                    if (hasChanges) {
+                        const discard = confirm(`You have unsaved changes for ${otherTypeConfig.getDisplayName()}. Discard them?`);
+                        if (discard) {
+                            restoreMarkerPositions(otherType);
+                            selectionManager.clearSelectionsForType(otherType);
+                        } else {
+                            // User wants to keep changes - don't enable new type
+                            // Update dropdown to reflect current state
+                            const select = document.getElementById('editMarkerTypeSelect');
+                            if (select) {
+                                select.value = otherType;
+                            }
+                            return;
+                        }
+                    }
+                }
+                editingEnabled[otherType] = false;
                 selectionManager.clearSelectionsForType(otherType);
+                if (editControlsManager) {
+                    editControlsManager.hideControls(otherType);
+                }
             }
         }
         // Also clear regular markers
         selectionManager.clearSelectionsForType('regular');
-    } else {
-        // When disabling editing, clear selection for this type
+    }
+    
+    editingEnabled[markerType] = enabled;
+    
+    // When disabling editing, clear selection for this type
+    if (!enabled) {
         selectionManager.clearSelectionsForType(markerType);
     }
     
     // Show/hide edit controls using EditControlsManager
     if (editControlsManager) {
         if (enabled) {
-            editControlsManager.showControls(markerType);
+            // Show controls for this type and hide all others
+            editControlsManager.showControlsForType(markerType);
         } else {
             editControlsManager.hideControls(markerType);
         }
@@ -5027,6 +5144,22 @@ async function handleEditingToggle(markerType, enabled) {
         canvas.classList.add('editing-enabled');
     } else {
         canvas.classList.remove('editing-enabled');
+    }
+    
+    // Update dropdown to reflect current state
+    const select = document.getElementById('editMarkerTypeSelect');
+    if (select) {
+        if (enabled) {
+            select.value = markerType;
+        } else {
+            // Check if any other type is enabled
+            const anyOtherEnabled = Object.keys(markerTypes).some(type => 
+                type !== markerType && editingEnabled[type]
+            );
+            if (!anyOtherEnabled) {
+                select.value = '';
+            }
+        }
     }
     
     if (!enabled) {
@@ -5045,11 +5178,13 @@ async function handleEditingToggle(markerType, enabled) {
             } else {
                 // User wants to keep changes - re-enable editing
                 editingEnabled[markerType] = true;
-                const checkboxId = typeConfig.getEditCheckboxId();
-                const checkbox = document.getElementById(checkboxId);
-                if (checkbox) checkbox.checked = true;
+                const select = document.getElementById('editMarkerTypeSelect');
+                if (select) select.value = markerType;
                 // Re-add cursor class since we're keeping editing enabled
                 canvas.classList.add('editing-enabled');
+                if (editControlsManager) {
+                    editControlsManager.showControlsForType(markerType);
+                }
                 return;
             }
         } else {
@@ -5161,28 +5296,246 @@ async function loadEffectAreas() {
     }
 }
 
-// Flatten zones from territories into a single array for editing
+// Create marker type configuration for a specific territory type
+function createTerritoryTypeMarkerType(territoryType) {
+    const typeKey = `territoryType_${territoryType}`;
+    
+    // Initialize arrays if they don't exist
+    if (!territoryTypeZones[territoryType]) {
+        territoryTypeZones[territoryType] = [];
+    }
+    if (!territoryTypeZoneMaps[territoryType]) {
+        territoryTypeZoneMaps[territoryType] = new Map();
+    }
+    
+    // Create marker type configuration
+    const markerType = {
+        getArray: () => territoryTypeZones[territoryType],
+        setArray: (arr) => { 
+            territoryTypeZones[territoryType] = arr;
+            // Update territories from flattened zones for this type
+            updateTerritoriesFromZonesForType(territoryType);
+        },
+        getShowFlag: () => showTerritories,
+        canEditRadius: true,
+        canEditDimensions: false,
+        saveEndpoint: '/api/territories/save',
+        getDisplayName: () => `Territory Zones (${territoryType})`,
+        getEditControlsId: () => `territoryType_${territoryType}_EditControls`,
+        getEditCheckboxId: () => `editTerritoryType_${territoryType}`,
+        getMarker: (index) => territoryTypeZones[territoryType][index],
+        isDeleted: (index) => markerType.deleted.has(index),
+        getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+        isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+            const screenRadius = (marker.radius || 50.0) * viewScale;
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance <= screenRadius + MARKER_INTERACTION_THRESHOLD;
+        },
+        createNew: (x, y, z) => {
+            // Find territory of this type
+            let defaultRadius = 50.0;
+            let territoryColor = '#FF0000';
+            let territoryIndex = -1;
+            
+            // Find first territory of this type
+            for (let i = 0; i < territories.length; i++) {
+                if (territories[i].territory_type === territoryType) {
+                    territoryIndex = i;
+                    territoryColor = territories[i].color;
+                    if (territories[i].zones.length > 0) {
+                        defaultRadius = territories[i].zones[0].radius || 50.0;
+                    }
+                    break;
+                }
+            }
+            
+            // If no territory of this type exists, we'll create one when saving
+            if (territoryIndex < 0) {
+                territoryIndex = 0; // Placeholder - will be created on save
+                const typeNames = getAllTerritoryTypeNames();
+                const typeIndex = typeNames.indexOf(territoryType);
+                const colors = [
+                    '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
+                    '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
+                    '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
+                ];
+                territoryColor = colors[typeIndex % colors.length];
+            }
+            
+            // Create new zone
+            const newZone = {
+                id: territoryTypeZones[territoryType].length,
+                name: `Zone_${territoryTypeZones[territoryType].length}`,
+                x: x,
+                y: y,
+                z: z,
+                radius: defaultRadius,
+                territoryIndex: territoryIndex,
+                zoneIndex: -1, // Will be set when added to territory
+                territoryType: territoryType,
+                color: territoryColor,
+                xml: `<zone x="${x}" z="${z}" r="${defaultRadius}"/>`
+            };
+            
+            return newZone;
+        },
+        getOriginalData: (marker) => ({ 
+            x: marker.x, 
+            y: marker.y, 
+            z: marker.z, 
+            radius: marker.radius || 50.0 
+        }),
+        restoreOriginal: (marker, original) => {
+            marker.x = original.x;
+            marker.y = original.y;
+            marker.z = original.z;
+            marker.radius = original.radius;
+        },
+        prepareSaveData: (marker, index) => {
+            const mapEntry = territoryTypeZoneMaps[territoryType].get(index);
+            return {
+                index: index,
+                territoryType: marker.territoryType,
+                territoryIndex: mapEntry ? mapEntry.territoryIndex : marker.territoryIndex,
+                zoneIndex: mapEntry ? mapEntry.zoneIndex : marker.zoneIndex,
+                name: marker.name || `Zone_${index}`,
+                x: marker.x != null ? marker.x : 0,
+                y: marker.y != null ? marker.y : 0,
+                z: marker.z != null ? marker.z : 0,
+                radius: marker.radius != null ? marker.radius : 50.0,
+                isNew: markerType.new.has(index),
+                isDeleted: markerType.deleted.has(index)
+            };
+        },
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.radius !== undefined) {
+                lines.push('');
+                lines.push(`Radius: ${marker.radius.toFixed(2)} m`);
+            }
+            lines.push('');
+            lines.push(`Territory Type: ${territoryType}`);
+            return lines;
+        },
+        selected: new Set(),
+        deleted: new Set(),
+        new: new Set(),
+        originalPositions: new Map(),
+        uiConfig: {
+            showDiscardButton: true,
+            customControls: []
+        }
+    };
+    
+    return markerType;
+}
+
+// Update territories from zones for a specific territory type
+function updateTerritoriesFromZonesForType(territoryType) {
+    // Rebuild territories from flattened zones for this type
+    const territoryMap = new Map(); // Map<territoryIndex, {territory, zones}>
+    
+    territoryTypeZones[territoryType].forEach((zone, flattenedIndex) => {
+        if (markerTypes[`territoryType_${territoryType}`].deleted.has(flattenedIndex)) {
+            return; // Skip deleted zones
+        }
+        
+        const mapEntry = territoryTypeZoneMaps[territoryType].get(flattenedIndex);
+        const territoryIndex = mapEntry ? mapEntry.territoryIndex : zone.territoryIndex;
+        
+        if (!territoryMap.has(territoryIndex)) {
+            if (territoryIndex < territories.length) {
+                const originalTerritory = territories[territoryIndex];
+                territoryMap.set(territoryIndex, {
+                    territory: { ...originalTerritory },
+                    zones: []
+                });
+            }
+        }
+        
+        const entry = territoryMap.get(territoryIndex);
+        if (entry) {
+            const zoneCopy = {
+                id: entry.zones.length,
+                name: zone.name,
+                x: zone.x,
+                y: zone.y,
+                z: zone.z,
+                radius: zone.radius,
+                xml: zone.xml || `<zone x="${zone.x}" z="${zone.z}" r="${zone.radius}"/>`
+            };
+            entry.zones.push(zoneCopy);
+        }
+    });
+    
+    // Update territories array
+    territoryMap.forEach((entry, territoryIndex) => {
+        if (territoryIndex < territories.length && territories[territoryIndex].territory_type === territoryType) {
+            territories[territoryIndex].zones = entry.zones;
+        }
+    });
+}
+
+// Flatten zones from territories into arrays per territory type
 function flattenTerritoryZones() {
+    // Clear all existing arrays
     territoryZones = [];
     zoneToTerritoryMap.clear();
     zombieTerritoryZones = [];
     zombieZoneToTerritoryMap.clear();
+    territoryTypeZones = {};
+    territoryTypeZoneMaps = {};
+    territoryTypeMarkerTypes = {};
     
+    // Get all unique territory types
+    const typeNames = getAllTerritoryTypeNames();
+    
+    // Initialize arrays and create marker types for each territory type
+    typeNames.forEach(territoryType => {
+        territoryTypeZones[territoryType] = [];
+        territoryTypeZoneMaps[territoryType] = new Map();
+        
+        // Create marker type for this territory type
+        const markerType = createTerritoryTypeMarkerType(territoryType);
+        const typeKey = `territoryType_${territoryType}`;
+        territoryTypeMarkerTypes[territoryType] = markerType;
+        markerTypes[typeKey] = markerType;
+    });
+    
+    // Populate arrays by territory type
     territories.forEach((territory, territoryIndex) => {
         const isZombieTerritory = isZombieTerritoryType(territory.territory_type);
+        const territoryType = territory.territory_type;
         
         territory.zones.forEach((zone, zoneIndex) => {
-            const flattenedIndex = isZombieTerritory ? zombieTerritoryZones.length : territoryZones.length;
             // Create a copy of the zone with territory metadata
             const zoneCopy = {
                 ...zone,
                 territoryIndex: territoryIndex,
                 zoneIndex: zoneIndex,
-                territoryType: territory.territory_type,
+                territoryType: territoryType,
                 color: territory.color,
                 territoryName: territory.name
             };
             
+            // Add to territory type-specific array
+            if (territoryTypeZones[territoryType]) {
+                const flattenedIndex = territoryTypeZones[territoryType].length;
+                territoryTypeZones[territoryType].push(zoneCopy);
+                territoryTypeZoneMaps[territoryType].set(flattenedIndex, { territoryIndex, zoneIndex });
+            }
+            
+            // Also maintain legacy arrays for compatibility
+            const flattenedIndex = isZombieTerritory ? zombieTerritoryZones.length : territoryZones.length;
             if (isZombieTerritory) {
                 zombieTerritoryZones.push(zoneCopy);
                 zombieZoneToTerritoryMap.set(flattenedIndex, { territoryIndex, zoneIndex });
@@ -5369,9 +5722,11 @@ async function loadTerritories() {
         
         if (data.success) {
             territories = data.territories || [];
-            // Flatten zones for editing
+            // Flatten zones for editing (creates territory type-specific arrays)
             flattenTerritoryZones();
-            // Populate territory type selector for editing
+            // Update UI to include territory type-specific edit checkboxes
+            updateTerritoryTypeEditUI();
+            // Populate territory type selector for editing (legacy - for old territoryZones)
             populateTerritoryTypeSelector();
             // Also update the selector in EditControlsManager if it exists
             updateTerritoryTypeSelectorOptions();
@@ -6690,7 +7045,40 @@ async function restoreSavedState() {
     }
 }
 
-// Initialize edit markers UI (checkboxes and controls)
+// Get all available marker types for editing (including territory types)
+function getAllEditableMarkerTypes() {
+    const types = [];
+    
+    // Add standard marker types (excluding old territoryZones)
+    Object.keys(markerTypes).forEach(markerType => {
+        if (markerType !== 'territoryZones') {
+            types.push({
+                key: markerType,
+                displayName: markerTypes[markerType].getDisplayName(),
+                typeConfig: markerTypes[markerType]
+            });
+        }
+    });
+    
+    // Add territory type-specific marker types
+    Object.keys(territoryTypeMarkerTypes).forEach(territoryType => {
+        const typeKey = `territoryType_${territoryType}`;
+        if (markerTypes[typeKey]) {
+            types.push({
+                key: typeKey,
+                displayName: markerTypes[typeKey].getDisplayName(),
+                typeConfig: markerTypes[typeKey]
+            });
+        }
+    });
+    
+    // Sort by display name
+    types.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    
+    return types;
+}
+
+// Initialize edit markers UI (dropdown selector and controls)
 function initializeEditMarkersUI() {
     const container = document.getElementById('editMarkersContainer');
     if (!container) {
@@ -6698,57 +7086,134 @@ function initializeEditMarkersUI() {
         return;
     }
     
-    // Create checkboxes and descriptions for each marker type
-    Object.keys(markerTypes).forEach(markerType => {
-        const typeConfig = markerTypes[markerType];
+    // Create dropdown label
+    const label = document.createElement('label');
+    label.setAttribute('for', 'editMarkerTypeSelect');
+    label.style.display = 'block';
+    label.style.marginBottom = '8px';
+    label.style.fontSize = '12px';
+    label.style.color = 'var(--nord4)';
+    label.textContent = 'Select marker type to edit:';
+    container.appendChild(label);
+    
+    // Create dropdown select
+    const select = document.createElement('select');
+    select.id = 'editMarkerTypeSelect';
+    select.style.width = '100%';
+    select.style.padding = '6px';
+    select.style.fontSize = '12px';
+    select.style.background = 'var(--nord1)';
+    select.style.color = 'var(--nord4)';
+    select.style.border = '1px solid var(--nord3)';
+    select.style.borderRadius = '4px';
+    select.style.marginBottom = '10px';
+    
+    // Add "None" option
+    const noneOption = document.createElement('option');
+    noneOption.value = '';
+    noneOption.textContent = 'None (view only)';
+    select.appendChild(noneOption);
+    
+    // Populate with marker types (will be updated when territories are loaded)
+    updateEditMarkerTypeDropdown();
+    
+    // Add change event listener
+    select.addEventListener('change', async (e) => {
+        const selectedType = e.target.value;
         
-        // Create checkbox label
-        const label = document.createElement('label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.id = typeConfig.getEditCheckboxId();
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(` Enable editing: ${typeConfig.getDisplayName()}`));
-        container.appendChild(label);
-        
-        // Create description paragraph
-        const desc = document.createElement('p');
-        desc.style.fontSize = '12px';
-        desc.style.color = 'var(--nord4)';
-        desc.style.marginTop = '5px';
-        desc.style.marginBottom = '0';
-        
-        // Generate description based on capabilities
-        let description = 'When enabled, ';
-        if (typeConfig.canEditRadius) {
-            description += 'drag to move, drag edge/handle to resize radius. ';
-        } else if (typeConfig.canEditDimensions) {
-            description += 'drag markers to move them. ';
-        } else {
-            description += 'drag markers to move them. ';
-        }
-        description += 'Use Save button to save changes.';
-        if (markerType === 'zombieTerritoryZones') {
-            description = 'When enabled, drag to move, drag edge/handle to resize radius. Configure zone parameters using the list boxes below.';
-        }
-        
-        desc.textContent = description;
-        container.appendChild(desc);
-        
-        // Add event listener for checkbox
-        checkbox.addEventListener('change', async (e) => {
-            await handleEditingToggle(markerType, e.target.checked);
-            // Populate territory type selector when enabling territory zones editing
-            if (markerType === 'territoryZones' && e.target.checked) {
-                populateTerritoryTypeSelector();
+        // Disable all editing
+        for (const markerType of Object.keys(markerTypes)) {
+            if (editingEnabled[markerType]) {
+                await handleEditingToggle(markerType, false);
             }
-            draw();
-        });
+        }
+        
+        // Enable selected type if not "None"
+        if (selectedType) {
+            await handleEditingToggle(selectedType, true);
+        }
+        
+        draw();
     });
     
+    container.appendChild(select);
+    
+    // Create container for edit controls (will be populated by EditControlsManager)
+    const controlsContainer = document.createElement('div');
+    controlsContainer.id = 'editControlsContainer';
+    container.appendChild(controlsContainer);
+    
     // Initialize EditControlsManager
-    editControlsManager = new EditControlsManager('editMarkersContainer');
+    editControlsManager = new EditControlsManager('editControlsContainer');
     editControlsManager.initialize();
+}
+
+// Update the edit marker type dropdown with current marker types
+function updateEditMarkerTypeDropdown() {
+    const select = document.getElementById('editMarkerTypeSelect');
+    if (!select) return;
+    
+    // Get currently selected value
+    const currentValue = select.value;
+    
+    // Clear existing options except "None"
+    while (select.children.length > 1) {
+        select.removeChild(select.lastChild);
+    }
+    
+    // Get all available marker types
+    const types = getAllEditableMarkerTypes();
+    
+    // Add options for each marker type
+    types.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type.key;
+        option.textContent = type.displayName;
+        select.appendChild(option);
+    });
+    
+    // Restore selection if it still exists
+    if (currentValue && types.some(t => t.key === currentValue)) {
+        select.value = currentValue;
+    } else {
+        select.value = '';
+    }
+}
+
+// Update edit markers UI to include territory type-specific options in dropdown
+function updateTerritoryTypeEditUI() {
+    // Update the dropdown to include new territory types
+    updateEditMarkerTypeDropdown();
+    
+    // Re-initialize EditControlsManager to include new territory type controls
+    if (editControlsManager) {
+        const controlsContainer = document.getElementById('editControlsContainer');
+        if (!controlsContainer) return;
+        
+        // Remove old controls for territory types
+        Object.keys(territoryTypeMarkerTypes).forEach(territoryType => {
+            const typeKey = `territoryType_${territoryType}`;
+            const oldControls = editControlsManager.getControlsElement(typeKey);
+            if (oldControls) {
+                oldControls.remove();
+                editControlsManager.activeControls.delete(typeKey);
+            }
+        });
+        
+        // Create new controls for each territory type
+        Object.keys(territoryTypeMarkerTypes).forEach(territoryType => {
+            const typeKey = `territoryType_${territoryType}`;
+            const typeConfig = markerTypes[typeKey];
+            if (!typeConfig) return;
+            
+            const config = editControlsManager.getUIConfig(typeKey);
+            const controls = editControlsManager.createControls(typeKey, config);
+            if (controls) {
+                controlsContainer.appendChild(controls);
+                editControlsManager.activeControls.set(typeKey, controls);
+            }
+        });
+    }
 }
 
 // Global EditControlsManager instance
