@@ -2964,6 +2964,10 @@ function drawTooltip() {
             if (hoveredMarkerIndex >= currentOffset && hoveredMarkerIndex < currentOffset + array.length) {
                 const index = hoveredMarkerIndex - currentOffset;
                 if (!typeConfig.isDeleted(index)) {
+                    // Check if marker is visible before showing tooltip
+                    if (!isMarkerVisible(markerType, index)) {
+                        return; // Don't show tooltip for hidden markers
+                    }
                     marker = typeConfig.getMarker(index);
                     hoveredMarkerType = markerType;
                     hoveredMarkerIndexInType = index;
@@ -3080,8 +3084,16 @@ function drawTooltip() {
             // Check non-editable spawn points
             const spawnPointOffset = baseEditableOffset;
             if (hoveredMarkerIndex >= spawnPointOffset && hoveredMarkerIndex < spawnPointOffset + playerSpawnPoints.length) {
+                // Check if player spawn points are enabled
+                if (!showPlayerSpawnPoints) {
+                    return; // Don't show tooltip if player spawn points are hidden
+                }
                 const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
                 if (spawnPointIndex < playerSpawnPoints.length) {
+                    // Check if player spawn point is visible
+                    if (!isMarkerVisible('playerSpawnPoints', spawnPointIndex)) {
+                        return; // Don't show tooltip for hidden player spawn points
+                    }
                     marker = playerSpawnPoints[spawnPointIndex];
                     hoveredMarkerType = 'playerSpawnPoints';
                     hoveredMarkerIndexInType = spawnPointIndex;
