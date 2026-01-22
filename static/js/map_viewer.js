@@ -43,6 +43,7 @@ let isFilteredToSingleType = false;
 let filteredMarkerType = null; // Track which marker type is currently filtered
 let filterCheckboxEnabled = false; // Track if the filter checkbox is checked (persists across type switches)
 let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing (legacy - kept for compatibility)
+let maxHeightFilter = Infinity; // Height filter - hide markers with y > this value
 let zombieZoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 
 // Territory type-specific editing system
@@ -2693,6 +2694,11 @@ function drawMarkers() {
             return; // Skip hidden markers
         }
         
+        // Check height filter
+        if (!passesHeightFilter(marker)) {
+            return; // Skip markers above height filter
+        }
+        
         const screenPos = worldToScreen(marker.x, marker.z);
         const isSelected = selectedMarkers.has(index);
         const isHovered = hoveredMarkerIndex === index;
@@ -2720,6 +2726,11 @@ function drawEventSpawns() {
         // If no filters (visibleEventSpawns is empty), show all items
         if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(index)) {
             return; // Skip hidden event spawns
+        }
+        
+        // Check height filter
+        if (!passesHeightFilter(spawn)) {
+            return; // Skip spawns above height filter
         }
         
         const screenPos = worldToScreen(spawn.x, spawn.z);
@@ -2816,6 +2827,11 @@ function drawZombieTerritories() {
             
             if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
                 return;
+            }
+            
+            // Check height filter
+            if (!passesHeightFilter(zone)) {
+                return; // Skip zones above height filter
             }
             
             // Calculate offset for hover detection
@@ -3530,8 +3546,118 @@ function handleWheel(e) {
     requestDraw();
 }
 
+// Helper function to check if a marker passes the height filter
+function passesHeightFilter(marker) {
+    if (marker === null || marker === undefined) return true;
+    // If marker has no y-coordinate, it passes (assume it's at ground level or undefined)
+    if (marker.y === undefined || marker.y === null) return true;
+    // Hide markers with y > maxHeightFilter
+    return marker.y <= maxHeightFilter;
+}
+
+// Find the maximum y-coordinate across all markers
+function findMaxYCoordinate() {
+    let maxY = 0;
+    
+    // Check regular markers
+    markers.forEach(marker => {
+        if (marker.y !== undefined && marker.y !== null && marker.y > maxY) {
+            maxY = marker.y;
+        }
+    });
+    
+    // Check event spawns
+    eventSpawns.forEach(spawn => {
+        if (spawn.y !== undefined && spawn.y !== null && spawn.y > maxY) {
+            maxY = spawn.y;
+        }
+    });
+    
+    // Check player spawn points
+    playerSpawnPoints.forEach(spawn => {
+        if (spawn.y !== undefined && spawn.y !== null && spawn.y > maxY) {
+            maxY = spawn.y;
+        }
+    });
+    
+    // Check effect areas
+    effectAreas.forEach(area => {
+        if (area.y !== undefined && area.y !== null && area.y > maxY) {
+            maxY = area.y;
+        }
+    });
+    
+    // Check territory zones
+    territories.forEach(territory => {
+        territory.zones.forEach(zone => {
+            if (zone.y !== undefined && zone.y !== null && zone.y > maxY) {
+                maxY = zone.y;
+            }
+        });
+    });
+    
+    return maxY;
+}
+
+// Initialize height filter slider
+function initializeHeightFilter() {
+    const maxY = findMaxYCoordinate();
+    const slider = document.getElementById('heightFilter');
+    const valueDisplay = document.getElementById('heightFilterValue');
+    
+    if (slider && maxY > 0) {
+        // Set max to the maximum y-coordinate found, or 1000 if no markers have y-coordinates
+        const sliderMax = maxY > 0 ? maxY : 1000;
+        slider.max = sliderMax;
+        slider.value = sliderMax; // Default to maximum
+        maxHeightFilter = sliderMax;
+        
+        if (valueDisplay) {
+            valueDisplay.textContent = sliderMax.toFixed(1);
+        }
+    } else if (slider) {
+        // Default values if no markers loaded yet
+        slider.max = 1000;
+        slider.value = 1000;
+        maxHeightFilter = 1000;
+        if (valueDisplay) {
+            valueDisplay.textContent = '1000.0';
+        }
+    }
+}
+
 // Helper function to check if a marker is visible
 function isMarkerVisible(markerType, index) {
+    // First check height filter
+    let marker = null;
+    if (markerType === 'territoryZones') {
+        const mapEntry = zoneToTerritoryMap.get(index);
+        if (mapEntry) {
+            marker = territories[mapEntry.territoryIndex]?.zones[mapEntry.zoneIndex];
+        }
+    } else if (markerType === 'zombieTerritoryZones') {
+        const mapEntry = zombieZoneToTerritoryMap.get(index);
+        if (mapEntry) {
+            marker = territories[mapEntry.territoryIndex]?.zones[mapEntry.zoneIndex];
+        }
+    } else if (markerType.startsWith('territoryType_')) {
+        const territoryType = markerType.replace('territoryType_', '');
+        const mapEntry = territoryTypeZoneMaps[territoryType]?.get(index);
+        if (mapEntry) {
+            marker = territories[mapEntry.territoryIndex]?.zones[mapEntry.zoneIndex];
+        }
+    } else {
+        const typeConfig = markerTypes[markerType];
+        if (typeConfig) {
+            marker = typeConfig.getMarker(index);
+        }
+    }
+    
+    if (!passesHeightFilter(marker)) {
+        return false;
+    }
+    
+    // Now check other visibility conditions
     if (markerType === 'territoryZones') {
         // Check if the territory containing this zone is visible
         const mapEntry = zoneToTerritoryMap.get(index);
@@ -3566,7 +3692,7 @@ function isMarkerVisible(markerType, index) {
     }
     // For other types, check if the type is shown
     const typeConfig = markerTypes[markerType];
-    return typeConfig.getShowFlag();
+    return typeConfig ? typeConfig.getShowFlag() : true;
 }
 
 // Generic function to select marker at point for a specific type
@@ -3646,6 +3772,11 @@ function updateHoveredMarker(screenX, screenY) {
                 return; // Skip hidden markers
             }
             
+            // Check height filter
+            if (!passesHeightFilter(marker)) {
+                return; // Skip markers above height filter
+            }
+            
             const screenPos = worldToScreen(marker.x, marker.z);
             const dx = screenPos.x - screenX;
             const dy = screenPos.y - screenY;
@@ -3663,6 +3794,11 @@ function updateHoveredMarker(screenX, screenY) {
         eventSpawns.forEach((spawn, index) => {
             if (!visibleEventSpawns.has(index) && visibleEventSpawns.size > 0) {
                 return; // Skip hidden event spawns
+            }
+            
+            // Check height filter
+            if (!passesHeightFilter(spawn)) {
+                return; // Skip spawns above height filter
             }
             
             const screenPos = worldToScreen(spawn.x, spawn.z);
@@ -3694,6 +3830,11 @@ function updateHoveredMarker(screenX, screenY) {
             }
             
             territory.zones.forEach((zone, zoneIndex) => {
+                // Check height filter
+                if (!passesHeightFilter(zone)) {
+                    return; // Skip zones above height filter
+                }
+                
                 const screenPos = worldToScreen(zone.x, zone.z);
                 const dx = screenPos.x - screenX;
                 const dy = screenPos.y - screenY;
@@ -6119,6 +6260,9 @@ async function loadGroups() {
         await loadTerritories();
         await loadPlayerSpawnPoints();
         
+        // Initialize height filter slider with max y-coordinate
+        initializeHeightFilter();
+        
         // Show filter section and populate dropdowns
         const filterSection = document.getElementById('filterSection');
         if (filterSection && markers.length > 0) {
@@ -7491,6 +7635,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize edit markers UI
     initializeEditMarkersUI();
     
+    // Initialize height filter slider with default values
+    initializeHeightFilter();
+    
     // Restore saved state
     restoreSavedState();
     
@@ -7536,6 +7683,17 @@ document.addEventListener('DOMContentLoaded', () => {
         showBackgroundImage = e.target.checked;
         draw();
     });
+    
+    // Height filter slider
+    const heightFilterSlider = document.getElementById('heightFilter');
+    const heightFilterValue = document.getElementById('heightFilterValue');
+    if (heightFilterSlider && heightFilterValue) {
+        heightFilterSlider.addEventListener('input', (e) => {
+            maxHeightFilter = parseFloat(e.target.value);
+            heightFilterValue.textContent = maxHeightFilter.toFixed(1);
+            draw(); // Redraw to apply filter
+        });
+    }
     
     const backgroundImageOpacitySlider = document.getElementById('backgroundImageOpacity');
     const backgroundImageOpacityValue = document.getElementById('backgroundImageOpacityValue');

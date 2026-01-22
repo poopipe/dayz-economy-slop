@@ -142,6 +142,11 @@ header h1 {
     margin: 0 10px;
 }
 
+.height-filter-slider {
+    flex: 1;
+    min-width: 200px;
+}
+
 #backgroundImageOpacityValue {
     min-width: 45px;
     text-align: right;
