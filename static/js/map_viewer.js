@@ -1074,6 +1074,7 @@ class MarkerInteractionHandler {
         
         const array = this.typeConfig.getArray();
         const indicesToDelete = Array.from(indices).sort((a, b) => b - a);
+        let didSplice = false;
         
         for (const index of indicesToDelete) {
             if (index < array.length) {
@@ -1081,6 +1082,7 @@ class MarkerInteractionHandler {
                     // Remove new marker
                     this.typeConfig.new.delete(index);
                     array.splice(index, 1);
+                    didSplice = true;
                     // Update indices in sets
                     this.updateIndicesAfterDeletion(index);
                 } else {
@@ -1095,6 +1097,20 @@ class MarkerInteractionHandler {
         }
         
         this.typeConfig.selected.clear();
+
+        // If we spliced the underlying array, indices shifted. Visibility filter sets are index-based
+        // (e.g. visibleEventSpawns), so we must rebuild filters to keep the correct items visible.
+        if (didSplice) {
+            applyFilters();
+        } else {
+            // Even without splicing, deleting can affect visibility in some filters (rare but safe).
+            // Keep this lightweight by only reapplying when filters are active.
+            if (activeFilters.length > 0 || activeEventSpawnFilters.length > 0 || activeTerritoryFilters.length > 0) {
+                applyFilters();
+            } else {
+                requestDraw();
+            }
+        }
     }
     
     updateIndicesAfterDeletion(deletedIndex) {
@@ -4837,6 +4853,21 @@ function addMarkerAt(markerType, screenX, screenY) {
     typeConfig.selected.add(newIndex);
     markerEvents.emit('marker:selected', { markerType, index: newIndex });
     updateSelectedCount();
+
+    // If filters are active for this marker family, recompute visibility immediately so the new marker
+    // can appear right away (instead of waiting for an edit-mode transition to re-run filters).
+    if (
+        (markerType === 'eventSpawns' && activeEventSpawnFilters.length > 0) ||
+        ((markerType === 'territoryZones' || markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_')) && activeTerritoryFilters.length > 0)
+    ) {
+        applyFilters(); // also triggers redraw + cache invalidation
+    }
+
+    // Ensure the new marker is visible immediately.
+    // Even when caching is enabled for view mode, we might be mid-transition, so force a redraw and invalidate cache.
+    invalidateStaticMarkerCache();
+    draw();
+
     requestDraw();
 }
 
@@ -5257,6 +5288,10 @@ async function saveMarkerChanges(markerType) {
             // Emit event
             markerEvents.emit('marker:changes:saved', { markerType });
             
+            // Saving can change which indices/items are visible (and changes the static render state).
+            // Rebuild filter visibility sets and invalidate the static cache so view mode is correct.
+            applyFilters();
+            
             return { success: true, message: `Saved changes to ${typeConfig.getDisplayName()}` };
         } else {
             return { success: false, message: data.error || 'Failed to save' };
@@ -5385,6 +5420,9 @@ function restoreMarkerPositions(markerType) {
     
     // Update UI
     updateSelectedCount();
+    
+    // Discarding can change indices and visibility; rebuild filters and invalidate static cache.
+    applyFilters();
     requestDraw();
     draw(); // Force immediate redraw
 }
@@ -5393,6 +5431,12 @@ function restoreMarkerPositions(markerType) {
 async function handleEditingToggle(markerType, enabled) {
     const typeConfig = markerTypes[markerType];
     if (!typeConfig) return;
+
+    const typeHasChanges = (cfg) => (
+        cfg.originalPositions.size > 0 ||
+        cfg.deleted.size > 0 ||
+        cfg.new.size > 0
+    );
     
     // If enabling, first disable all other types
     if (enabled) {
@@ -5402,23 +5446,12 @@ async function handleEditingToggle(markerType, enabled) {
                 // Check for unsaved changes before disabling
                 const otherTypeConfig = markerTypes[otherType];
                 if (otherTypeConfig) {
-                    const hasChanges = otherTypeConfig.originalPositions.size > 0 || 
-                                      otherTypeConfig.deleted.size > 0 || 
-                                      otherTypeConfig.new.size > 0;
-                    if (hasChanges) {
-                        const discard = confirm(`You have unsaved changes for ${otherTypeConfig.getDisplayName()}. Discard them?`);
-                        if (discard) {
-                            restoreMarkerPositions(otherType);
-                            selectionManager.clearSelectionsForType(otherType);
-                        } else {
-                            // User wants to keep changes - don't enable new type
-                            // Update dropdown to reflect current state
-                            const select = document.getElementById('editMarkerTypeSelect');
-                            if (select) {
-                                select.value = otherType;
-                            }
-                            return;
-                        }
+                    if (typeHasChanges(otherTypeConfig)) {
+                        // Don't prompt; prevent switching away until user saves or discards.
+                        const select = document.getElementById('editMarkerTypeSelect');
+                        if (select) select.value = otherType;
+                        updateStatus(`Unsaved changes for ${otherTypeConfig.getDisplayName()}. Save or Discard to exit edit mode.`, true);
+                        return;
                     }
                 }
                 editingEnabled[otherType] = false;
@@ -5520,34 +5553,21 @@ async function handleEditingToggle(markerType, enabled) {
     }
     
     if (!enabled) {
-        // Check if there are unsaved changes
-        const hasChanges = typeConfig.originalPositions.size > 0 || 
-                          typeConfig.deleted.size > 0 || 
-                          typeConfig.new.size > 0;
-        
-        if (hasChanges) {
-            const discard = confirm('You have unsaved changes. Discard them?');
-            if (discard) {
-                // Restore original positions
-                restoreMarkerPositions(markerType);
-                // Clear selection after restore
-                selectionManager.clearSelectionsForType(markerType);
-            } else {
-                // User wants to keep changes - re-enable editing
-                editingEnabled[markerType] = true;
-                const select = document.getElementById('editMarkerTypeSelect');
-                if (select) select.value = markerType;
-                // Re-add cursor class since we're keeping editing enabled
-                canvas.classList.add('editing-enabled');
-                if (editControlsManager) {
-                    editControlsManager.showControlsForType(markerType);
-                }
-                return;
+        // Prevent exiting edit mode until user saves or discards changes.
+        if (typeHasChanges(typeConfig)) {
+            editingEnabled[markerType] = true;
+            canvas.classList.add('editing-enabled');
+            if (editControlsManager) {
+                editControlsManager.showControlsForType(markerType);
             }
-        } else {
-            // No changes, but clear selection when disabling editing
-            selectionManager.clearSelectionsForType(markerType);
+            const select = document.getElementById('editMarkerTypeSelect');
+            if (select) select.value = markerType;
+            updateStatus(`Unsaved changes for ${typeConfig.getDisplayName()}. Save or Discard to exit edit mode.`, true);
+            return;
         }
+        
+        // No changes: clear selection when disabling editing
+        selectionManager.clearSelectionsForType(markerType);
         
         // Update display after clearing selection
         updateSelectedCount();
@@ -7824,6 +7844,18 @@ function initializeEditMarkersUI() {
         if (!editingToggleCheckbox.checked) return;
         
         const selectedType = e.target.value;
+
+        // Prevent switching away from a type with unsaved changes.
+        for (const markerType of Object.keys(markerTypes)) {
+            if (!editingEnabled[markerType]) continue;
+            const cfg = markerTypes[markerType];
+            const hasChanges = cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0);
+            if (hasChanges && markerType !== selectedType) {
+                e.target.value = markerType;
+                updateStatus(`Unsaved changes for ${cfg.getDisplayName()}. Save or Discard to switch edit mode.`, true);
+                return;
+            }
+        }
         
         // Disable all editing
         for (const markerType of Object.keys(markerTypes)) {
@@ -7855,6 +7887,20 @@ function initializeEditMarkersUI() {
         select.disabled = !enabled;
         
         if (!enabled) {
+            // Prevent disabling marker editing if any active type has changes.
+            for (const markerType of Object.keys(markerTypes)) {
+                if (!editingEnabled[markerType]) continue;
+                const cfg = markerTypes[markerType];
+                const hasChanges = cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0);
+                if (hasChanges) {
+                    editingToggleCheckbox.checked = true;
+                    updateStatus(`Unsaved changes for ${cfg.getDisplayName()}. Save or Discard to exit edit mode.`, true);
+                    const sel = document.getElementById('editMarkerTypeSelect');
+                    if (sel) sel.value = markerType;
+                    return;
+                }
+            }
+            
             // Turn off editing for all types
             for (const markerType of Object.keys(markerTypes)) {
                 if (editingEnabled[markerType]) {
