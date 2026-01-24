@@ -186,6 +186,7 @@ XML Data Viewer consists of three integrated applications:
   - Toggle effect area visibility
   - Toggle player spawn points visibility
   - Toggle background image visibility
+  - Height filter: Min/Max Y-coordinate sliders (hides markers outside range)
   - All settings persist in localStorage
 
 #### Advanced Filtering System
@@ -211,8 +212,17 @@ XML Data Viewer consists of three integrated applications:
 
 The Map Viewer includes comprehensive editing capabilities for various marker types:
 
+- **Event Spawns** (`cfgeventspawns.xml`)
+  - Enable **Marker editing**, then select **Event Spawns** from the edit dropdown
+  - **Event Type for New Spawns**: choose the `<event name="...">` group for new positions
+  - **Add**: Ctrl+Click (Cmd+Click on Mac) to add event spawn at cursor
+  - **Move**: Click and drag to move marker
+  - **Delete**: Select markers and press Delete/Backspace
+  - **Save Changes**: Saves to `cfgeventspawns.xml` while preserving existing event/pos grouping
+  - **Discard Changes**: Restores all changes made since entering edit mode
+
 - **Player Spawn Points** (`cfgplayerspawnpoints.xml`)
-  - Enable editing mode via checkbox
+  - Enable **Marker editing**, then select **Player Spawn Points** from the edit dropdown
   - **Add**: Ctrl+Click (Cmd+Click on Mac) to add spawn point at cursor
   - **Move**: Click and drag to move marker
   - **Resize**: Drag corners to resize rectangle (width/height)
@@ -221,7 +231,7 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
   - **Discard Changes**: Restores all changes made since entering edit mode
 
 - **Effect Areas** (`cfgeffectareas.json`)
-  - Enable editing mode via checkbox
+  - Enable **Marker editing**, then select **Effect Areas** from the edit dropdown
   - **Add**: Ctrl+Click to add effect area at cursor
   - **Move**: Click and drag center of circle
   - **Resize**: Click and drag edge or handle (white dot) to change radius
@@ -230,7 +240,7 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
   - **Discard Changes**: Restores all changes made since entering edit mode
 
 - **Territory Zones** (`env/*.xml` files)
-  - Enable editing mode via checkbox
+  - Enable **Marker editing**, then select a territory type from the edit dropdown
   - **Territory Type Selector**: Choose territory type for new zones
   - **Add**: Ctrl+Click to add zone at cursor (uses selected territory type)
   - **Move**: Click and drag center of circle
@@ -240,7 +250,7 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
   - **Discard Changes**: Restores all changes made since entering edit mode
 
 - **Zombie Territory Zones** (`env/*.xml` files)
-  - Enable editing mode via checkbox
+  - Enable **Marker editing**, then select **Zombie Territory Zones** from the edit dropdown
   - **Add**: Ctrl+Click to add zone at cursor
   - **Move**: Click and drag center of circle
   - **Resize**: Click and drag edge or handle (white dot) to change radius
@@ -256,6 +266,7 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
 - Changes are tracked and can be saved or discarded
 
 **Edit Mode Behavior:**
+- Each edit mode includes a **"Show only this marker type"** checkbox to temporarily filter the display to the active type
 - Only one marker type can be edited at a time
 - When enabling edit mode for a type, other types' edit modes are disabled
 - Unsaved changes prompt confirmation when disabling edit mode
@@ -340,13 +351,15 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
 #### Editing Markers
 
 1. **Enable Edit Mode:**
-   - Check the "Enable editing" checkbox for the marker type you want to edit
-   - Edit controls will appear below the checkbox
+   - Check **"Marker editing"**
+   - Select the marker type you want to edit from the dropdown
+   - Edit controls will appear for the selected type
    - Only one marker type can be edited at a time
 
 2. **Add Markers:**
    - Hold Ctrl (Cmd on Mac) and click on the map where you want to add a marker
-   - For territory zones, select the territory type from the dropdown first
+   - For territory zones, select the territory type in the **"Territory Type for New Zones"** control
+   - For event spawns, select the event type in the **"Event Type for New Spawns"** control
 
 3. **Move Markers:**
    - Click and drag the center of the marker
@@ -375,7 +388,7 @@ The Map Viewer includes comprehensive editing capabilities for various marker ty
    - All change tracking is cleared
 
 8. **Disable Edit Mode:**
-   - Uncheck the "Enable editing" checkbox
+   - Uncheck **"Marker editing"**
    - If there are unsaved changes, you'll be prompted to discard them
    - Selections are cleared when disabling edit mode
 
@@ -404,7 +417,7 @@ This separation allows for optimized rendering - the overlay canvas can be updat
 
 The editing system uses a unified architecture:
 
-- **Marker Types Configuration**: Each marker type (player spawn points, effect areas, territory zones, zombie territory zones) has a configuration object defining its capabilities and behavior
+- **Marker Types Configuration**: Each marker type (event spawns, player spawn points, effect areas, territory zones, zombie territory zones) has a configuration object defining its capabilities and behavior
 - **EditControlsManager**: Dynamically generates UI controls for each marker type based on configuration
 - **State Management**: Tracks original positions, new markers, deleted markers, and modifications
 - **Event System**: Publishes events for marker changes (created, deleted, moved, resized, selected)
@@ -417,7 +430,7 @@ The Map Viewer reads and writes to these files:
 
 - `mapgrouppos.xml` - Group marker positions (read-only visualization)
 - `mapgroupproto.xml` - Group prototypes (read-only, for matching with positions)
-- `cfgeventspawns.xml` - Event spawn markers (read-only visualization)
+- `cfgeventspawns.xml` - Event spawn markers (read/write)
 - `cfgeffectareas.json` - Effect area definitions (read/write)
 - `cfgplayerspawnpoints.xml` - Player spawn point positions (read/write)
 - `env/*.xml` - Territory zone definitions (read/write)
@@ -428,6 +441,7 @@ The Map Viewer reads and writes to these files:
 
 - `GET /api/groups` - Load group markers from `mapgrouppos.xml`
 - `GET /api/event-spawns` - Load event spawns from `cfgeventspawns.xml`
+- `POST /api/event-spawns/save` - Save event spawns to `cfgeventspawns.xml`
 - `GET /api/territories` - Load territories from `env/*.xml` files
 - `GET /api/effect-areas` - Load effect areas from `cfgeffectareas.json`
 - `GET /api/player-spawn-points` - Load player spawn points from `cfgplayerspawnpoints.xml`
@@ -516,7 +530,7 @@ The Map Viewer reads and writes to these files:
 - Verify file permissions (read access required)
 
 ### Edit Mode Not Working
-- Ensure you've enabled editing for the marker type via checkbox
+- Ensure **"Marker editing"** is enabled and you selected a marker type from the dropdown
 - Check that markers are visible (not filtered out)
 - Verify you have write permissions to the mission directory
 - Check browser console for error messages

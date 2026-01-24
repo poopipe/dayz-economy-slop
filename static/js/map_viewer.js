@@ -1392,7 +1392,15 @@ class EditControlsManager {
         wrapper.style.display = 'none';
         wrapper.style.marginTop = '10px';
         
-        // Add custom controls first (if any) - they go before instructions
+        // Add "Show only this type" checkbox.
+        // For event spawns, place this above "Event Type for New Spawns" for better UX.
+        const shouldPlaceFilterBeforeCustomControls = markerType === 'eventSpawns';
+        if (shouldPlaceFilterBeforeCustomControls) {
+            const filterCheckbox = this.createFilterCheckbox(markerType);
+            wrapper.appendChild(filterCheckbox);
+        }
+        
+        // Add custom controls (if any)
         if (config.customControls && config.customControls.length > 0) {
             const customContainer = document.createElement('div');
             customContainer.className = 'custom-controls';
@@ -1405,9 +1413,11 @@ class EditControlsManager {
             wrapper.appendChild(customContainer);
         }
         
-        // Add "Show only this type" checkbox
-        const filterCheckbox = this.createFilterCheckbox(markerType);
-        wrapper.appendChild(filterCheckbox);
+        // Default placement for filter checkbox (most types)
+        if (!shouldPlaceFilterBeforeCustomControls) {
+            const filterCheckbox = this.createFilterCheckbox(markerType);
+            wrapper.appendChild(filterCheckbox);
+        }
         
         // Add instructions
         const instructions = this.createInstructions(config.instructions);
@@ -2682,6 +2692,38 @@ function drawBackgroundImage() {
 
 // Draw effect area circles
 // Generic function to draw a marker type using the renderer
+function getHoverableMarkerTypes() {
+    const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
+    const types = [];
+    
+    for (const markerType of Object.keys(markerTypes)) {
+        const typeConfig = markerTypes[markerType];
+        if (!typeConfig || !typeConfig.getShowFlag || !typeConfig.getShowFlag()) {
+            continue;
+        }
+        
+        // Legacy flattened `territoryZones` should not participate unless explicitly editing it
+        // (we draw territories via `territoryType_*` marker types in view mode)
+        if (markerType === 'territoryZones' && !editingEnabled.territoryZones) {
+            continue;
+        }
+        
+        // When editing is active, only hover/edit the active edit type(s)
+        if (isEditingAnyType && !editingEnabled[markerType]) {
+            continue;
+        }
+        
+        types.push(markerType);
+    }
+    
+    return types;
+}
+
+function getMarkerTypesBaseHoverOffset() {
+    // Regular group markers occupy [0..markers.length)
+    return markers.length;
+}
+
 function drawMarkerType(markerType) {
     const typeConfig = markerTypes[markerType];
     if (!typeConfig || !typeConfig.getShowFlag()) {
@@ -2697,40 +2739,12 @@ function drawMarkerType(markerType) {
     const isDraggingThisType = isDragging && draggedMarkerType === markerType;
     const renderer = new MarkerRenderer(typeConfig, ctx);
     
-    // Calculate offset for hover detection
-    const eventSpawnOffset = markers.length;
-    const zoneOffset = eventSpawnOffset + eventSpawns.length;
-    
-    // Calculate territory zone counts - exclude zones that are being edited via territory type-specific marker types
-    let regularTerritoryZoneCount = 0;
-    let zombieTerritoryZoneCount = 0;
-    
-    // Count zones that are NOT being edited via territory type-specific marker types
-    territories.forEach(territory => {
-        const isZombie = isZombieTerritoryType(territory.territory_type);
-        const territoryTypeKey = `territoryType_${territory.territory_type}`;
-        const isBeingEditedByType = editingEnabled[territoryTypeKey];
-        
-        if (isZombie) {
-            if (!editingEnabled.zombieTerritoryZones && !isBeingEditedByType) {
-                zombieTerritoryZoneCount += territory.zones.length;
-            }
-        } else {
-            if (!editingEnabled.territoryZones && !isBeingEditedByType) {
-                regularTerritoryZoneCount += territory.zones.length;
-            }
-        }
-    });
-    
-    const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
-    
-    // Calculate offset for this marker type
-    let currentOffset = baseEditableOffset;
-    for (const type of Object.keys(markerTypes)) {
+    // Calculate offset for hover detection using unified markerTypes ordering
+    const hoverTypes = getHoverableMarkerTypes();
+    let currentOffset = getMarkerTypesBaseHoverOffset();
+    for (const type of hoverTypes) {
         if (type === markerType) break;
-        if (editingEnabled[type] && markerTypes[type].getShowFlag()) {
-            currentOffset += markerTypes[type].getArray().length;
-        }
+        currentOffset += markerTypes[type].getArray().length;
     }
     
     array.forEach((marker, index) => {
@@ -2826,165 +2840,17 @@ function drawMarkers() {
 
 // Draw event spawn markers
 function drawEventSpawns() {
-    if (!showEventSpawns || eventSpawns.length === 0) {
+    if (!showEventSpawns) {
         return;
     }
-    
-    eventSpawns.forEach((spawn, index) => {
-        // If filters are active (visibleEventSpawns has items), only show items in the set
-        // If no filters (visibleEventSpawns is empty), show all items
-        if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(index)) {
-            return; // Skip hidden event spawns
-        }
-        
-        // Check height filter
-        if (!passesHeightFilter(spawn)) {
-            return; // Skip spawns above height filter
-        }
-        
-        const screenPos = worldToScreen(spawn.x, spawn.z);
-        
-        // Skip if position is invalid
-        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) {
-            return;
-        }
-        
-        const isHovered = hoveredMarkerIndex === index + markers.length; // Offset by markers length
-        const isSelected = !!(editingEnabled.eventSpawns && markerTypes.eventSpawns && markerTypes.eventSpawns.selected.has(index));
-        
-        // Draw event spawn marker in purple color to distinguish from regular markers
-        if (isSelected) {
-            ctx.fillStyle = '#ff0000';
-            ctx.strokeStyle = '#cc0000';
-            ctx.lineWidth = 3;
-        } else {
-            ctx.fillStyle = isHovered ? '#ff00ff' : '#9900cc';
-            ctx.strokeStyle = isHovered ? '#cc00cc' : '#7700aa';
-            ctx.lineWidth = isHovered ? 3 : 2;
-        }
-        
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-    });
+    drawMarkerType('eventSpawns');
 }
 
 // Draw zombie territory circles and zone markers
 function drawZombieTerritories() {
-    if (!showTerritories) {
-        return;
-    }
-    
-    if (territories.length === 0) {
-        return;
-    }
-    
-    const isEditing = editingEnabled.zombieTerritoryZones;
-    const isDraggingThisType = isDragging && draggedMarkerType === 'zombieTerritoryZones';
-    const typeConfig = markerTypes.zombieTerritoryZones;
-    
-    let drawnTerritories = 0;
-    let drawnZones = 0;
-    let zoneIndexOffset = markers.length + eventSpawns.length + 
-        territories.reduce((sum, t) => sum + (isZombieTerritoryType(t.territory_type) ? 0 : t.zones.length), 0);
-    
-    territories.forEach((territory, territoryIndex) => {
-        // Only draw zombie territories
-        if (!isZombieTerritoryType(territory.territory_type)) {
-            return;
-        }
-        
-        // Check if territory is visible (filtered)
-        if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
-            return; // Skip hidden territories
-        }
-        
-        // Draw zone markers and circles within territory
-        territory.zones.forEach((zone, zoneIndex) => {
-            // Find flattened index for this zone
-            let flattenedIndex = -1;
-            zombieZoneToTerritoryMap.forEach((value, key) => {
-                if (value.territoryIndex === territoryIndex && value.zoneIndex === zoneIndex) {
-                    flattenedIndex = key;
-                }
-            });
-            
-            // If mapping not found, try to find by matching zone data (for newly added zones)
-            if (flattenedIndex < 0 && isEditing) {
-                zombieTerritoryZones.forEach((tz, idx) => {
-                    if (tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
-                        tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex) {
-                        flattenedIndex = idx;
-                    }
-                });
-            }
-            
-            // Skip deleted zones (check regardless of editing state if we have a flattened index)
-            if (flattenedIndex >= 0 && typeConfig.isDeleted(flattenedIndex)) {
-                return;
-            }
-            
-            // If flattened index is still -1 and we're in editing mode, check if this zone exists in zombieTerritoryZones
-            // This handles the case where a new zone was added and then deleted - it might still be in territory.zones
-            if (flattenedIndex < 0 && isEditing) {
-                // Check if this zone exists in the zombieTerritoryZones array
-                const zoneExists = zombieTerritoryZones.some(tz => 
-                    tz.x === zone.x && tz.z === zone.z && tz.radius === zone.radius &&
-                    tz.territoryIndex === territoryIndex && tz.zoneIndex === zoneIndex
-                );
-                // If it doesn't exist in zombieTerritoryZones but is in territory.zones, it was likely deleted
-                if (!zoneExists) {
-                    return; // Skip drawing this zone
-                }
-            }
-            
-            const zoneScreenPos = worldToScreen(zone.x, zone.z);
-            
-            if (!isFinite(zoneScreenPos.x) || !isFinite(zoneScreenPos.y)) {
-                return;
-            }
-            
-            // Check height filter
-            if (!passesHeightFilter(zone)) {
-                return; // Skip zones above height filter
-            }
-            
-            // Calculate offset for hover detection
-            const zoneMarkerIndex = zoneIndexOffset + zoneIndex;
-            const isHovered = hoveredMarkerIndex === zoneMarkerIndex;
-            
-            // Get zone radius
-            const zoneRadius = zone.radius || 50.0;
-            const screenRadius = zoneRadius * viewScale;
-            
-            // Check editing state if editing is enabled
-            const isSelected = isEditing && flattenedIndex >= 0 && typeConfig.selected.has(flattenedIndex);
-            const hasUnsavedChanges = isEditing && flattenedIndex >= 0 && typeConfig.originalPositions.has(flattenedIndex);
-            const isNew = isEditing && flattenedIndex >= 0 && typeConfig.new.has(flattenedIndex);
-            const isBeingDragged = isDraggingThisType && flattenedIndex >= 0 && (draggedMarkerIndex === flattenedIndex || (draggedSelectedMarkers.get('zombieTerritoryZones') && draggedSelectedMarkers.get('zombieTerritoryZones').has(flattenedIndex)));
-            const isEditingRadius = radiusEditMarkerType === 'zombieTerritoryZones' && radiusEditIndex === flattenedIndex;
-            
-            // Use renderer to draw zone marker with custom territory color
-            const renderer = new MarkerRenderer(typeConfig, ctx);
-            const renderState = {
-                isSelected,
-                isHovered,
-                isEditing,
-                isDragging: isBeingDragged,
-                isEditingRadius,
-                isNew,
-                hasUnsavedChanges
-            };
-            
-            // Create a marker object with color for the renderer
-            const markerWithColor = { ...zone, color: territory.color };
-            renderer.render(markerWithColor, flattenedIndex >= 0 ? flattenedIndex : zoneIndex, renderState, territory.color);
-            drawnZones++;
-        });
-        
-        drawnTerritories++;
-    });
+    if (!showTerritories) return;
+    // Zombie zones are represented by the unified `zombieTerritoryZones` marker type.
+    drawMarkerType('zombieTerritoryZones');
 }
 
 // Draw territory circles and zone markers (non-zombie)
@@ -3058,183 +2924,46 @@ function drawTooltip() {
         return;
     }
     
-    // Determine what type of marker we're hovering over
+    // Determine what marker we're hovering over using unified ordering:
+    // - Regular group markers occupy [0..markers.length)
+    // - Then all visible markerTypes occupy a contiguous range
     let marker, isEventSpawn, isZone, isPlayerSpawnPoint, isZombieTerritory, hoveredMarkerType = null, hoveredMarkerIndexInType = -1;
-    const eventSpawnOffset = markers.length;
-    const zoneOffset = eventSpawnOffset + eventSpawns.length;
-    // Calculate offsets for regular and zombie territories when not editing
-    // Exclude zones that are being edited via territory type-specific marker types
-    let regularTerritoryZoneCount = 0;
-    let zombieTerritoryZoneCount = 0;
-    territories.forEach(territory => {
-        const isZombie = isZombieTerritoryType(territory.territory_type);
-        const territoryTypeKey = `territoryType_${territory.territory_type}`;
-        const isBeingEditedByType = editingEnabled[territoryTypeKey];
+    
+    if (hoveredMarkerIndex < markers.length) {
+        if (!showMarkers) return;
+        if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) return;
+        const m = markers[hoveredMarkerIndex];
+        if (!passesHeightFilter(m)) return;
+        marker = m;
+        isEventSpawn = false;
+        isZone = false;
+        isZombieTerritory = false;
+        isPlayerSpawnPoint = false;
+    } else {
+        const hoverTypes = getHoverableMarkerTypes();
+        let idx = hoveredMarkerIndex - markers.length;
         
-        if (isZombie) {
-            if (!editingEnabled.zombieTerritoryZones && !isBeingEditedByType) {
-                zombieTerritoryZoneCount += territory.zones.length;
-            }
-        } else {
-            if (!editingEnabled.territoryZones && !isBeingEditedByType) {
-                regularTerritoryZoneCount += territory.zones.length;
-            }
-        }
-    });
-    const regularTerritoryZoneOffset = zoneOffset;
-    const zombieTerritoryZoneOffset = zoneOffset + regularTerritoryZoneCount;
-    const baseEditableOffset = zoneOffset + regularTerritoryZoneCount + zombieTerritoryZoneCount;
-    
-    // Check editable marker types first (when editing is enabled)
-    let foundInEditable = false;
-    let currentOffset = baseEditableOffset;
-    
-    for (const markerType of Object.keys(markerTypes)) {
-        const typeConfig = markerTypes[markerType];
-        if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
+        for (const markerType of hoverTypes) {
+            const typeConfig = markerTypes[markerType];
             const array = typeConfig.getArray();
-            if (hoveredMarkerIndex >= currentOffset && hoveredMarkerIndex < currentOffset + array.length) {
-                const index = hoveredMarkerIndex - currentOffset;
-                if (!typeConfig.isDeleted(index)) {
-                    // Check if marker is visible before showing tooltip
-                    if (!isMarkerVisible(markerType, index)) {
-                        return; // Don't show tooltip for hidden markers
-                    }
-                    marker = typeConfig.getMarker(index);
-                    hoveredMarkerType = markerType;
-                    hoveredMarkerIndexInType = index;
-                    isEventSpawn = false;
-                    isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_'));
-                    isZombieTerritory = (markerType === 'zombieTerritoryZones' || (markerType.startsWith('territoryType_') && isZombieTerritoryType(markerType.replace('territoryType_', ''))));
-                    isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
-                    foundInEditable = true;
-                    break;
-                }
+            
+            if (idx >= array.length) {
+                idx -= array.length;
+                continue;
             }
-            currentOffset += array.length;
-        }
-    }
-    
-    if (!foundInEditable) {
-        // Check non-editable markers
-        if (hoveredMarkerIndex < eventSpawnOffset) {
-            // Regular marker
-            // Check if markers are enabled and marker is visible
-            if (!showMarkers) {
-                return; // Don't show tooltip if markers are hidden
-            }
-            if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) {
-                return; // Don't show tooltip for hidden markers
-            }
-            marker = markers[hoveredMarkerIndex];
-            isEventSpawn = false;
-            isZone = false;
-            isZombieTerritory = false;
-            isPlayerSpawnPoint = false;
-        } else if (hoveredMarkerIndex < zoneOffset) {
-            // Event spawn
-            // Check if event spawns are enabled
-            if (!showEventSpawns) {
-                return; // Don't show tooltip if event spawns are hidden
-            }
-            const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
-            if (eventSpawnIndex >= eventSpawns.length) {
-                return;
-            }
-            // Check if event spawn is visible
-            if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(eventSpawnIndex)) {
-                return; // Don't show tooltip for hidden event spawns
-            }
-            marker = eventSpawns[eventSpawnIndex];
-            isEventSpawn = true;
-            isZone = false;
-            isZombieTerritory = false;
-            isPlayerSpawnPoint = false;
-        } else if (hoveredMarkerIndex >= regularTerritoryZoneOffset && hoveredMarkerIndex < zombieTerritoryZoneOffset) {
-            // Regular territory zone marker (when not editing)
-            // Check if territories are enabled
-            if (!showTerritories) {
-                return; // Don't show tooltip if territories are hidden
-            }
-            let zoneIndex = hoveredMarkerIndex - regularTerritoryZoneOffset;
-            let found = false;
-            for (const territory of territories) {
-                // Skip zombie territories
-                if (isZombieTerritoryType(territory.territory_type)) {
-                    continue;
-                }
-                const territoryIndex = territories.indexOf(territory);
-                if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
-                    continue; // Skip hidden territories
-                }
-                if (zoneIndex < territory.zones.length) {
-                    marker = territory.zones[zoneIndex];
-                    found = true;
-                    break;
-                }
-                zoneIndex -= territory.zones.length;
-            }
-            if (!found) {
-                return;
-            }
-            isEventSpawn = false;
-            isZone = true;
-            isZombieTerritory = false;
-            isPlayerSpawnPoint = false;
-        } else if (hoveredMarkerIndex >= zombieTerritoryZoneOffset && hoveredMarkerIndex < baseEditableOffset) {
-            // Zombie territory zone marker (when not editing)
-            // Check if territories are enabled
-            if (!showTerritories) {
-                return; // Don't show tooltip if territories are hidden
-            }
-            let zoneIndex = hoveredMarkerIndex - zombieTerritoryZoneOffset;
-            let found = false;
-            for (const territory of territories) {
-                // Only check zombie territories
-                if (!isZombieTerritoryType(territory.territory_type)) {
-                    continue;
-                }
-                const territoryIndex = territories.indexOf(territory);
-                if (visibleTerritories.size > 0 && !visibleTerritories.has(territoryIndex)) {
-                    continue; // Skip hidden territories
-                }
-                if (zoneIndex < territory.zones.length) {
-                    marker = territory.zones[zoneIndex];
-                    found = true;
-                    break;
-                }
-                zoneIndex -= territory.zones.length;
-            }
-            if (!found) {
-                return;
-            }
-            isEventSpawn = false;
-            isZone = true;
-            isZombieTerritory = true;
-            isPlayerSpawnPoint = false;
-        } else {
-            // Check non-editable spawn points
-            const spawnPointOffset = baseEditableOffset;
-            if (hoveredMarkerIndex >= spawnPointOffset && hoveredMarkerIndex < spawnPointOffset + playerSpawnPoints.length) {
-                // Check if player spawn points are enabled
-                if (!showPlayerSpawnPoints) {
-                    return; // Don't show tooltip if player spawn points are hidden
-                }
-                const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
-                if (spawnPointIndex < playerSpawnPoints.length) {
-                    // Check if player spawn point is visible
-                    if (!isMarkerVisible('playerSpawnPoints', spawnPointIndex)) {
-                        return; // Don't show tooltip for hidden player spawn points
-                    }
-                    marker = playerSpawnPoints[spawnPointIndex];
-                    hoveredMarkerType = 'playerSpawnPoints';
-                    hoveredMarkerIndexInType = spawnPointIndex;
-                    isEventSpawn = false;
-                    isZone = false;
-                    isZombieTerritory = false;
-                    isPlayerSpawnPoint = true;
-                }
-            }
+            
+            const index = idx;
+            if (typeConfig.isDeleted(index)) return;
+            if (!isMarkerVisible(markerType, index)) return;
+            
+            marker = typeConfig.getMarker(index);
+            hoveredMarkerType = markerType;
+            hoveredMarkerIndexInType = index;
+            isEventSpawn = (markerType === 'eventSpawns');
+            isZone = (markerType === 'territoryZones' || markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_'));
+            isZombieTerritory = (markerType === 'zombieTerritoryZones' || (markerType.startsWith('territoryType_') && isZombieTerritoryType(markerType.replace('territoryType_', ''))));
+            isPlayerSpawnPoint = (markerType === 'playerSpawnPoints');
+            break;
         }
     }
     const padding = 8;
@@ -3786,6 +3515,10 @@ function isMarkerVisible(markerType, index) {
     
     // Now check other visibility conditions
     if (markerType === 'eventSpawns') {
+        // In edit mode, hide entries marked for deletion
+        if (editingEnabled.eventSpawns && markerTypes.eventSpawns && markerTypes.eventSpawns.deleted.has(index)) {
+            return false;
+        }
         if (!showEventSpawns) return false;
         if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(index)) {
             return false;
@@ -3922,143 +3655,41 @@ function updateHoveredMarker(screenX, screenY) {
             }
         });
     }
-    
-    // Check event spawns (offset index by markers.length) - skip if editing
-    if (showEventSpawns && (!isEditingAnyType || editingEnabled.eventSpawns)) {
-        eventSpawns.forEach((spawn, index) => {
-            if (!visibleEventSpawns.has(index) && visibleEventSpawns.size > 0) {
-                return; // Skip hidden event spawns
-            }
+
+    // Check markerTypes for hover (unified for view + edit modes)
+    if (!isDragging && !isEditingRadius) {
+        const hoverTypes = getHoverableMarkerTypes();
+        let offset = getMarkerTypesBaseHoverOffset();
+        
+        for (const markerType of hoverTypes) {
+            const typeConfig = markerTypes[markerType];
+            const array = typeConfig.getArray();
             
-            // Check height filter
-            if (!passesHeightFilter(spawn)) {
-                return; // Skip spawns above height filter
-            }
-            
-            const screenPos = worldToScreen(spawn.x, spawn.z);
-            const dx = screenPos.x - screenX;
-            const dy = screenPos.y - screenY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-                minDistance = distance;
-                newHoveredIndex = index + markers.length; // Offset by markers length
-            }
-        });
-    }
-    
-    // Check zone markers (offset by markers.length + eventSpawns.length) - skip if editing territory zones or territory type-specific zones
-    if (showTerritories && !editingEnabled.territoryZones) {
-        let zoneIndexOffset = markers.length + eventSpawns.length;
-        territories.forEach((territory, territoryIndex) => {
-            // Skip zones that are being edited via territory type-specific marker types
-            const territoryTypeKey = `territoryType_${territory.territory_type}`;
-            if (editingEnabled[territoryTypeKey]) {
-                zoneIndexOffset += territory.zones.length; // Skip zones in territories being edited by type
-                return;
-            }
-            
-            if (!visibleTerritories.has(territoryIndex) && visibleTerritories.size > 0) {
-                zoneIndexOffset += territory.zones.length; // Skip zones in hidden territories
-                return;
-            }
-            
-            territory.zones.forEach((zone, zoneIndex) => {
-                // Check height filter
-                if (!passesHeightFilter(zone)) {
-                    return; // Skip zones above height filter
-                }
+            array.forEach((marker, index) => {
+                if (typeConfig.isDeleted(index)) return;
+                if (!isMarkerVisible(markerType, index)) return;
                 
-                const screenPos = worldToScreen(zone.x, zone.z);
+                const screenPos = typeConfig.getScreenPos(marker);
                 const dx = screenPos.x - screenX;
                 const dy = screenPos.y - screenY;
+                
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 
-                if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-                    minDistance = distance;
-                    newHoveredIndex = zoneIndexOffset + zoneIndex;
+                if (typeConfig.canEditRadius && marker.radius !== undefined) {
+                    const screenRadius = (marker.radius || 50.0) * viewScale;
+                    if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                        minDistance = distance;
+                        newHoveredIndex = offset + index;
+                    }
+                } else {
+                    if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
+                        minDistance = distance;
+                        newHoveredIndex = offset + index;
+                    }
                 }
             });
             
-            zoneIndexOffset += territory.zones.length;
-        });
-    }
-    
-    // Check editable marker types for hover (including territory zones when editing)
-    if (!isDragging && !isEditingRadius) {
-        let offset = markers.length + eventSpawns.length;
-        
-        // If not editing territory zones, add zone offset (non-zombie, excluding zones being edited by type)
-        if (!editingEnabled.territoryZones) {
-            offset += territories.reduce((sum, t) => {
-                const territoryTypeKey = `territoryType_${t.territory_type}`;
-                if (isZombieTerritoryType(t.territory_type) || editingEnabled[territoryTypeKey]) {
-                    return sum;
-                }
-                return sum + t.zones.length;
-            }, 0);
-        }
-        // If not editing zombie territory zones, add zombie zone offset (excluding zones being edited by type)
-        if (!editingEnabled.zombieTerritoryZones) {
-            offset += territories.reduce((sum, t) => {
-                if (!isZombieTerritoryType(t.territory_type)) {
-                    return sum;
-                }
-                const territoryTypeKey = `territoryType_${t.territory_type}`;
-                if (editingEnabled[territoryTypeKey]) {
-                    return sum;
-                }
-                return sum + t.zones.length;
-            }, 0);
-        }
-        
-        for (const markerType of Object.keys(markerTypes)) {
-            const typeConfig = markerTypes[markerType];
-            // Skip event spawns here - they use a fixed hoveredMarkerIndex offset handled above
-            if (markerType === 'eventSpawns') {
-                continue;
-            }
-            // Skip territory zones if not editing (they're handled above)
-            if (markerType === 'territoryZones' && !editingEnabled.territoryZones) {
-                continue;
-            }
-            if (markerType === 'zombieTerritoryZones' && !editingEnabled.zombieTerritoryZones) {
-                continue;
-            }
-            // Skip territory type-specific marker types if not editing
-            if (markerType.startsWith('territoryType_') && !editingEnabled[markerType]) {
-                continue;
-            }
-            
-            if (typeConfig.getShowFlag() && (editingEnabled[markerType] || !isEditingAnyType)) {
-                const array = typeConfig.getArray();
-                array.forEach((marker, index) => {
-                    if (typeConfig.isDeleted(index)) return;
-                    if (!isMarkerVisible(markerType, index)) return; // Skip hidden markers
-                    
-                    const screenPos = typeConfig.getScreenPos(marker);
-                    const dx = screenPos.x - screenX;
-                    const dy = screenPos.y - screenY;
-                    
-                    let distance;
-                    if (typeConfig.canEditRadius && marker.radius !== undefined) {
-                        const screenRadius = (marker.radius || 50.0) * viewScale;
-                        distance = Math.sqrt(dx * dx + dy * dy);
-                        // Check if within circle
-                        if (distance <= screenRadius + MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-                            minDistance = distance;
-                            newHoveredIndex = offset + index;
-                        }
-                    } else {
-                        distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance < MARKER_INTERACTION_THRESHOLD && distance < minDistance) {
-                            minDistance = distance;
-                            newHoveredIndex = offset + index;
-                        }
-                    }
-                });
-                offset += array.length;
-            }
+            offset += array.length;
         }
     }
     
@@ -4100,78 +3731,50 @@ async function handleRightClick(screenX, screenY) {
     
     // Check if we're hovering over a marker
     if (hoveredMarkerIndex >= 0) {
-        // Get the marker based on its index
-        const eventSpawnOffset = markers.length;
-        const zoneOffset = eventSpawnOffset + eventSpawns.length;
-        const baseEditableOffset = zoneOffset + (editingEnabled.territoryZones ? 0 : territories.reduce((sum, t) => sum + t.zones.length, 0));
-        
         let marker = null;
         
-        // Check editable marker types first (when editing is enabled)
-        let foundInEditable = false;
-        let currentOffset = baseEditableOffset;
-        
-        for (const markerType of Object.keys(markerTypes)) {
-            const typeConfig = markerTypes[markerType];
-            if (editingEnabled[markerType] && typeConfig.getShowFlag()) {
+        // Regular markers occupy [0..markers.length)
+        if (hoveredMarkerIndex < markers.length) {
+            marker = markers[hoveredMarkerIndex];
+            locationSource = 'marker';
+        } else {
+            const hoverTypes = getHoverableMarkerTypes();
+            let idx = hoveredMarkerIndex - markers.length;
+            
+            for (const markerType of hoverTypes) {
+                const typeConfig = markerTypes[markerType];
                 const array = typeConfig.getArray();
-                if (hoveredMarkerIndex >= currentOffset && hoveredMarkerIndex < currentOffset + array.length) {
-                    const index = hoveredMarkerIndex - currentOffset;
-                    if (!typeConfig.isDeleted(index)) {
-                        marker = typeConfig.getMarker(index);
-                        if (markerType === 'territoryZones' || markerType.startsWith('territoryType_')) {
-                            locationSource = 'zone';
-                        } else if (markerType === 'zombieTerritoryZones') {
-                            locationSource = 'zombie zone';
-                        } else if (markerType === 'playerSpawnPoints') {
-                            locationSource = 'spawn point';
-                        } else if (markerType === 'effectAreas') {
-                            locationSource = 'effect area';
-                        }
-                        foundInEditable = true;
-                        break;
-                    }
+                
+                if (idx >= array.length) {
+                    idx -= array.length;
+                    continue;
                 }
-                currentOffset += array.length;
-            }
-        }
-        
-        if (!foundInEditable) {
-            // Check non-editable markers
-            if (hoveredMarkerIndex < eventSpawnOffset) {
-                // Regular marker
-                if (hoveredMarkerIndex < markers.length) {
-                    marker = markers[hoveredMarkerIndex];
-                    locationSource = 'marker';
+                
+                const index = idx;
+                if (typeConfig.isDeleted(index)) {
+                    marker = null;
+                    break;
                 }
-            } else if (hoveredMarkerIndex < zoneOffset) {
-                // Event spawn
-                const eventSpawnIndex = hoveredMarkerIndex - eventSpawnOffset;
-                if (eventSpawnIndex < eventSpawns.length) {
-                    marker = eventSpawns[eventSpawnIndex];
+                if (!isMarkerVisible(markerType, index)) {
+                    marker = null;
+                    break;
+                }
+                
+                marker = typeConfig.getMarker(index);
+                if (markerType === 'eventSpawns') {
                     locationSource = 'event spawn';
+                } else if (markerType === 'zombieTerritoryZones') {
+                    locationSource = 'zombie zone';
+                } else if (markerType === 'territoryZones' || markerType.startsWith('territoryType_')) {
+                    locationSource = 'zone';
+                } else if (markerType === 'playerSpawnPoints') {
+                    locationSource = 'spawn point';
+                } else if (markerType === 'effectAreas') {
+                    locationSource = 'effect area';
+                } else {
+                    locationSource = markerType;
                 }
-            } else if (hoveredMarkerIndex < baseEditableOffset) {
-                // Zone marker (when not editing)
-                let zoneIndex = hoveredMarkerIndex - zoneOffset;
-                for (const territory of territories) {
-                    if (zoneIndex < territory.zones.length) {
-                        marker = territory.zones[zoneIndex];
-                        locationSource = 'zone';
-                        break;
-                    }
-                    zoneIndex -= territory.zones.length;
-                }
-            } else {
-                // Check non-editable spawn points
-                const spawnPointOffset = baseEditableOffset;
-                if (hoveredMarkerIndex >= spawnPointOffset && hoveredMarkerIndex < spawnPointOffset + playerSpawnPoints.length) {
-                    const spawnPointIndex = hoveredMarkerIndex - spawnPointOffset;
-                    if (spawnPointIndex < playerSpawnPoints.length) {
-                        marker = playerSpawnPoints[spawnPointIndex];
-                        locationSource = 'spawn point';
-                    }
-                }
+                break;
             }
         }
         
@@ -7433,6 +7036,137 @@ function saveFilterAndDisplaySettings() {
     localStorage.setItem('map_viewer_activeTerritoryFilters', JSON.stringify(activeTerritoryFilters));
 }
 
+// Sidebar sections (collapsible left panel)
+const SIDEBAR_SECTIONS_STORAGE_KEY = 'map_viewer_sidebarSectionsOpen_v1';
+const SIDEBAR_SECTION_ORDER = [
+    'mission',
+    'backgroundImage',
+    'location',
+    'display',
+    'editMarkers',
+    'markerFilters',
+    'eventSpawnFilters',
+    'territoryFilters',
+    'info'
+];
+
+function loadSidebarSectionsOpenState() {
+    try {
+        const raw = localStorage.getItem(SIDEBAR_SECTIONS_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveSidebarSectionsOpenState(state) {
+    try {
+        localStorage.setItem(SIDEBAR_SECTIONS_STORAGE_KEY, JSON.stringify(state));
+    } catch {
+        // ignore storage failures (private mode, quota, etc.)
+    }
+}
+
+function setSidebarSectionCollapsed(sectionEl, collapsed, { persist = true } = {}) {
+    sectionEl.classList.toggle('is-collapsed', collapsed);
+    if (!persist) return;
+    
+    const sectionId = sectionEl.dataset.sectionId;
+    if (!sectionId) return;
+    
+    const state = loadSidebarSectionsOpenState();
+    state[sectionId] = !collapsed;
+    saveSidebarSectionsOpenState(state);
+}
+
+function makeSidebarSectionCollapsible(sectionEl, defaultOpen = true) {
+    if (!sectionEl || sectionEl.dataset.collapsibleInitialized === 'true') return;
+    
+    const sectionId = sectionEl.dataset.sectionId;
+    const title = sectionEl.dataset.sectionTitle || sectionId || 'Section';
+    
+    const header = document.createElement('div');
+    header.className = 'sidebar-section-header';
+    header.setAttribute('role', 'button');
+    header.setAttribute('tabindex', '0');
+    
+    const titleEl = document.createElement('div');
+    titleEl.className = 'sidebar-section-title';
+    titleEl.textContent = title;
+    
+    const toggleEl = document.createElement('div');
+    toggleEl.className = 'sidebar-section-toggle';
+    toggleEl.textContent = '▾';
+    
+    header.appendChild(titleEl);
+    header.appendChild(toggleEl);
+    
+    const body = document.createElement('div');
+    body.className = 'sidebar-section-body';
+    
+    // Move existing children into body
+    const existingChildren = Array.from(sectionEl.childNodes);
+    existingChildren.forEach(node => body.appendChild(node));
+    
+    sectionEl.appendChild(header);
+    sectionEl.appendChild(body);
+    sectionEl.dataset.collapsibleInitialized = 'true';
+    
+    // Apply persisted state (or default)
+    const persisted = loadSidebarSectionsOpenState();
+    const shouldOpen = (sectionId && typeof persisted[sectionId] === 'boolean') ? persisted[sectionId] : defaultOpen;
+    setSidebarSectionCollapsed(sectionEl, !shouldOpen, { persist: false });
+    
+    const toggle = () => {
+        const isCollapsed = sectionEl.classList.contains('is-collapsed');
+        setSidebarSectionCollapsed(sectionEl, !isCollapsed);
+    };
+    
+    header.addEventListener('click', toggle);
+    header.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+        }
+    });
+}
+
+function initializeSidebarSections() {
+    const container = document.getElementById('sidebarSections');
+    if (!container) return;
+    
+    const sections = Array.from(container.children).filter(el => el && el.dataset && el.dataset.sectionId);
+    const byId = new Map(sections.map(el => [el.dataset.sectionId, el]));
+    
+    // Reorder sections based on a single, easy-to-edit array
+    const ordered = [];
+    SIDEBAR_SECTION_ORDER.forEach(id => {
+        const el = byId.get(id);
+        if (el) {
+            ordered.push(el);
+            byId.delete(id);
+        }
+    });
+    // Append any unknown sections after the configured ones, preserving original order
+    sections.forEach(el => {
+        const id = el.dataset.sectionId;
+        if (byId.has(id)) {
+            ordered.push(el);
+            byId.delete(id);
+        }
+    });
+    
+    ordered.forEach(el => container.appendChild(el));
+    
+    const defaultOpenIds = new Set(['mission', 'display', 'editMarkers']);
+    ordered.forEach(el => {
+        const id = el.dataset.sectionId;
+        makeSidebarSectionCollapsible(el, defaultOpenIds.has(id));
+    });
+}
+
 // Restore saved state from localStorage
 async function restoreSavedState() {
     // Restore mission directory
@@ -7859,6 +7593,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Setup background image handler
     setupBackgroundImageHandler();
+    
+    // Collapsible sidebar sections (order + persisted open/closed state)
+    initializeSidebarSections();
     
     // Initialize edit markers UI
     initializeEditMarkersUI();

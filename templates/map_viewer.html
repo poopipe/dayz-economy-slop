@@ -15,95 +15,100 @@
         
         <div class="main-layout">
             <div class="sidebar">
-                <div class="controls">
-                    <div class="control-group">
-                        <label for="missionDir">Mission Directory:</label>
-                        <input type="text" id="missionDir" placeholder="Enter mission directory path..." 
-                               class="mission-dir-input" 
-                               value="E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim">
-                        <button id="loadDataBtn" class="btn btn-primary">Load Markers</button>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label>
-                            <input type="checkbox" id="showGrid" checked> Show Grid
-                        </label>
-                        <label>
-                            <input type="checkbox" id="showMarkers" checked> Show Markers
-                        </label>
-                        <label>
-                            <input type="checkbox" id="showEventSpawns" checked> Show Event Spawns
-                        </label>
-                        <label>
-                            <input type="checkbox" id="showTerritories" checked> Show Territories
-                        </label>
-                        <label>
-                            <input type="checkbox" id="showEffectAreas" checked> Show Effect Areas
-                        </label>
-                        <label>
-                            <input type="checkbox" id="showPlayerSpawnPoints" checked> Show Player Spawn Points
-                        </label>
-                        <button id="clearSelectionBtn" class="btn">Clear Selection</button>
-                        <button id="copySelectedXmlBtn" class="btn btn-primary">Copy Selected XML</button>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="minHeightFilter">Min Height (Y-coordinate):</label>
-                        <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
-                            <input type="range" id="minHeightFilter" min="0" max="1000" value="0" step="0.1" class="height-filter-slider">
-                            <span id="minHeightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">0.0</span>
+                <div id="sidebarSections" class="sidebar-sections">
+                    <div id="missionSection" class="sidebar-section-content" data-section-id="mission" data-section-title="Mission">
+                        <div class="control-group">
+                            <label for="missionDir">Mission Directory:</label>
+                            <input type="text" id="missionDir" placeholder="Enter mission directory path..." 
+                                   class="mission-dir-input" 
+                                   value="E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim">
+                            <button id="loadDataBtn" class="btn btn-primary">Load Markers</button>
                         </div>
                     </div>
                     
-                    <div class="control-group">
-                        <label for="heightFilter">Max Height (Y-coordinate):</label>
-                        <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
-                            <input type="range" id="heightFilter" min="0" max="1000" value="1000" step="0.1" class="height-filter-slider">
-                            <span id="heightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">1000.0</span>
+                    <div id="displaySection" class="sidebar-section-content" data-section-id="display" data-section-title="Display">
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="showGrid" checked> Show Grid
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showMarkers" checked> Show Markers
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showEventSpawns" checked> Show Event Spawns
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showTerritories" checked> Show Territories
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showEffectAreas" checked> Show Effect Areas
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showPlayerSpawnPoints" checked> Show Player Spawn Points
+                            </label>
+                            <button id="clearSelectionBtn" class="btn">Clear Selection</button>
+                            <button id="copySelectedXmlBtn" class="btn btn-primary">Copy Selected XML</button>
+                        </div>
+
+                        <div class="control-group">
+                            <label for="minHeightFilter">Min Height (Y-coordinate):</label>
+                            <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
+                                <input type="range" id="minHeightFilter" min="0" max="1000" value="0" step="0.1" class="height-filter-slider">
+                                <span id="minHeightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">0.0</span>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="heightFilter">Max Height (Y-coordinate):</label>
+                            <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
+                                <input type="range" id="heightFilter" min="0" max="1000" value="1000" step="0.1" class="height-filter-slider">
+                                <span id="heightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">1000.0</span>
+                            </div>
                         </div>
                     </div>
                     
-                    <div class="control-group">
-                        <h3 style="margin: 0 0 10px 0; color: var(--nord9); font-size: 16px;">Edit Markers</h3>
+                    <div id="editMarkersSection" class="sidebar-section-content" data-section-id="editMarkers" data-section-title="Edit markers">
                         <!-- Dynamically generated checkboxes and controls -->
                         <div id="editMarkersContainer">
                             <!-- Will be populated by JavaScript -->
                         </div>
                     </div>
                     
-                    <div class="control-group">
-                        <label for="locationField">Location (right-click to copy):</label>
-                        <input type="text" id="locationField" readonly class="mission-dir-input" placeholder="Right-click on map or marker to copy location">
+                    <div id="locationSection" class="sidebar-section-content" data-section-id="location" data-section-title="Location">
+                        <div class="control-group">
+                            <label for="locationField">Location (right-click to copy):</label>
+                            <input type="text" id="locationField" readonly class="mission-dir-input" placeholder="Right-click on map or marker to copy location">
+                        </div>
                     </div>
                     
-                    <div class="control-group">
-                        <label for="backgroundImage">Background Image:</label>
-                        <input type="file" id="backgroundImage" accept="image/*" style="display: none;">
-                        <button id="loadImageBtn" class="btn">Load Image</button>
-                        <button id="clearImageBtn" class="btn">Clear Image</button>
-                        <label>
-                            <input type="checkbox" id="showBackgroundImage" checked> Show Background Image
-                        </label>
+                    <div id="backgroundSection" class="sidebar-section-content" data-section-id="backgroundImage" data-section-title="Background image">
+                        <div class="control-group">
+                            <label for="backgroundImage">Background Image:</label>
+                            <input type="file" id="backgroundImage" accept="image/*" style="display: none;">
+                            <button id="loadImageBtn" class="btn">Load Image</button>
+                            <button id="clearImageBtn" class="btn">Clear Image</button>
+                            <label>
+                                <input type="checkbox" id="showBackgroundImage" checked> Show Background Image
+                            </label>
+                        </div>
+                        
+                        <div class="control-group" id="imageOpacityGroup" style="display: none;">
+                            <label for="backgroundImageOpacity">Opacity:</label>
+                            <input type="range" id="backgroundImageOpacity" min="0" max="100" value="100" class="opacity-slider">
+                            <span id="backgroundImageOpacityValue">100%</span>
+                        </div>
+                        
+                        <div class="control-group" id="imageDimensionsGroup" style="display: none;">
+                            <label for="imageWidth">Image Width (metres):</label>
+                            <input type="number" id="imageWidth" value="1000" min="1" class="dimension-input">
+                            <label for="imageHeight">Height (metres):</label>
+                            <input type="number" id="imageHeight" value="1000" min="1" class="dimension-input">
+                            <button id="applyDimensionsBtn" class="btn">Apply Dimensions</button>
+                        </div>
                     </div>
-                    
-                    <div class="control-group" id="imageOpacityGroup" style="display: none;">
-                        <label for="backgroundImageOpacity">Opacity:</label>
-                        <input type="range" id="backgroundImageOpacity" min="0" max="100" value="100" class="opacity-slider">
-                        <span id="backgroundImageOpacityValue">100%</span>
-                    </div>
-                    
-                    <div class="control-group" id="imageDimensionsGroup" style="display: none;">
-                        <label for="imageWidth">Image Width (metres):</label>
-                        <input type="number" id="imageWidth" value="1000" min="1" class="dimension-input">
-                        <label for="imageHeight">Height (metres):</label>
-                        <input type="number" id="imageHeight" value="1000" min="1" class="dimension-input">
-                        <button id="applyDimensionsBtn" class="btn">Apply Dimensions</button>
-                    </div>
-                </div>
                 
                 <!-- Filter Section -->
-                <div class="filter-section" id="filterSection" style="display: none;">
-                    <h3>Filters</h3>
+                <div class="filter-section sidebar-section-content" id="filterSection" data-section-id="markerFilters" data-section-title="Filters" style="display: none;">
                     <div class="filter-builder">
                         <div class="filter-input-group">
                             <label for="filterType">Filter Type:</label>
@@ -137,8 +142,7 @@
                 </div>
                 
                 <!-- Event Spawn Filter Section -->
-                <div class="filter-section" id="eventSpawnFilterSection" style="display: none;">
-                    <h3>Event Spawn Filters</h3>
+                <div class="filter-section sidebar-section-content" id="eventSpawnFilterSection" data-section-id="eventSpawnFilters" data-section-title="Event spawn filters" style="display: none;">
                     <div class="filter-builder">
                         <div class="filter-input-group">
                             <label for="eventSpawnFilterCriteria">Criteria:</label>
@@ -162,8 +166,7 @@
                 </div>
                 
                 <!-- Territory Filter Section -->
-                <div class="filter-section" id="territoryFilterSection" style="display: none;">
-                    <h3>Territory Filters</h3>
+                <div class="filter-section sidebar-section-content" id="territoryFilterSection" data-section-id="territoryFilters" data-section-title="Territory filters" style="display: none;">
                     <div class="filter-builder">
                         <div class="filter-input-group">
                             <label for="territoryFilterType">Filter Type:</label>
@@ -196,12 +199,12 @@
                     </div>
                 </div>
                 
-                <div class="info-panel" id="infoPanel">
-                    <h3>Information</h3>
+                <div class="info-panel sidebar-section-content" id="infoPanel" data-section-id="info" data-section-title="Information">
                     <div id="infoContent">
                         <p>Load markers to begin</p>
                         <p id="selectedCount">Selected: 0</p>
                     </div>
+                </div>
                 </div>
             </div>
             
