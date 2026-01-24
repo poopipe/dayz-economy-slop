@@ -2934,6 +2934,9 @@ function drawTooltip() {
     if (hoveredMarkerIndex < 0) {
         return;
     }
+
+    // Tooltips are an overlay concern. Prefer drawing on overlay canvas if available.
+    const tctx = overlayCtx || ctx;
     
     // Determine what marker we're hovering over using unified ordering:
     // - Regular group markers occupy [0..markers.length)
@@ -3148,12 +3151,12 @@ function drawTooltip() {
     if (lines.length === 0) return;
     
     // Calculate tooltip dimensions (accounting for multi-line values)
-    ctx.font = `${fontSize}px Arial`;
+    tctx.font = `${fontSize}px Arial`;
     let maxWidth = 0;
     let totalHeight = 0;
     
     lines.forEach(line => {
-        const width = ctx.measureText(line).width;
+        const width = tctx.measureText(line).width;
         if (width > maxWidth) {
             maxWidth = width;
         }
@@ -3190,23 +3193,277 @@ function drawTooltip() {
     }
     
     // Draw tooltip background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-    ctx.fillRect(tooltipXPos, tooltipYPos, tooltipWidth, tooltipHeight);
+    tctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    tctx.fillRect(tooltipXPos, tooltipYPos, tooltipWidth, tooltipHeight);
     
     // Draw tooltip border
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(tooltipXPos, tooltipYPos, tooltipWidth, tooltipHeight);
+    tctx.strokeStyle = '#ffffff';
+    tctx.lineWidth = 1;
+    tctx.strokeRect(tooltipXPos, tooltipYPos, tooltipWidth, tooltipHeight);
     
     // Draw tooltip text
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `${fontSize}px Arial`;
+    tctx.fillStyle = '#ffffff';
+    tctx.font = `${fontSize}px Arial`;
     let currentY = tooltipYPos + padding + lineHeight;
     
     lines.forEach((line, i) => {
-        ctx.fillText(line, tooltipXPos + padding, currentY - 4);
+        tctx.fillText(line, tooltipXPos + padding, currentY - 4);
         currentY += lineHeight;
     });
+}
+
+// Two-pass marker rendering (static cached layer + dynamic overlay)
+let staticMarkerCanvas = null;
+let staticMarkerCtx = null;
+let staticMarkerCache = {
+    valid: false,
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1.0,
+    width: 0,
+    height: 0,
+    version: 0
+};
+let staticMarkerCacheVersion = 0;
+
+function invalidateStaticMarkerCache() {
+    staticMarkerCacheVersion++;
+    staticMarkerCache.valid = false;
+}
+
+function shouldUseStaticMarkerCache() {
+    const isEditingAnyType = Object.values(editingEnabled).some(v => v === true);
+    return !isEditingAnyType && !isDragging && !isEditingRadius;
+}
+
+function drawMarkersStatic(targetCtx) {
+    if (!showMarkers) return;
+    
+    const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+    const renderer = new MarkerRenderer({ baseColor }, targetCtx);
+    const style = renderer.getRenderStyle({}, -1, {
+        isSelected: false,
+        isHovered: false,
+        isEditing: false,
+        isDragging: false,
+        isEditingRadius: false,
+        isNew: false,
+        hasUnsavedChanges: false
+    });
+    
+    markers.forEach((marker, index) => {
+        if (!visibleMarkers.has(index) && visibleMarkers.size > 0) return;
+        if (!passesHeightFilter(marker)) return;
+        const screenPos = worldToScreen(marker.x, marker.z);
+        if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) return;
+        renderer.drawCircle(marker, screenPos, style, 4);
+    });
+}
+
+function drawMarkerTypeStatic(markerType, targetCtx) {
+    const typeConfig = markerTypes[markerType];
+    if (!typeConfig || !typeConfig.getShowFlag()) return;
+    
+    const array = typeConfig.getArray();
+    if (!array || array.length === 0) return;
+    
+    const renderer = new MarkerRenderer(typeConfig, targetCtx);
+    const renderState = {
+        isSelected: false,
+        isHovered: false,
+        isEditing: false,
+        isDragging: false,
+        isEditingRadius: false,
+        isNew: false,
+        hasUnsavedChanges: false
+    };
+    
+    array.forEach((marker, index) => {
+        if (typeConfig.isDeleted(index)) return;
+        if (!isMarkerVisible(markerType, index)) return;
+        const customColor = marker.color || null;
+        renderer.render(marker, index, renderState, customColor);
+    });
+}
+
+function drawTerritoriesStatic(targetCtx) {
+    if (!showTerritories) return;
+    if (!territories || territories.length === 0) return;
+    
+    const typeNames = getAllTerritoryTypeNames();
+    typeNames.forEach(territoryType => {
+        if (isZombieTerritoryType(territoryType)) return;
+        const typeKey = `territoryType_${territoryType}`;
+        if (markerTypes[typeKey]) drawMarkerTypeStatic(typeKey, targetCtx);
+    });
+}
+
+function drawZombieTerritoriesStatic(targetCtx) {
+    if (!showTerritories) return;
+    if (!territories || territories.length === 0) return;
+    if (markerTypes.zombieTerritoryZones) drawMarkerTypeStatic('zombieTerritoryZones', targetCtx);
+}
+
+function ensureStaticMarkerCache() {
+    if (!shouldUseStaticMarkerCache()) return;
+    if (!staticMarkerCanvas) {
+        staticMarkerCanvas = document.createElement('canvas');
+        staticMarkerCtx = staticMarkerCanvas.getContext('2d');
+    }
+    
+    const overscan = 2.0;
+    const targetW = Math.max(1, Math.floor(canvasWidth * overscan));
+    const targetH = Math.max(1, Math.floor(canvasHeight * overscan));
+    const paddingX = targetW - canvasWidth;
+    const paddingY = targetH - canvasHeight;
+    
+    if (staticMarkerCanvas.width !== targetW || staticMarkerCanvas.height !== targetH) {
+        staticMarkerCanvas.width = targetW;
+        staticMarkerCanvas.height = targetH;
+        staticMarkerCache.valid = false;
+    }
+    
+    // dx/dy describes how the cached bitmap should be positioned relative to the current view.
+    const dx = viewOffsetX - staticMarkerCache.offsetX;
+    const dy = viewOffsetY - staticMarkerCache.offsetY;
+    const needsRecentre =
+        !staticMarkerCache.valid ||
+        staticMarkerCache.scale !== viewScale ||
+        staticMarkerCache.width !== targetW ||
+        staticMarkerCache.height !== targetH ||
+        staticMarkerCache.version !== staticMarkerCacheVersion ||
+        // keep viewport comfortably inside cache bounds (avoid hitting edges)
+        dx < -paddingX * 0.80 || dx > -paddingX * 0.20 ||
+        dy < -paddingY * 0.80 || dy > -paddingY * 0.20;
+    
+    if (!needsRecentre) return;
+    
+    staticMarkerCache.scale = viewScale;
+    staticMarkerCache.width = targetW;
+    staticMarkerCache.height = targetH;
+    staticMarkerCache.version = staticMarkerCacheVersion;
+    // Centre the viewport within the overscan buffer.
+    staticMarkerCache.offsetX = viewOffsetX + paddingX / 2;
+    staticMarkerCache.offsetY = viewOffsetY + paddingY / 2;
+    
+    // Render static markers into offscreen buffer using cache offsets
+    const savedOffsetX = viewOffsetX;
+    const savedOffsetY = viewOffsetY;
+    const savedScale = viewScale;
+    const savedHovered = hoveredMarkerIndex;
+    const savedCtx = ctx;
+    const savedCanvasW = canvasWidth;
+    const savedCanvasH = canvasHeight;
+    
+    try {
+        viewOffsetX = staticMarkerCache.offsetX;
+        viewOffsetY = staticMarkerCache.offsetY;
+        viewScale = staticMarkerCache.scale;
+        hoveredMarkerIndex = -1;
+        // drawGrid() uses the global ctx/canvasWidth/canvasHeight; temporarily point them at the cache.
+        ctx = staticMarkerCtx;
+        canvasWidth = targetW;
+        canvasHeight = targetH;
+        
+        staticMarkerCtx.clearRect(0, 0, targetW, targetH);
+        
+        // Grid is part of the static cached layer too.
+        drawGrid();
+        
+        drawMarkersStatic(staticMarkerCtx);
+        drawMarkerTypeStatic('eventSpawns', staticMarkerCtx);
+        drawTerritoriesStatic(staticMarkerCtx);
+        drawZombieTerritoriesStatic(staticMarkerCtx);
+        drawMarkerTypeStatic('playerSpawnPoints', staticMarkerCtx);
+        drawMarkerTypeStatic('effectAreas', staticMarkerCtx);
+    } finally {
+        viewOffsetX = savedOffsetX;
+        viewOffsetY = savedOffsetY;
+        viewScale = savedScale;
+        hoveredMarkerIndex = savedHovered;
+        ctx = savedCtx;
+        canvasWidth = savedCanvasW;
+        canvasHeight = savedCanvasH;
+    }
+    
+    staticMarkerCache.valid = true;
+}
+
+function drawDynamicHighlightsOnOverlay() {
+    if (!overlayCtx) return;
+    if (!shouldUseStaticMarkerCache()) return;
+    
+    // Selected regular markers
+    if (showMarkers && selectedMarkers.size > 0) {
+        selectedMarkers.forEach(index => {
+            const marker = markers[index];
+            if (!marker) return;
+            if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) return;
+            if (!passesHeightFilter(marker)) return;
+            const screenPos = worldToScreen(marker.x, marker.z);
+            if (!isFinite(screenPos.x) || !isFinite(screenPos.y)) return;
+            overlayCtx.save();
+            overlayCtx.fillStyle = '#ff0000';
+            overlayCtx.strokeStyle = '#cc0000';
+            overlayCtx.lineWidth = 3;
+            overlayCtx.beginPath();
+            overlayCtx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
+            overlayCtx.fill();
+            overlayCtx.stroke();
+            overlayCtx.restore();
+        });
+    }
+    
+    // Hover highlight (regular marker or markerType)
+    if (hoveredMarkerIndex < 0) return;
+    
+    if (hoveredMarkerIndex < markers.length) {
+        if (!showMarkers) return;
+        if (visibleMarkers.size > 0 && !visibleMarkers.has(hoveredMarkerIndex)) return;
+        const marker = markers[hoveredMarkerIndex];
+        if (!marker) return;
+        if (!passesHeightFilter(marker)) return;
+        const screenPos = worldToScreen(marker.x, marker.z);
+        const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+        const tmpRenderer = new MarkerRenderer({ baseColor }, overlayCtx);
+        overlayCtx.save();
+        overlayCtx.fillStyle = tmpRenderer.lightenColor(baseColor, 0.3);
+        overlayCtx.strokeStyle = '#ffffff';
+        overlayCtx.lineWidth = 3;
+        overlayCtx.beginPath();
+        overlayCtx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
+        overlayCtx.fill();
+        overlayCtx.stroke();
+        overlayCtx.restore();
+        return;
+    }
+    
+    // MarkerTypes hover highlight
+    const hoverTypes = getHoverableMarkerTypes();
+    let idx = hoveredMarkerIndex - markers.length;
+    for (const markerType of hoverTypes) {
+        const typeConfig = markerTypes[markerType];
+        const array = typeConfig.getArray();
+        if (idx >= array.length) {
+            idx -= array.length;
+            continue;
+        }
+        const index = idx;
+        if (typeConfig.isDeleted(index)) return;
+        if (!isMarkerVisible(markerType, index)) return;
+        const marker = typeConfig.getMarker(index);
+        const renderer = new MarkerRenderer(typeConfig, overlayCtx);
+        renderer.render(marker, index, {
+            isSelected: false,
+            isHovered: true,
+            isEditing: false,
+            isDragging: false,
+            isEditingRadius: false,
+            isNew: false,
+            hasUnsavedChanges: false
+        }, marker.color || null);
+        return;
+    }
 }
 
 // Draw marquee selection rectangle on overlay canvas
@@ -3239,6 +3496,43 @@ function drawMarquee() {
 
 // Main draw function
 // Drawing order configuration - defines the order and stages of drawing
+function drawMainMarkersLayer() {
+    if (shouldUseStaticMarkerCache()) {
+        ensureStaticMarkerCache();
+        if (staticMarkerCache.valid && staticMarkerCanvas) {
+            // Fast path (pan): blit cached bitmap 1:1
+            const dx = viewOffsetX - staticMarkerCache.offsetX;
+            const dy = viewOffsetY - staticMarkerCache.offsetY;
+            ctx.drawImage(staticMarkerCanvas, dx, dy);
+            return;
+        }
+        // If cache isn't ready for any reason, fall through to direct draw.
+    }
+    
+    // Fallback: direct draw (no caching) includes grid + markers.
+    drawGrid();
+    drawMarkers();
+    drawEventSpawns();
+    drawTerritories();
+    drawZombieTerritories();
+    drawPlayerSpawnPoints();
+    drawEffectAreas();
+}
+
+function drawOverlayLayer() {
+    if (!overlayCtx) return;
+    
+    // Marquee selection uses overlay canvas directly for responsiveness.
+    if (isMarqueeSelecting) {
+        drawMarquee();
+        return;
+    }
+    
+    overlayCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    drawDynamicHighlightsOnOverlay();
+    drawTooltip();
+}
+
 const DRAW_ORDER = [
     { stage: 'background', type: 'background', condition: () => showBackgroundImage, draw: () => {
         if (useWebGL && gl && backgroundCanvas && backgroundImage) {
@@ -3272,15 +3566,8 @@ const DRAW_ORDER = [
     { stage: 'main', type: 'clear', condition: () => true, draw: () => {
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     }},
-    { stage: 'main', type: 'grid', condition: () => true, draw: drawGrid },
-    { stage: 'main', type: 'markers', condition: () => true, draw: drawMarkers },
-    { stage: 'main', type: 'event-spawns', condition: () => true, draw: drawEventSpawns },
-    { stage: 'main', type: 'territories', condition: () => true, draw: drawTerritories },
-    { stage: 'main', type: 'zombie-territories', condition: () => true, draw: drawZombieTerritories },
-    { stage: 'main', type: 'player-spawn-points', condition: () => true, draw: drawPlayerSpawnPoints },
-    { stage: 'main', type: 'effect-areas', condition: () => true, draw: drawEffectAreas },
-    { stage: 'overlay', type: 'marquee', condition: () => true, draw: drawMarquee },
-    { stage: 'overlay', type: 'tooltip', condition: () => true, draw: drawTooltip }
+    { stage: 'main', type: 'markers-layer', condition: () => true, draw: drawMainMarkersLayer },
+    { stage: 'overlay', type: 'overlay-layer', condition: () => true, draw: drawOverlayLayer }
 ];
 
 function draw() {
@@ -3398,7 +3685,9 @@ function handleWheel(e) {
     // Adjust offset so the world point stays at the cursor position
     viewOffsetX += mouseX - newScreenPos.x;
     viewOffsetY += mouseY - newScreenPos.y;
-    
+
+    // Zoom changes scale; the static cache must be rebuilt at the new zoom level.
+    invalidateStaticMarkerCache();
     requestDraw();
 }
 
@@ -5464,7 +5753,8 @@ async function loadEffectAreas() {
         
         if (data.success) {
             effectAreas = data.areas || [];
-            draw(); // Redraw to show effect areas
+            invalidateStaticMarkerCache();
+            requestDraw(); // Redraw to show effect areas
         } else {
             effectAreas = [];
         }
@@ -5924,7 +6214,6 @@ async function loadTerritories() {
             }
             // Apply filters to territories
             applyFilters();
-            draw(); // Redraw to show territories
         } else {
             territories = [];
             territoryZones = [];
@@ -5971,7 +6260,6 @@ async function loadEventSpawns() {
             updateEventSpawnTypeSelectorForEditing();
             // Apply filters to event spawns
             applyFilters();
-            draw(); // Redraw to show event spawns
         } else {
             eventSpawns = [];
             console.warn('Failed to load event spawns:', data.error || 'Unknown error');
@@ -6021,7 +6309,8 @@ async function loadPlayerSpawnPoints() {
         
         if (data.success) {
             playerSpawnPoints = data.spawn_points || [];
-            draw(); // Redraw to show player spawn points
+            invalidateStaticMarkerCache();
+            requestDraw(); // Redraw to show player spawn points
         } else {
             playerSpawnPoints = [];
         }
@@ -6648,6 +6937,8 @@ function applyFilters() {
     applyFiltersToCollection(eventSpawns, activeEventSpawnFilters, visibleEventSpawns);
     applyFiltersToCollection(territories, activeTerritoryFilters, visibleTerritories);
     
+    // Filters change what is visible, so the static marker cache must be re-rendered.
+    invalidateStaticMarkerCache();
     draw();
 }
 
@@ -7641,27 +7932,32 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('loadDataBtn').addEventListener('click', loadGroups);
     document.getElementById('showGrid').addEventListener('change', (e) => {
         showGrid = e.target.checked;
-        draw();
+        invalidateStaticMarkerCache();
+        requestDraw();
     });
     document.getElementById('showMarkers').addEventListener('change', (e) => {
         showMarkers = e.target.checked;
-        draw();
+        invalidateStaticMarkerCache();
+        requestDraw();
     });
     
     document.getElementById('showEventSpawns').addEventListener('change', (e) => {
         showEventSpawns = e.target.checked;
-        draw();
+        invalidateStaticMarkerCache();
+        requestDraw();
     });
     
     document.getElementById('showEffectAreas').addEventListener('change', (e) => {
         showEffectAreas = e.target.checked;
-        draw();
+        invalidateStaticMarkerCache();
+        requestDraw();
         saveFilterAndDisplaySettings();
     });
     
     document.getElementById('showPlayerSpawnPoints').addEventListener('change', (e) => {
         showPlayerSpawnPoints = e.target.checked;
-        draw();
+        invalidateStaticMarkerCache();
+        requestDraw();
         saveFilterAndDisplaySettings();
     });
     
@@ -7672,7 +7968,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (showTerritoriesCheckbox) {
         showTerritoriesCheckbox.addEventListener('change', (e) => {
             showTerritories = e.target.checked;
-            draw();
+            invalidateStaticMarkerCache();
+            requestDraw();
         });
     }
     
@@ -7697,7 +7994,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (heightFilterValue) heightFilterValue.textContent = maxHeightFilter.toFixed(1);
             }
             minHeightFilterValue.textContent = minHeightFilter.toFixed(1);
-            draw(); // Redraw to apply filter
+            invalidateStaticMarkerCache();
+            requestDraw(); // Redraw to apply filter
         });
     }
     
@@ -7711,7 +8009,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (minHeightFilterValue) minHeightFilterValue.textContent = minHeightFilter.toFixed(1);
             }
             heightFilterValue.textContent = maxHeightFilter.toFixed(1);
-            draw(); // Redraw to apply filter
+            invalidateStaticMarkerCache();
+            requestDraw(); // Redraw to apply filter
         });
     }
     
