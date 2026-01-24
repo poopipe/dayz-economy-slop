@@ -43,6 +43,7 @@ let isFilteredToSingleType = false;
 let filteredMarkerType = null; // Track which marker type is currently filtered
 let filterCheckboxEnabled = false; // Track if the filter checkbox is checked (persists across type switches)
 let zombieTerritoryZones = []; // Flattened array of zombie territory zones for editing (legacy - kept for compatibility)
+let minHeightFilter = -Infinity; // Height filter - hide markers with y < this value
 let maxHeightFilter = Infinity; // Height filter - hide markers with y > this value
 let zombieZoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 
@@ -3551,79 +3552,90 @@ function passesHeightFilter(marker) {
     if (marker === null || marker === undefined) return true;
     // If marker has no y-coordinate, it passes (assume it's at ground level or undefined)
     if (marker.y === undefined || marker.y === null) return true;
-    // Hide markers with y > maxHeightFilter
-    return marker.y <= maxHeightFilter;
+    // Only show markers within [minHeightFilter, maxHeightFilter]
+    return marker.y >= minHeightFilter && marker.y <= maxHeightFilter;
 }
 
-// Find the maximum y-coordinate across all markers
-function findMaxYCoordinate() {
-    let maxY = 0;
+// Find the min/max y-coordinate across all markers
+function findYCoordinateRange() {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    
+    const considerY = (y) => {
+        if (y === undefined || y === null) return;
+        const n = Number(y);
+        if (Number.isNaN(n)) return;
+        if (n < minY) minY = n;
+        if (n > maxY) maxY = n;
+    };
     
     // Check regular markers
     markers.forEach(marker => {
-        if (marker.y !== undefined && marker.y !== null && marker.y > maxY) {
-            maxY = marker.y;
-        }
+        considerY(marker.y);
     });
     
     // Check event spawns
     eventSpawns.forEach(spawn => {
-        if (spawn.y !== undefined && spawn.y !== null && spawn.y > maxY) {
-            maxY = spawn.y;
-        }
+        considerY(spawn.y);
     });
     
     // Check player spawn points
     playerSpawnPoints.forEach(spawn => {
-        if (spawn.y !== undefined && spawn.y !== null && spawn.y > maxY) {
-            maxY = spawn.y;
-        }
+        considerY(spawn.y);
     });
     
     // Check effect areas
     effectAreas.forEach(area => {
-        if (area.y !== undefined && area.y !== null && area.y > maxY) {
-            maxY = area.y;
-        }
+        considerY(area.y);
     });
     
     // Check territory zones
     territories.forEach(territory => {
         territory.zones.forEach(zone => {
-            if (zone.y !== undefined && zone.y !== null && zone.y > maxY) {
-                maxY = zone.y;
-            }
+            considerY(zone.y);
         });
     });
     
-    return maxY;
+    if (minY === Infinity || maxY === -Infinity) {
+        return { hasAnyY: false, minY: 0, maxY: 0 };
+    }
+    
+    return { hasAnyY: true, minY, maxY };
 }
 
 // Initialize height filter slider
 function initializeHeightFilter() {
-    const maxY = findMaxYCoordinate();
-    const slider = document.getElementById('heightFilter');
-    const valueDisplay = document.getElementById('heightFilterValue');
+    const { hasAnyY, minY, maxY } = findYCoordinateRange();
+    const minSlider = document.getElementById('minHeightFilter');
+    const minValueDisplay = document.getElementById('minHeightFilterValue');
+    const maxSlider = document.getElementById('heightFilter');
+    const maxValueDisplay = document.getElementById('heightFilterValue');
     
-    if (slider && maxY > 0) {
-        // Set max to the maximum y-coordinate found, or 1000 if no markers have y-coordinates
-        const sliderMax = maxY > 0 ? maxY : 1000;
-        slider.max = sliderMax;
-        slider.value = sliderMax; // Default to maximum
-        maxHeightFilter = sliderMax;
-        
-        if (valueDisplay) {
-            valueDisplay.textContent = sliderMax.toFixed(1);
-        }
-    } else if (slider) {
-        // Default values if no markers loaded yet
-        slider.max = 1000;
-        slider.value = 1000;
-        maxHeightFilter = 1000;
-        if (valueDisplay) {
-            valueDisplay.textContent = '1000.0';
-        }
-    }
+    if (!minSlider || !maxSlider) return;
+    
+    // If we have any explicit Y values, use the actual range (supports negatives).
+    // Otherwise, fall back to a reasonable default.
+    const sliderMin = hasAnyY ? Math.min(0, minY) : 0;
+    const sliderMax = hasAnyY ? maxY : 1000;
+    
+    minSlider.min = sliderMin;
+    minSlider.max = sliderMax;
+    maxSlider.min = sliderMin;
+    maxSlider.max = sliderMax;
+    
+    // Default min should be 0, unless the lowest marker is below 0 (then default to that).
+    const clamp = (v) => Math.min(sliderMax, Math.max(sliderMin, v));
+    const defaultMin = hasAnyY ? (minY < 0 ? minY : 0) : 0;
+    const defaultMax = sliderMax;
+    
+    minSlider.value = clamp(defaultMin);
+    maxSlider.value = clamp(defaultMax);
+    
+    minHeightFilter = parseFloat(minSlider.value);
+    maxHeightFilter = parseFloat(maxSlider.value);
+    
+    if (minValueDisplay) minValueDisplay.textContent = minHeightFilter.toFixed(1);
+    if (maxValueDisplay) maxValueDisplay.textContent = maxHeightFilter.toFixed(1);
 }
 
 // Helper function to check if a marker is visible
@@ -5401,14 +5413,6 @@ async function handleEditingToggle(markerType, enabled) {
     if (select) {
         if (enabled) {
             select.value = markerType;
-        } else {
-            // Check if any other type is enabled
-            const anyOtherEnabled = Object.keys(markerTypes).some(type => 
-                type !== markerType && editingEnabled[type]
-            );
-            if (!anyOtherEnabled) {
-                select.value = '';
-            }
         }
     }
     
@@ -5890,6 +5894,13 @@ function updateTerritoriesFromZonesForType(territoryType) {
 
 // Flatten zones from territories into arrays per territory type
 function flattenTerritoryZones() {
+    // Remove any previously generated territory type marker types to avoid stale/duplicate UI entries
+    Object.keys(markerTypes).forEach((key) => {
+        if (key.startsWith('territoryType_')) {
+            delete markerTypes[key];
+        }
+    });
+    
     // Clear all existing arrays
     territoryZones = [];
     zoneToTerritoryMap.clear();
@@ -7453,24 +7464,26 @@ async function restoreSavedState() {
 
 // Get all available marker types for editing (including territory types)
 function getAllEditableMarkerTypes() {
-    const types = [];
+    const typesByKey = new Map();
     
     // Add standard marker types (excluding old territoryZones)
     Object.keys(markerTypes).forEach(markerType => {
-        if (markerType !== 'territoryZones') {
-            types.push({
-                key: markerType,
-                displayName: markerTypes[markerType].getDisplayName(),
-                typeConfig: markerTypes[markerType]
-            });
-        }
+        // IMPORTANT: territory-type marker types are added below from `territoryTypeMarkerTypes`.
+        // Excluding them here prevents duplicate dropdown entries like "Territory Zones (bear)" appearing twice.
+        if (markerType === 'territoryZones') return;
+        if (markerType.startsWith('territoryType_')) return;
+        typesByKey.set(markerType, {
+            key: markerType,
+            displayName: markerTypes[markerType].getDisplayName(),
+            typeConfig: markerTypes[markerType]
+        });
     });
     
     // Add territory type-specific marker types
     Object.keys(territoryTypeMarkerTypes).forEach(territoryType => {
         const typeKey = `territoryType_${territoryType}`;
         if (markerTypes[typeKey]) {
-            types.push({
+            typesByKey.set(typeKey, {
                 key: typeKey,
                 displayName: markerTypes[typeKey].getDisplayName(),
                 typeConfig: markerTypes[typeKey]
@@ -7479,6 +7492,7 @@ function getAllEditableMarkerTypes() {
     });
     
     // Sort by display name
+    const types = Array.from(typesByKey.values());
     types.sort((a, b) => a.displayName.localeCompare(b.displayName));
     
     return types;
@@ -7491,6 +7505,27 @@ function initializeEditMarkersUI() {
         console.error('editMarkersContainer not found');
         return;
     }
+    
+    // Marker editing enable/disable checkbox (global edit mode)
+    const editingToggleLabel = document.createElement('label');
+    editingToggleLabel.style.display = 'flex';
+    editingToggleLabel.style.alignItems = 'center';
+    editingToggleLabel.style.gap = '8px';
+    editingToggleLabel.style.marginBottom = '10px';
+    editingToggleLabel.style.fontSize = '12px';
+    editingToggleLabel.style.color = 'var(--nord4)';
+    
+    const editingToggleCheckbox = document.createElement('input');
+    editingToggleCheckbox.type = 'checkbox';
+    editingToggleCheckbox.id = 'markerEditingEnabled';
+    editingToggleCheckbox.checked = Object.values(editingEnabled).some(v => v === true);
+    
+    const editingToggleText = document.createElement('span');
+    editingToggleText.textContent = 'Marker editing';
+    
+    editingToggleLabel.appendChild(editingToggleCheckbox);
+    editingToggleLabel.appendChild(editingToggleText);
+    container.appendChild(editingToggleLabel);
     
     // Create dropdown label
     const label = document.createElement('label');
@@ -7514,17 +7549,17 @@ function initializeEditMarkersUI() {
     select.style.borderRadius = '4px';
     select.style.marginBottom = '10px';
     
-    // Add "None" option
-    const noneOption = document.createElement('option');
-    noneOption.value = '';
-    noneOption.textContent = 'None (view only)';
-    select.appendChild(noneOption);
-    
     // Populate with marker types (will be updated when territories are loaded)
     updateEditMarkerTypeDropdown();
     
+    // Dropdown is only usable when marker editing is enabled
+    select.disabled = !editingToggleCheckbox.checked;
+    
     // Add change event listener
     select.addEventListener('change', async (e) => {
+        // Only switch edit modes if editing is enabled
+        if (!editingToggleCheckbox.checked) return;
+        
         const selectedType = e.target.value;
         
         // Disable all editing
@@ -7534,10 +7569,8 @@ function initializeEditMarkersUI() {
             }
         }
         
-        // Enable selected type if not "None"
-        if (selectedType) {
-            await handleEditingToggle(selectedType, true);
-        }
+        // Enable selected type
+        if (selectedType) await handleEditingToggle(selectedType, true);
         
         draw();
     });
@@ -7552,6 +7585,42 @@ function initializeEditMarkersUI() {
     // Initialize EditControlsManager
     editControlsManager = new EditControlsManager('editControlsContainer');
     editControlsManager.initialize();
+    
+    // Handle marker editing checkbox changes
+    editingToggleCheckbox.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        select.disabled = !enabled;
+        
+        if (!enabled) {
+            // Turn off editing for all types
+            for (const markerType of Object.keys(markerTypes)) {
+                if (editingEnabled[markerType]) {
+                    await handleEditingToggle(markerType, false);
+                }
+            }
+            
+            // Hide all edit controls
+            if (editControlsManager) {
+                editControlsManager.activeControls.forEach((controls) => {
+                    controls.style.display = 'none';
+                });
+            }
+            
+            draw();
+            return;
+        }
+        
+        // Enabled: ensure we have a selected marker type
+        if (!select.value && select.options.length > 0) {
+            select.value = select.options[0].value;
+        }
+        
+        if (select.value) {
+            await handleEditingToggle(select.value, true);
+        }
+        
+        draw();
+    });
 }
 
 // Update the edit marker type dropdown with current marker types
@@ -7562,9 +7631,9 @@ function updateEditMarkerTypeDropdown() {
     // Get currently selected value
     const currentValue = select.value;
     
-    // Clear existing options except "None"
-    while (select.children.length > 1) {
-        select.removeChild(select.lastChild);
+    // Clear existing options
+    while (select.firstChild) {
+        select.removeChild(select.firstChild);
     }
     
     // Get all available marker types
@@ -7582,7 +7651,8 @@ function updateEditMarkerTypeDropdown() {
     if (currentValue && types.some(t => t.key === currentValue)) {
         select.value = currentValue;
     } else {
-        select.value = '';
+        // Default to first option (if any)
+        select.value = select.options.length > 0 ? select.options[0].value : '';
     }
 }
 
@@ -7685,11 +7755,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // Height filter slider
+    const minHeightFilterSlider = document.getElementById('minHeightFilter');
+    const minHeightFilterValue = document.getElementById('minHeightFilterValue');
     const heightFilterSlider = document.getElementById('heightFilter');
     const heightFilterValue = document.getElementById('heightFilterValue');
+    
+    if (minHeightFilterSlider && minHeightFilterValue) {
+        minHeightFilterSlider.addEventListener('input', (e) => {
+            minHeightFilter = parseFloat(e.target.value);
+            // Keep a valid range
+            if (heightFilterSlider && maxHeightFilter < minHeightFilter) {
+                maxHeightFilter = minHeightFilter;
+                heightFilterSlider.value = maxHeightFilter;
+                if (heightFilterValue) heightFilterValue.textContent = maxHeightFilter.toFixed(1);
+            }
+            minHeightFilterValue.textContent = minHeightFilter.toFixed(1);
+            draw(); // Redraw to apply filter
+        });
+    }
+    
     if (heightFilterSlider && heightFilterValue) {
         heightFilterSlider.addEventListener('input', (e) => {
             maxHeightFilter = parseFloat(e.target.value);
+            // Keep a valid range
+            if (minHeightFilterSlider && maxHeightFilter < minHeightFilter) {
+                minHeightFilter = maxHeightFilter;
+                minHeightFilterSlider.value = minHeightFilter;
+                if (minHeightFilterValue) minHeightFilterValue.textContent = minHeightFilter.toFixed(1);
+            }
             heightFilterValue.textContent = maxHeightFilter.toFixed(1);
             draw(); // Redraw to apply filter
         });
