@@ -167,6 +167,9 @@ def load_groups_from_xml(xml_file_path, proto_file_path=None):
                 print(f"Skipping group '{name}': no position found")
                 continue
             
+            # mapgrouppos.xml group positions are typically "x z" or "x y z"
+            pos_parts = pos_str.strip().split() if isinstance(pos_str, str) else []
+            has_y = len(pos_parts) >= 3
             x, y, z = parse_group_pos(pos_str)
             
             # Skip if position is invalid (all zeros)
@@ -188,6 +191,7 @@ def load_groups_from_xml(xml_file_path, proto_file_path=None):
                 'x': x,
                 'y': y,
                 'z': z,  # Frontend will reverse this
+                'hasY': has_y,
                 'usage': usage,
                 'xml': xml_string  # Store original XML element from mapgrouppos.xml
             }
@@ -449,6 +453,7 @@ def load_effect_areas(effect_area_file_path):
                         x = float(pos[0]) if pos[0] is not None else 0.0
                         y = float(pos[1]) if pos[1] is not None else 0.0
                         z = float(pos[2]) if pos[2] is not None else 0.0
+                        has_y = pos[1] is not None
                     else:
                         print(f"Area '{area_name}': Pos array too short: {pos}")
                         continue
@@ -456,6 +461,7 @@ def load_effect_areas(effect_area_file_path):
                     x = float(pos.get('x', 0)) if pos.get('x') is not None else 0.0
                     y = float(pos.get('y', 0)) if pos.get('y') is not None else 0.0
                     z = float(pos.get('z', 0)) if pos.get('z') is not None else 0.0
+                    has_y = ('y' in pos) and (pos.get('y') is not None)
                 else:
                     print(f"Area '{area_name}': invalid Pos format (type: {type(pos)}): {pos}")
                     continue
@@ -477,6 +483,7 @@ def load_effect_areas(effect_area_file_path):
                     'x': x,
                     'y': y,
                     'z': z,
+                    'hasY': has_y,
                     'radius': radius
                 }
                 print(f"Added effect area: {area_info}")
@@ -862,6 +869,7 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                 x_attr = pos_elem.get('x')
                 z_attr = pos_elem.get('z')
                 a_attr = pos_elem.get('a')
+                y_attr = pos_elem.get('y')
                 
                 # Skip if required attributes are missing
                 if x_attr is None or z_attr is None:
@@ -871,7 +879,8 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                 try:
                     x = float(x_attr)
                     z = float(z_attr)
-                    y = 0.0  # Y coordinate is not provided in pos elements, default to 0
+                    has_y = y_attr is not None
+                    y = float(y_attr) if y_attr is not None else 0.0
                     a = float(a_attr) if a_attr is not None else 0.0
                 except (ValueError, TypeError):
                     print(f"Event '{event_name}' pos[{pos_idx}]: invalid x or z value (x='{x_attr}', z='{z_attr}'), skipping")
@@ -892,6 +901,7 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                     'x': x,
                     'y': y,
                     'z': z,  # Frontend will reverse this
+                    'hasY': has_y,
                     'a': a,
                     # Stable identifiers for editing/saving without re-grouping:
                     'eventIndex': event_idx,
@@ -1393,6 +1403,7 @@ def load_territories(mission_dir):
                     x_attr = zone.get('x')
                     z_attr = zone.get('z')
                     r_attr = zone.get('r')  # Get radius parameter
+                    y_attr = zone.get('y')
                     
                     if x_attr is None or z_attr is None:
                         print(f"Zone {zone_idx} missing x or z attribute, skipping")
@@ -1401,7 +1412,8 @@ def load_territories(mission_dir):
                     try:
                         x = float(x_attr)
                         z = float(z_attr)
-                        y = 0.0
+                        has_y = y_attr is not None
+                        y = float(y_attr) if y_attr is not None else 0.0
                         
                         # Parse radius, default to 50.0 if not provided
                         radius = 50.0
@@ -1432,6 +1444,7 @@ def load_territories(mission_dir):
                             'x': x,
                             'y': y,
                             'z': z,
+                            'hasY': has_y,
                             'radius': radius,  # Store radius with zone
                             'xml': zone_xml
                         })
@@ -1930,11 +1943,14 @@ def load_player_spawn_points(spawn_points_file_path):
                 # Try to get position from pos element
                 x_attr = pos_elem.get('x')
                 z_attr = pos_elem.get('z')
+                y_attr = pos_elem.get('y')
                 
                 # Also try text content
                 if x_attr is None or z_attr is None:
                     if pos_elem.text:
                         # Parse position string
+                        parts = pos_elem.text.strip().split() if isinstance(pos_elem.text, str) else []
+                        has_y = len(parts) >= 3
                         x, y, z = parse_group_pos(pos_elem.text)
                     else:
                         print(f"Posbubble[{posbubble_idx}] pos[{pos_idx}]: no position found, skipping")
@@ -1943,7 +1959,8 @@ def load_player_spawn_points(spawn_points_file_path):
                     try:
                         x = float(x_attr)
                         z = float(z_attr)
-                        y = 0.0
+                        has_y = y_attr is not None
+                        y = float(y_attr) if y_attr is not None else 0.0
                     except (ValueError, TypeError):
                         print(f"Posbubble[{posbubble_idx}] pos[{pos_idx}]: invalid x or z value (x='{x_attr}', z='{z_attr}'), skipping")
                         continue
@@ -1961,6 +1978,7 @@ def load_player_spawn_points(spawn_points_file_path):
                     'x': x,
                     'y': y,
                     'z': z,  # Frontend will reverse this
+                    'hasY': has_y,
                     'width': width,
                     'height': height,
                     'xml': pos_xml

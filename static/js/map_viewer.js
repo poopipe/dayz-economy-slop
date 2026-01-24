@@ -63,6 +63,14 @@ let hoveredMarkerIndex = -1;
 let tooltipX = 0;
 let tooltipY = 0;
 
+// Marker type color system (centralized)
+const MARKER_TYPE_COLORS = {
+    markers: { baseColor: '#0066ff' },        // regular group markers
+    eventSpawns: { baseColor: '#c026d3' },    // distinct magenta/purple
+    playerSpawnPoints: { baseColor: '#00ffff' }, // cyan
+    effectAreas: { baseColor: '#ff8800' }     // orange
+};
+
 // Consistent threshold for marker interaction (in screen pixels)
 const MARKER_INTERACTION_THRESHOLD = 5; // pixels, slightly larger than marker radius (4px)
 let isMarqueeSelecting = false;
@@ -90,6 +98,8 @@ let radiusEditSelectedMarkers = new Set(); // Store all selected markers for mul
 // Generic marker editing system
 const markerTypes = {
     eventSpawns: {
+        // Base (non-editing) color for this marker type
+        baseColor: MARKER_TYPE_COLORS.eventSpawns.baseColor,
         getArray: () => eventSpawns,
         setArray: (arr) => { eventSpawns = arr; },
         getShowFlag: () => showEventSpawns,
@@ -197,6 +207,8 @@ const markerTypes = {
         }
     },
     playerSpawnPoints: {
+        // Base (non-editing) color for this marker type
+        baseColor: MARKER_TYPE_COLORS.playerSpawnPoints.baseColor,
         getArray: () => playerSpawnPoints,
         setArray: (arr) => { playerSpawnPoints = arr; },
         getShowFlag: () => showPlayerSpawnPoints,
@@ -281,6 +293,8 @@ const markerTypes = {
         }
     },
     effectAreas: {
+        // Base (non-editing) color for this marker type
+        baseColor: MARKER_TYPE_COLORS.effectAreas.baseColor,
         getArray: () => effectAreas,
         setArray: (arr) => { effectAreas = arr; },
         getShowFlag: () => showEffectAreas,
@@ -1768,8 +1782,9 @@ class MarkerRenderer {
         const { isSelected, isHovered, isEditing, isDragging, isEditingRadius, isNew, hasUnsavedChanges } = renderState;
         
         // Default styles
-        let fillColor = customColor || '#0066ff';
-        let strokeColor = customColor ? this.darkenColor(customColor, 0.2) : '#0044cc';
+        const baseColor = customColor || this.typeConfig.baseColor || '#0066ff';
+        let fillColor = baseColor;
+        let strokeColor = this.darkenColor(baseColor, 0.2);
         let lineWidth = 2;
         let alpha = 1.0;
         
@@ -1792,13 +1807,9 @@ class MarkerRenderer {
                 strokeColor = isDragging ? '#ffffff' : this.darkenColor(customColor, 0.2);
             }
         } else if (isHovered) {
-            if (customColor) {
-                fillColor = this.lightenColor(customColor, 0.3);
-                strokeColor = '#ffffff';
-            } else {
-                fillColor = '#00ff00';
-                strokeColor = '#00cc00';
-            }
+            // Hover: lighten base color and use a high-contrast stroke
+            fillColor = this.lightenColor(baseColor, 0.3);
+            strokeColor = '#ffffff';
             lineWidth = 3;
         }
         
@@ -1929,12 +1940,6 @@ class MarkerRenderer {
             // Rectangle (player spawn points)
             const screenWidth = marker.width * viewScale;
             const screenHeight = marker.height * viewScale;
-            
-            // Customize style for player spawn points (cyan color when not editing)
-            if (!renderState.isEditing || !(renderState.hasUnsavedChanges || renderState.isSelected || renderState.isNew)) {
-                style.fillColor = '#00ffff';
-                style.strokeColor = renderState.isHovered ? '#00ffff' : '#00aaaa';
-            }
             
             // Draw rectangle with custom alpha
             this.ctx.save();
@@ -2781,23 +2786,10 @@ function drawMarkerType(markerType) {
             isNew,
             hasUnsavedChanges
         };
-        
-        // Customize style for effect areas (orange color)
-        if (markerType === 'effectAreas') {
-            const style = renderer.getRenderStyle(marker, index, renderState);
-            if (!isEditing || !(hasUnsavedChanges || isSelected || isNew)) {
-                style.fillColor = '#ff8800';
-                style.strokeColor = '#ff6600';
-            }
-            renderer.drawCircleWithRadius(marker, screenPos, style, marker.radius * viewScale, 0.3);
-            if (isEditing && isSelected) {
-                renderer.drawRadiusHandle(screenPos, marker.radius * viewScale);
-            }
-        } else {
-            // Check if marker has custom color (for territory zones)
-            const customColor = marker.color || null;
-            renderer.render(marker, index, renderState, customColor);
-        }
+
+        // Check if marker has custom color (for territory zones)
+        const customColor = marker.color || null;
+        renderer.render(marker, index, renderState, customColor);
     });
 }
 
@@ -2811,6 +2803,10 @@ function drawEffectAreas() {
 // Draw markers
 function drawMarkers() {
     if (!showMarkers) return;
+    
+    // Use the centralized marker color system for the base (non-editing) appearance.
+    const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+    const tmpRenderer = new MarkerRenderer({ baseColor }, ctx);
     
     markers.forEach((marker, index) => {
         if (!visibleMarkers.has(index) && visibleMarkers.size > 0) {
@@ -2827,9 +2823,24 @@ function drawMarkers() {
         const isHovered = hoveredMarkerIndex === index;
         
         // Draw marker - same radius for all markers
-        ctx.fillStyle = isSelected ? '#ff0000' : (isHovered ? '#00ff00' : '#0066ff');
-        ctx.strokeStyle = isSelected ? '#cc0000' : (isHovered ? '#00cc00' : '#0044cc');
-        ctx.lineWidth = isSelected ? 3 : (isHovered ? 3 : 2);
+        let fillColor = baseColor;
+        let strokeColor = tmpRenderer.darkenColor(baseColor, 0.2);
+        let lineWidth = 2;
+        
+        if (isHovered) {
+            fillColor = tmpRenderer.lightenColor(baseColor, 0.3);
+            strokeColor = '#ffffff';
+            lineWidth = 3;
+        }
+        if (isSelected) {
+            fillColor = '#ff0000';
+            strokeColor = '#cc0000';
+            lineWidth = 3;
+        }
+        
+        ctx.fillStyle = fillColor;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = lineWidth;
         
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
@@ -3392,12 +3403,33 @@ function handleWheel(e) {
 }
 
 // Helper function to check if a marker passes the height filter
+function markerHasExplicitYFromSource(marker) {
+    if (!marker) return false;
+    
+    // Preferred: backend-provided flag based on source data.
+    if (typeof marker.hasY === 'boolean') {
+        return marker.hasY;
+    }
+    
+    // Prefer checking the original XML snippet if available. Many sources default missing Y to 0,
+    // but the user's intent is: only filter markers that actually had a Y in source data.
+    if (typeof marker.xml === 'string') {
+        return /(?:^|\s)y\s*=/.test(marker.xml);
+    }
+    
+    // If we can't prove Y was present in source data, do NOT filter it.
+    return false;
+}
+
 function passesHeightFilter(marker) {
     if (marker === null || marker === undefined) return true;
-    // If marker has no y-coordinate, it passes (assume it's at ground level or undefined)
-    if (marker.y === undefined || marker.y === null) return true;
+    // If marker has no explicit y-coordinate in source data, it should never be removed by height filtering.
+    if (!markerHasExplicitYFromSource(marker)) return true;
+    
+    const y = Number(marker.y);
+    if (!Number.isFinite(y)) return true;
     // Only show markers within [minHeightFilter, maxHeightFilter]
-    return marker.y >= minHeightFilter && marker.y <= maxHeightFilter;
+    return y >= minHeightFilter && y <= maxHeightFilter;
 }
 
 // Find the min/max y-coordinate across all markers
@@ -3415,28 +3447,28 @@ function findYCoordinateRange() {
     
     // Check regular markers
     markers.forEach(marker => {
-        considerY(marker.y);
+        if (markerHasExplicitYFromSource(marker)) considerY(marker.y);
     });
     
     // Check event spawns
     eventSpawns.forEach(spawn => {
-        considerY(spawn.y);
+        if (markerHasExplicitYFromSource(spawn)) considerY(spawn.y);
     });
     
     // Check player spawn points
     playerSpawnPoints.forEach(spawn => {
-        considerY(spawn.y);
+        if (markerHasExplicitYFromSource(spawn)) considerY(spawn.y);
     });
     
     // Check effect areas
     effectAreas.forEach(area => {
-        considerY(area.y);
+        if (markerHasExplicitYFromSource(area)) considerY(area.y);
     });
     
     // Check territory zones
     territories.forEach(territory => {
         territory.zones.forEach(zone => {
-            considerY(zone.y);
+            if (markerHasExplicitYFromSource(zone)) considerY(zone.y);
         });
     });
     
