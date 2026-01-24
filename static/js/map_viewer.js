@@ -71,6 +71,18 @@ const MARKER_TYPE_COLORS = {
     effectAreas: { baseColor: '#ff8800' }     // orange
 };
 
+// Zoom-level LOD tuning (aim: preserve look, reduce draw cost when zoomed out)
+const RENDER_LOD = {
+    // Below this scale, prefer no stroke for non-emphasized point markers
+    pointNoStrokeScale: 0.55,
+    // Below this scale, radius circles (territory/effect) become stroke-only (skip fill)
+    radiusStrokeOnlyScale: 0.60,
+    // Below this scale, player spawn rectangles become center-point only
+    rectToPointScale: 0.65,
+    // Minimum stroke width when we still stroke
+    minStrokeWidth: 1
+};
+
 // Consistent threshold for marker interaction (in screen pixels)
 const MARKER_INTERACTION_THRESHOLD = 5; // pixels, slightly larger than marker radius (4px)
 let isMarqueeSelecting = false;
@@ -1787,6 +1799,7 @@ class MarkerRenderer {
         let strokeColor = this.darkenColor(baseColor, 0.2);
         let lineWidth = 2;
         let alpha = 1.0;
+        let drawStroke = true;
         
         if (isEditing) {
             if (isSelected) {
@@ -1816,8 +1829,18 @@ class MarkerRenderer {
         if (isEditingRadius) {
             lineWidth = 3;
         }
+
+        // Soft LOD: when zoomed out, avoid strokes for non-emphasized point markers.
+        // (Editing/hover/selected states keep strokes so interaction feedback remains clear.)
+        const isEmphasized = isSelected || isHovered || isDragging || isEditingRadius || isNew || hasUnsavedChanges;
+        if (!isEditing && !isEmphasized && viewScale < RENDER_LOD.pointNoStrokeScale) {
+            drawStroke = false;
+            lineWidth = 0;
+        } else if (!isEditing && lineWidth > 0 && viewScale < RENDER_LOD.pointNoStrokeScale) {
+            lineWidth = Math.max(RENDER_LOD.minStrokeWidth, Math.min(lineWidth, 1));
+        }
         
-        return { fillColor, strokeColor, lineWidth, alpha };
+        return { fillColor, strokeColor, lineWidth, alpha, drawStroke };
     }
     
     darkenColor(color, amount) {
@@ -1850,7 +1873,9 @@ class MarkerRenderer {
         this.ctx.beginPath();
         this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
         this.ctx.fill();
-        this.ctx.stroke();
+        if (style.drawStroke !== false && style.lineWidth > 0) {
+            this.ctx.stroke();
+        }
         this.ctx.restore();
     }
     
@@ -1864,15 +1889,20 @@ class MarkerRenderer {
             alpha = Math.min(0.7, alpha + 0.2);
         }
         
+        const isEmphasized = style.isSelected || style.isHovered || style.isDragging || style.isNew || style.hasUnsavedChanges || style.isEditingRadius;
+        const shouldStrokeOnly = !style.isEditing && !isEmphasized && viewScale < RENDER_LOD.radiusStrokeOnlyScale;
+        
         this.ctx.save();
-        this.ctx.globalAlpha = alpha;
+        this.ctx.globalAlpha = shouldStrokeOnly ? Math.min(0.25, alpha) : alpha;
         this.ctx.fillStyle = style.fillColor;
         this.ctx.strokeStyle = style.strokeColor;
-        this.ctx.lineWidth = style.lineWidth;
+        this.ctx.lineWidth = style.lineWidth > 0 ? style.lineWidth : RENDER_LOD.minStrokeWidth;
         
         this.ctx.beginPath();
         this.ctx.arc(screenPos.x, screenPos.y, screenRadius, 0, Math.PI * 2);
-        this.ctx.fill();
+        if (!shouldStrokeOnly) {
+            this.ctx.fill();
+        }
         this.ctx.stroke();
         this.ctx.restore();
     }
@@ -1940,6 +1970,13 @@ class MarkerRenderer {
             // Rectangle (player spawn points)
             const screenWidth = marker.width * viewScale;
             const screenHeight = marker.height * viewScale;
+
+            const isEmphasized = renderState.isSelected || renderState.isHovered || renderState.isDragging || renderState.isNew || renderState.hasUnsavedChanges;
+            if (!renderState.isEditing && !isEmphasized && viewScale < RENDER_LOD.rectToPointScale) {
+                // Zoomed out: draw only the center point to preserve the "presence" without heavy rect draws.
+                this.drawCircle(marker, screenPos, style, 4);
+                return;
+            }
             
             // Draw rectangle with custom alpha
             this.ctx.save();
@@ -2826,6 +2863,7 @@ function drawMarkers() {
         let fillColor = baseColor;
         let strokeColor = tmpRenderer.darkenColor(baseColor, 0.2);
         let lineWidth = 2;
+        let drawStroke = true;
         
         if (isHovered) {
             fillColor = tmpRenderer.lightenColor(baseColor, 0.3);
@@ -2837,6 +2875,14 @@ function drawMarkers() {
             strokeColor = '#cc0000';
             lineWidth = 3;
         }
+
+        // Soft LOD: when zoomed out, skip stroke for non-emphasized markers.
+        if (!isSelected && !isHovered && viewScale < RENDER_LOD.pointNoStrokeScale) {
+            drawStroke = false;
+            lineWidth = 0;
+        } else if (viewScale < RENDER_LOD.pointNoStrokeScale) {
+            lineWidth = Math.max(RENDER_LOD.minStrokeWidth, Math.min(lineWidth, 1));
+        }
         
         ctx.fillStyle = fillColor;
         ctx.strokeStyle = strokeColor;
@@ -2845,7 +2891,9 @@ function drawMarkers() {
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.stroke();
+        if (drawStroke && lineWidth > 0) {
+            ctx.stroke();
+        }
     });
 }
 
