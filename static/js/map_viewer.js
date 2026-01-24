@@ -29,6 +29,7 @@ let showTerritories = true;
 let territoryZones = []; // Flattened array of all zones for editing (legacy - kept for compatibility)
 let zoneToTerritoryMap = new Map(); // Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>
 let selectedTerritoryType = ''; // Selected territory type for new zones
+let selectedEventSpawnType = ''; // Selected event spawn type for new event spawns
 
 // Store previous visibility state when filtering to single marker type
 let previousVisibilityState = {
@@ -88,6 +89,113 @@ let radiusEditSelectedMarkers = new Set(); // Store all selected markers for mul
 
 // Generic marker editing system
 const markerTypes = {
+    eventSpawns: {
+        getArray: () => eventSpawns,
+        setArray: (arr) => { eventSpawns = arr; },
+        getShowFlag: () => showEventSpawns,
+        canEditRadius: false,
+        canEditDimensions: false,
+        saveEndpoint: '/api/event-spawns/save',
+        getDisplayName: () => 'Event Spawns',
+        getEditControlsId: () => 'eventSpawnEditControls',
+        getEditCheckboxId: () => 'editEventSpawns',
+        // Helper to get marker at index
+        getMarker: (index) => eventSpawns[index],
+        // Helper to check if marker is deleted
+        isDeleted: (index) => markerTypes.eventSpawns.deleted.has(index),
+        // Helper to get screen position
+        getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+        // Helper to check if point is on marker
+        isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            return Math.sqrt(dx * dx + dy * dy) < MARKER_INTERACTION_THRESHOLD;
+        },
+        // Helper to create new marker
+        createNew: (x, y, z) => {
+            // Default new event spawn name to the currently selected type, or fall back to first known type
+            const allTypes = getAllEventSpawnTypeNames();
+            const name = selectedEventSpawnType || (allTypes.length > 0 ? allTypes[0] : 'NewEvent');
+            const a = 0.0;
+            return {
+                id: eventSpawns.length,
+                name,
+                x,
+                y: y ?? 0.0,
+                z,
+                a,
+                // Identifiers (if provided by backend); for new entries these will be null
+                eventIndex: null,
+                posIndex: null,
+                xml: `<pos x="${x}" z="${z}" a="${a}" />`
+            };
+        },
+        // Helper to get original position data
+        getOriginalData: (marker) => ({
+            name: marker.name,
+            x: marker.x,
+            y: marker.y,
+            z: marker.z,
+            a: marker.a
+        }),
+        // Helper to restore original data
+        restoreOriginal: (marker, original) => {
+            marker.name = original.name;
+            marker.x = original.x;
+            marker.y = original.y;
+            marker.z = original.z;
+            marker.a = original.a;
+        },
+        // Helper to prepare save data
+        prepareSaveData: (marker, index) => ({
+            index,
+            name: marker.name || 'NewEvent',
+            x: marker.x != null ? marker.x : 0,
+            y: marker.y != null ? marker.y : 0,
+            z: marker.z != null ? marker.z : 0,
+            a: marker.a != null ? marker.a : 0.0,
+            eventIndex: marker.eventIndex != null ? marker.eventIndex : null,
+            posIndex: marker.posIndex != null ? marker.posIndex : null,
+            xml: marker.xml || `<pos x="${marker.x != null ? marker.x : 0}" z="${marker.z != null ? marker.z : 0}" a="${marker.a != null ? marker.a : 0.0}" />`,
+            isNew: markerTypes.eventSpawns.new.has(index),
+            isDeleted: markerTypes.eventSpawns.deleted.has(index)
+        }),
+        // Tooltip generation
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed Event)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${(marker.y ?? 0).toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            return lines;
+        },
+        // State
+        selected: new Set(),
+        deleted: new Set(),
+        new: new Set(),
+        originalPositions: new Map(),
+        // UI configuration
+        uiConfig: {
+            showDiscardButton: true,
+            customControls: [
+                {
+                    type: 'select',
+                    id: 'eventSpawnTypeSelect',
+                    label: 'Event Type for New Spawns:',
+                    getOptions: () => {
+                        const typeNames = getAllEventSpawnTypeNames();
+                        return typeNames.map(name => ({ value: name, label: name }));
+                    },
+                    onChange: (e) => {
+                        selectedEventSpawnType = e.target.value;
+                    }
+                }
+            ]
+        }
+    },
     playerSpawnPoints: {
         getArray: () => playerSpawnPoints,
         setArray: (arr) => { playerSpawnPoints = arr; },
@@ -2742,11 +2850,18 @@ function drawEventSpawns() {
         }
         
         const isHovered = hoveredMarkerIndex === index + markers.length; // Offset by markers length
+        const isSelected = !!(editingEnabled.eventSpawns && markerTypes.eventSpawns && markerTypes.eventSpawns.selected.has(index));
         
         // Draw event spawn marker in purple color to distinguish from regular markers
-        ctx.fillStyle = isHovered ? '#ff00ff' : '#9900cc';
-        ctx.strokeStyle = isHovered ? '#cc00cc' : '#7700aa';
-        ctx.lineWidth = isHovered ? 3 : 2;
+        if (isSelected) {
+            ctx.fillStyle = '#ff0000';
+            ctx.strokeStyle = '#cc0000';
+            ctx.lineWidth = 3;
+        } else {
+            ctx.fillStyle = isHovered ? '#ff00ff' : '#9900cc';
+            ctx.strokeStyle = isHovered ? '#cc00cc' : '#7700aa';
+            ctx.lineWidth = isHovered ? 3 : 2;
+        }
         
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, isHovered ? 6 : 4, 0, Math.PI * 2);
@@ -3670,6 +3785,13 @@ function isMarkerVisible(markerType, index) {
     }
     
     // Now check other visibility conditions
+    if (markerType === 'eventSpawns') {
+        if (!showEventSpawns) return false;
+        if (visibleEventSpawns.size > 0 && !visibleEventSpawns.has(index)) {
+            return false;
+        }
+        return true;
+    }
     if (markerType === 'territoryZones') {
         // Check if the territory containing this zone is visible
         const mapEntry = zoneToTerritoryMap.get(index);
@@ -3802,7 +3924,7 @@ function updateHoveredMarker(screenX, screenY) {
     }
     
     // Check event spawns (offset index by markers.length) - skip if editing
-    if (showEventSpawns && !isEditingAnyType) {
+    if (showEventSpawns && (!isEditingAnyType || editingEnabled.eventSpawns)) {
         eventSpawns.forEach((spawn, index) => {
             if (!visibleEventSpawns.has(index) && visibleEventSpawns.size > 0) {
                 return; // Skip hidden event spawns
@@ -3892,6 +4014,10 @@ function updateHoveredMarker(screenX, screenY) {
         
         for (const markerType of Object.keys(markerTypes)) {
             const typeConfig = markerTypes[markerType];
+            // Skip event spawns here - they use a fixed hoveredMarkerIndex offset handled above
+            if (markerType === 'eventSpawns') {
+                continue;
+            }
             // Skip territory zones if not editing (they're handled above)
             if (markerType === 'territoryZones' && !editingEnabled.territoryZones) {
                 continue;
@@ -5077,6 +5203,8 @@ async function saveMarkerChanges(markerType) {
             dataKey = 'spawn_points';
         } else if (markerType === 'effectAreas') {
             dataKey = 'effect_areas';
+        } else if (markerType === 'eventSpawns') {
+            dataKey = 'event_spawns';
         } else if (markerType === 'territoryZones' || isTerritoryTypeMarker) {
             dataKey = 'zones';
         }
@@ -5349,6 +5477,9 @@ async function handleEditingToggle(markerType, enabled) {
         } else if (markerType === 'effectAreas' && !showEffectAreas) {
             showEffectAreas = true;
             updateVisibilityCheckboxes();
+        } else if (markerType === 'eventSpawns' && !showEventSpawns) {
+            showEventSpawns = true;
+            updateVisibilityCheckboxes();
         } else if ((markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_')) && !showTerritories) {
             showTerritories = true;
             updateVisibilityCheckboxes();
@@ -5523,11 +5654,12 @@ function handleFilterToSingleType(markerType, enabled) {
                 showPlayerSpawnPoints = true;
             } else if (markerType === 'effectAreas') {
                 showEffectAreas = true;
+            } else if (markerType === 'eventSpawns') {
+                showEventSpawns = true;
             }
             
             // Hide all other marker types
             showMarkers = false;
-            showEventSpawns = false;
             showTerritories = false;
             
             // Hide other marker types based on what the current type is
@@ -5536,6 +5668,9 @@ function handleFilterToSingleType(markerType, enabled) {
             }
             if (markerType !== 'effectAreas') {
                 showEffectAreas = false;
+            }
+            if (markerType !== 'eventSpawns') {
+                showEventSpawns = false;
             }
         }
         
@@ -6197,6 +6332,8 @@ async function loadEventSpawns() {
                     populateFilterEventSpawnTypeDropdown();
                 }
             }
+            // Refresh edit-mode event spawn type selector options (if present)
+            updateEventSpawnTypeSelectorForEditing();
             // Apply filters to event spawns
             applyFilters();
             draw(); // Redraw to show event spawns
@@ -6208,6 +6345,27 @@ async function loadEventSpawns() {
         eventSpawns = [];
         console.warn('Error loading event spawns:', error.message);
         // Continue execution - event spawns are optional
+    }
+}
+
+function updateEventSpawnTypeSelectorForEditing() {
+    const select = document.getElementById('eventSpawnTypeSelect');
+    if (!select) return;
+    
+    const typeNames = getAllEventSpawnTypeNames();
+    select.innerHTML = '';
+    typeNames.forEach(typeName => {
+        const option = document.createElement('option');
+        option.value = typeName;
+        option.textContent = typeName;
+        select.appendChild(option);
+    });
+    
+    if (typeNames.length > 0) {
+        if (!selectedEventSpawnType || !typeNames.includes(selectedEventSpawnType)) {
+            selectedEventSpawnType = typeNames[0];
+        }
+        select.value = selectedEventSpawnType;
     }
 }
 

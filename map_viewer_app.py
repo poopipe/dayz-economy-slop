@@ -819,17 +819,15 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
         
         event_spawns = []
         
-        # Find all event elements - try multiple approaches
-        event_elements = root.findall('.//event')
-        if len(event_elements) == 0:
-            event_elements = root.findall('//event')
-        if len(event_elements) == 0:
-            event_elements = root.findall('event')
-        if len(event_elements) == 0:
-            # Try case-insensitive search
-            for elem in root.iter():
-                if elem.tag.lower() == 'event':
-                    event_elements.append(elem)
+        def _strip_ns(tag: str) -> str:
+            # Handles tags like "{namespace}event"
+            return tag.split('}', 1)[1] if '}' in tag else tag
+        
+        # Find all event elements (namespace-agnostic, in document order)
+        event_elements = []
+        for elem in root.iter():
+            if _strip_ns(elem.tag).lower() == 'event':
+                event_elements.append(elem)
         
         print(f"Found {len(event_elements)} event elements")
         
@@ -839,7 +837,7 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
             for elem in root.iter():
                 print(f"  - {elem.tag} (attributes: {elem.attrib})")
         
-        for event in event_elements:
+        for event_idx, event in enumerate(event_elements):
             event_name = event.get('name', '')
             if not event_name:
                 print(f"Skipping event: no name attribute")
@@ -849,7 +847,10 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
             categories = type_categories.get(event_name, [])
             
             # Find ALL pos elements for this event - each pos is a separate spawn location
-            all_pos_elems = event.findall('pos')
+            all_pos_elems = []
+            for pos_elem in event.iter():
+                if _strip_ns(pos_elem.tag).lower() == 'pos':
+                    all_pos_elems.append(pos_elem)
             
             if len(all_pos_elems) == 0:
                 print(f"Event '{event_name}': no pos elements found")
@@ -857,10 +858,10 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
             
             # Process each pos element as a separate spawn location
             for pos_idx, pos_elem in enumerate(all_pos_elems):
-                # Valid pos elements have x, z, and a attributes (no text content)
+                # Valid pos elements have x and z attributes (a is optional)
                 x_attr = pos_elem.get('x')
                 z_attr = pos_elem.get('z')
-                a_attr = pos_elem.get('a')  # Angle attribute (not used for position, but part of valid format)
+                a_attr = pos_elem.get('a')
                 
                 # Skip if required attributes are missing
                 if x_attr is None or z_attr is None:
@@ -871,6 +872,7 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                     x = float(x_attr)
                     z = float(z_attr)
                     y = 0.0  # Y coordinate is not provided in pos elements, default to 0
+                    a = float(a_attr) if a_attr is not None else 0.0
                 except (ValueError, TypeError):
                     print(f"Event '{event_name}' pos[{pos_idx}]: invalid x or z value (x='{x_attr}', z='{z_attr}'), skipping")
                     continue
@@ -890,6 +892,10 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                     'x': x,
                     'y': y,
                     'z': z,  # Frontend will reverse this
+                    'a': a,
+                    # Stable identifiers for editing/saving without re-grouping:
+                    'eventIndex': event_idx,
+                    'posIndex': pos_idx,
                     'categories': categories,
                     'xml': pos_xml_string  # Store just the pos element XML
                 }
@@ -905,6 +911,203 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
         print(f"Error loading event spawns: {e}")
         traceback.print_exc()
         return []
+
+
+def save_event_spawns(event_spawns_file_path, event_spawns_data, deleted_indices=None, new_indices=None):
+    """
+    Save event spawns back to cfgeventspawns.xml while preserving original grouping/order.
+    event_spawns_data is a list of {name, x, z, a, eventIndex, posIndex, isNew, isDeleted} objects.
+    """
+    if not event_spawns_file_path or not Path(event_spawns_file_path).exists():
+        return {'success': False, 'error': f'File does not exist: {event_spawns_file_path}'}
+    
+    if deleted_indices is None:
+        deleted_indices = []
+    if new_indices is None:
+        new_indices = []
+    
+    def _strip_ns(tag: str) -> str:
+        return tag.split('}', 1)[1] if '}' in tag else tag
+    
+    try:
+        tree = ET.parse(event_spawns_file_path)
+        root = tree.getroot()
+        
+        # Collect <event> elements in document order (namespace-agnostic)
+        event_elements = [e for e in root.iter() if _strip_ns(e.tag).lower() == 'event']
+        
+        # Build a mapping from (eventIndex, posIndex) -> pos element (by document order within each event)
+        pos_map = {}
+        for event_idx, event_elem in enumerate(event_elements):
+            pos_elems = [p for p in event_elem.iter() if _strip_ns(p.tag).lower() == 'pos']
+            for pos_idx, pos_elem in enumerate(pos_elems):
+                pos_map[(event_idx, pos_idx)] = (event_elem, pos_elem)
+        
+        deleted_set = set(deleted_indices)
+        new_set = set(new_indices)
+        
+        updated_count = 0
+        deleted_count = 0
+        added_count = 0
+        
+        # Update existing positions (preserve grouping by updating in-place)
+        for data_index, spawn_data in enumerate(event_spawns_data):
+            if data_index in deleted_set or spawn_data.get('isDeleted', False):
+                continue
+            if data_index in new_set or spawn_data.get('isNew', False):
+                continue
+            
+            event_idx = spawn_data.get('eventIndex')
+            pos_idx = spawn_data.get('posIndex')
+            if event_idx is None or pos_idx is None:
+                # Without stable identifiers, skip (cannot reliably preserve grouping)
+                continue
+            
+            key = (int(event_idx), int(pos_idx))
+            if key not in pos_map:
+                continue
+            
+            _, pos_elem = pos_map[key]
+            
+            x_val = spawn_data.get('x')
+            z_val = spawn_data.get('z')
+            a_val = spawn_data.get('a', 0.0)
+            if x_val is None or z_val is None:
+                continue
+            
+            x = round(float(x_val), 2)
+            z = round(float(z_val), 2)
+            a = round(float(a_val) if a_val is not None else 0.0, 2)
+            
+            pos_elem.set('x', str(x))
+            pos_elem.set('z', str(z))
+            # Keep a if it existed originally or if client provides it
+            pos_elem.set('a', str(a))
+            updated_count += 1
+        
+        # Remove deleted positions (by stable IDs, removing element refs)
+        # Remove in descending posIndex per eventIndex to avoid surprises (though we use element refs).
+        to_remove = []
+        for data_index, spawn_data in enumerate(event_spawns_data):
+            if not (data_index in deleted_set or spawn_data.get('isDeleted', False)):
+                continue
+            event_idx = spawn_data.get('eventIndex')
+            pos_idx = spawn_data.get('posIndex')
+            if event_idx is None or pos_idx is None:
+                continue
+            key = (int(event_idx), int(pos_idx))
+            if key in pos_map:
+                event_elem, pos_elem = pos_map[key]
+                to_remove.append((int(event_idx), int(pos_idx), event_elem, pos_elem))
+        
+        to_remove.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        for _, __, event_elem, pos_elem in to_remove:
+            try:
+                event_elem.remove(pos_elem)
+                deleted_count += 1
+            except Exception:
+                pass
+        
+        # Add new positions (append under their event by name; create event if missing)
+        def find_event_by_name(name: str):
+            for ev in event_elements:
+                if ev.get('name', '') == name:
+                    return ev
+            return None
+        
+        for idx in sorted(new_indices):
+            if idx < 0 or idx >= len(event_spawns_data):
+                continue
+            spawn_data = event_spawns_data[idx]
+            if spawn_data.get('isDeleted', False):
+                continue
+            
+            name = spawn_data.get('name') or 'NewEvent'
+            x_val = spawn_data.get('x')
+            z_val = spawn_data.get('z')
+            a_val = spawn_data.get('a', 0.0)
+            if x_val is None or z_val is None:
+                continue
+            
+            x = round(float(x_val), 2)
+            z = round(float(z_val), 2)
+            a = round(float(a_val) if a_val is not None else 0.0, 2)
+            
+            event_elem = find_event_by_name(name)
+            if event_elem is None:
+                event_elem = ET.SubElement(root, 'event')
+                event_elem.set('name', name)
+                event_elements.append(event_elem)
+            
+            new_pos = ET.SubElement(event_elem, 'pos')
+            new_pos.set('x', str(x))
+            new_pos.set('z', str(z))
+            new_pos.set('a', str(a))
+            added_count += 1
+        
+        ET.indent(tree, space='    ')
+        tree.write(event_spawns_file_path, encoding='utf-8', xml_declaration=True)
+        
+        return {
+            'success': True,
+            'count': updated_count + deleted_count + added_count,
+            'updated': updated_count,
+            'deleted': deleted_count,
+            'added': added_count
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/event-spawns/save', methods=['POST'])
+def save_event_spawns_endpoint():
+    """Save event spawn data back to cfgeventspawns.xml."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({'success': False, 'error': f'Mission directory does not exist: {mission_dir}'}), 404
+        
+        event_spawns_data = data.get('event_spawns', [])
+        if event_spawns_data is None:
+            return jsonify({'success': False, 'error': 'No event spawns data provided'}), 400
+        
+        deleted_indices = data.get('deleted_indices', [])
+        new_indices = data.get('new_indices', [])
+        
+        event_spawns_file = mission_path / 'cfgeventspawns.xml'
+        if not event_spawns_file.exists():
+            return jsonify({'success': False, 'error': f'cfgeventspawns.xml not found at: {event_spawns_file}'}), 404
+        
+        print(f"Saving event spawns to: {event_spawns_file}")
+        result = save_event_spawns(str(event_spawns_file), event_spawns_data, deleted_indices, new_indices)
+        
+        if result.get('success'):
+            message_parts = []
+            if result.get('updated', 0) > 0:
+                message_parts.append(f"{result['updated']} updated")
+            if result.get('added', 0) > 0:
+                message_parts.append(f"{result['added']} added")
+            if result.get('deleted', 0) > 0:
+                message_parts.append(f"{result['deleted']} deleted")
+            message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
+            
+            return jsonify({'success': True, 'count': result.get('count', 0), 'message': message})
+        
+        return jsonify({'success': False, 'error': result.get('error', 'Unknown error')}), 500
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/event-spawns')
