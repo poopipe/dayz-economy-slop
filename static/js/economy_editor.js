@@ -17,6 +17,7 @@ let availableItemclasses = []; // List of all available itemclasses
 let availableItemtags = []; // List of all available itemtags
 let activeFilters = []; // Array of filter objects: {column, criteria, value, include}
 let selectedRows = new Set(); // Set of selected element keys for bulk operations
+let lastClickedRowIndexInDisplay = null; // For shift-click range selection (index in visible rows)
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -664,6 +665,7 @@ function getColumnLabel(key) {
     // Convert column keys to readable labels
     const labelMap = {
         'name': 'Name',
+        '_export': 'Export',
         '_category_names': 'Categories',
         '_tag_names': 'Tags',
         '_usageflag_names': 'Usage Flags',
@@ -716,6 +718,7 @@ function displayTable() {
     // Always include these columns even if they don't exist in all records
     const priorityColumns = [
         'name',
+        '_export',
         '_itemclass_name',
         '_itemtag_names',
         '_category_names',
@@ -790,13 +793,14 @@ function displayTable() {
             : ' <span class="sort-indicator sort-inactive">⇅</span>';
         
         const isEditable = ['nominal', 'lifetime', 'restock', 'min'].includes(col.key);
+        const isExport = col.key === '_export';
         const isValueflags = col.key === '_valueflag_names' || col.key === '_valueflags';
         const isUsageflags = col.key === '_usageflag_names' || col.key === '_usageflags';
         const isFlags = col.key === '_flag_names' || col.key === '_flags';
         const isCategories = col.key === '_category_names' || col.key === '_categories';
         const isItemclass = col.key === '_itemclass_name' || col.key === '_itemclass_id';
         const isItemtags = col.key === '_itemtag_names' || col.key === '_itemtags';
-        const editableClass = (isEditable || isValueflags || isUsageflags || isFlags || isCategories || isItemclass || isItemtags) ? ' editable-column-header' : '';
+        const editableClass = (isEditable || isExport || isValueflags || isUsageflags || isFlags || isCategories || isItemclass || isItemtags) ? ' editable-column-header' : '';
         
         html += `<th class="sortable${editableClass}" data-column="${col.key}">${escapeHtml(col.label)}${sortIndicator}</th>`;
     });
@@ -883,6 +887,7 @@ function displayTable() {
             }
             
             // Make editable fields clickable
+            const isExport = col.key === '_export';
             const isValueflags = col.key === '_valueflag_names' || col.key === '_valueflags';
             const isUsageflags = col.key === '_usageflag_names' || col.key === '_usageflags';
             const isFlags = col.key === '_flag_names' || col.key === '_flags';
@@ -890,7 +895,10 @@ function displayTable() {
             const isItemclass = col.key === '_itemclass_name' || col.key === '_itemclass_id';
             const isItemtags = col.key === '_itemtag_names' || col.key === '_itemtags';
             
-            if (isEditable) {
+            if (isExport) {
+                const checked = value !== false && value !== 0;
+                html += `<td class="export-cell"><input type="checkbox" class="export-checkbox" data-element-key="${escapeHtml(record._element_key || '')}" ${checked ? 'checked' : ''} title="Include in Export to XML"></td>`;
+            } else if (isEditable) {
                 html += `<td class="editable-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="${escapeHtml(col.key)}" data-row-index="${rowIndex}">${escapeHtml(displayValue)}</td>`;
             } else if (isValueflags) {
                 html += `<td class="editable-cell valueflags-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="valueflags">${escapeHtml(displayValue)}</td>`;
@@ -948,8 +956,32 @@ function displayTable() {
         });
     }
     
-    // Add row checkbox handlers
+    // Add row checkbox handlers (click for shift-range; change for toggle)
+    const visibleRows = Array.from(container.querySelectorAll('tbody tr'));
     container.querySelectorAll('.row-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('click', (e) => {
+            const row = e.target.closest('tr');
+            if (!row) return;
+            const currentIndex = visibleRows.indexOf(row);
+            if (currentIndex === -1) return;
+            if (e.shiftKey && lastClickedRowIndexInDisplay !== null) {
+                const low = Math.min(lastClickedRowIndexInDisplay, currentIndex);
+                const high = Math.max(lastClickedRowIndexInDisplay, currentIndex);
+                for (let i = low; i <= high; i++) {
+                    const r = visibleRows[i];
+                    const cb = r.querySelector('.row-checkbox');
+                    const key = cb ? cb.getAttribute('data-element-key') : null;
+                    if (key) {
+                        selectedRows.add(key);
+                        cb.checked = true;
+                        r.classList.add('selected-row');
+                    }
+                }
+                updateSelectAllCheckbox(container, dataToDisplay);
+            } else {
+                lastClickedRowIndexInDisplay = currentIndex;
+            }
+        });
         checkbox.addEventListener('change', (e) => {
             const elementKey = e.target.getAttribute('data-element-key');
             if (elementKey) {
@@ -962,6 +994,35 @@ function displayTable() {
                 }
                 // Update select-all checkbox
                 updateSelectAllCheckbox(container, dataToDisplay);
+            }
+        });
+    });
+    
+    // Add Export checkbox handlers (DB-only field; when false, element is excluded from Export to XML)
+    container.querySelectorAll('.export-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', async (e) => {
+            const elementKey = e.target.getAttribute('data-element-key');
+            if (!elementKey) return;
+            const newValue = e.target.checked;
+            try {
+                const response = await fetch(`/api/elements/${encodeURIComponent(elementKey)}/export`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        value: newValue,
+                        mission_dir: currentMissionDir || '',
+                        db_file_path: currentDbFilePath || ''
+                    })
+                });
+                const result = await response.json();
+                if (!result.success) throw new Error(result.error || 'Failed to update');
+                const record = tableData.find(r => r._element_key === elementKey);
+                if (record) record._export = newValue;
+                updateStatus('Export flag updated');
+            } catch (err) {
+                console.error(err);
+                alert('Failed to update Export flag: ' + err.message);
+                e.target.checked = !newValue;
             }
         });
     });

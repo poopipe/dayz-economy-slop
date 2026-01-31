@@ -241,6 +241,7 @@ def init_database_for_file(db_file_path, mission_dir=None):
             name TEXT,
             source_file TEXT,
             source_folder TEXT,
+            export INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -369,8 +370,20 @@ def init_database_for_file(db_file_path, mission_dir=None):
     # Ensure count_in_hoarder flag exists
     cursor.execute('INSERT OR IGNORE INTO flags (name) VALUES (?)', ('count_in_hoarder',))
     
+    # Migration: add export column to type_elements if missing (existing DBs)
+    ensure_export_column(cursor)
+    
     conn.commit()
     conn.close()
+
+
+def ensure_export_column(cursor):
+    """Ensure type_elements has an 'export' column; add and backfill if missing."""
+    cursor.execute("PRAGMA table_info(type_elements)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'export' not in columns:
+        cursor.execute('ALTER TABLE type_elements ADD COLUMN export INTEGER DEFAULT 1')
+        cursor.execute('UPDATE type_elements SET export = 1 WHERE export IS NULL')
 
 
 def ensure_count_in_hoarder_flag(conn):
@@ -562,11 +575,16 @@ def load_xml_to_database(mission_dir, element_type='type'):
                 
                 element_key = str(name_value)
                 
-                # Insert or update type_elements
+                # Insert or update type_elements (preserve export on update - DB-only field)
                 cursor.execute('''
-                    INSERT OR REPLACE INTO type_elements 
-                    (element_key, name, source_file, source_folder, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO type_elements 
+                    (element_key, name, source_file, source_folder, export, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(element_key) DO UPDATE SET
+                        name = excluded.name,
+                        source_file = excluded.source_file,
+                        source_folder = excluded.source_folder,
+                        updated_at = excluded.updated_at
                 ''', (element_key, name_value, source_file, source_folder, datetime.now().isoformat()))
                 
                 # Delete existing fields for this element
@@ -885,9 +903,13 @@ def get_elements():
             ensure_count_in_hoarder_flag(conn)
             cursor = conn.cursor()
         
+        # Ensure export column exists (migration for existing DBs)
+        ensure_export_column(cursor)
+        conn.commit()
+        
         # Get all elements
         cursor.execute('''
-            SELECT element_key, name, source_file, source_folder
+            SELECT element_key, name, source_file, source_folder, COALESCE(export, 1) AS export
             FROM type_elements
             ORDER BY name
         ''')
@@ -1013,7 +1035,8 @@ def get_elements():
             data['_flags'] = flags
             data['_flag_names'] = [f['name'] for f in flags]
             
-            # Add metadata
+            # Add metadata (export is DB-only, not in XML)
+            data['_export'] = bool(row['export'])
             data['_element_key'] = element_key
             data['_source_file'] = row['source_file']
             data['_source_folder'] = row['source_folder']
@@ -1115,11 +1138,11 @@ def create_element():
             conn.close()
             return jsonify({'success': False, 'error': f'Element with key "{element_key}" already exists'}), 400
         
-        # Insert new element
+        # Insert new element (export defaults to true)
         cursor.execute('''
             INSERT INTO type_elements 
-            (element_key, name, source_file, source_folder, created_at, updated_at)
-            VALUES (?, ?, NULL, NULL, ?, ?)
+            (element_key, name, source_file, source_folder, export, created_at, updated_at)
+            VALUES (?, ?, NULL, NULL, 1, ?, ?)
         ''', (element_key, name, datetime.now().isoformat(), datetime.now().isoformat()))
         
         # Handle itemclass (single selection)
@@ -1416,11 +1439,16 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                         cursor.execute('DELETE FROM type_elements WHERE element_key = ?', (element_key,))
                         updated_count += 1
                 
-                # Insert or update element
+                # Insert or update element (preserve export on update - DB-only field)
                 cursor.execute('''
-                    INSERT OR REPLACE INTO type_elements 
-                    (element_key, name, source_file, source_folder, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO type_elements 
+                    (element_key, name, source_file, source_folder, export, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(element_key) DO UPDATE SET
+                        name = excluded.name,
+                        source_file = excluded.source_file,
+                        source_folder = excluded.source_folder,
+                        updated_at = excluded.updated_at
                 ''', (element_key, name_value, source_file, source_folder, datetime.now().isoformat()))
                 
                 # Delete existing fields for this element
@@ -2391,12 +2419,15 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
     """
     Export database contents back to XML files.
     Supports both normal export and export by itemclass.
+    Only elements with export=1 are written to XML.
     """
     if db_file_path:
         conn = get_db_connection(db_file_path=db_file_path)
     else:
         conn = get_db_connection(mission_dir)
     cursor = conn.cursor()
+    ensure_export_column(cursor)
+    conn.commit()
     
     mission_path = Path(mission_dir)
     if not mission_path.exists():
@@ -2414,10 +2445,11 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         conn.close()
         return result
     
-    # Normal export - write all types to missionfolder/db/types.xml
+    # Normal export - write only types with export=1 to missionfolder/db/types.xml
     cursor.execute('''
         SELECT element_key
         FROM type_elements
+        WHERE COALESCE(export, 1) = 1
         ORDER BY element_key
     ''')
     
@@ -2581,12 +2613,13 @@ def load_element_data(cursor, element_key):
 
 def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path=None):
     """Export elements grouped by itemclass."""
-    # Get all elements with itemclasses
+    # Get all elements with itemclasses (only those marked for export)
     cursor.execute('''
         SELECT te.element_key, ic.name as itemclass_name
         FROM type_elements te
         LEFT JOIN element_itemclasses eic ON te.element_key = eic.element_key
         LEFT JOIN itemclasses ic ON eic.itemclass_id = ic.id
+        WHERE COALESCE(te.export, 1) = 1
         ORDER BY ic.name, te.name
     ''')
     
@@ -3260,6 +3293,57 @@ def update_element_flags(element_key):
             SET updated_at = ?
             WHERE element_key = ?
         ''', (datetime.now().isoformat(), element_key))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/elements/<element_key>/export', methods=['PUT'])
+def update_element_export(element_key):
+    """Update the Export (DB-only) flag for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+        
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        data = request.json
+        value = data.get('value')
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        
+        if value is None:
+            return jsonify({'error': 'value is required (true/false)'}), 400
+        
+        export_int = 1 if value else 0
+        
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        
+        ensure_export_column(cursor)
+        conn.commit()
+        
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+        
+        cursor.execute('''
+            UPDATE type_elements
+            SET export = ?, updated_at = ?
+            WHERE element_key = ?
+        ''', (export_int, datetime.now().isoformat(), element_key))
         
         conn.commit()
         conn.close()
