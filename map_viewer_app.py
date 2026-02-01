@@ -406,6 +406,52 @@ def delete_background_image(image_id):
         }), 500
 
 
+@app.route('/api/export-map', methods=['POST'])
+def export_map():
+    """Save exported map PNG to a path (default: mission folder)."""
+    import base64
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data'}), 400
+        mission_dir = data.get('mission_dir') or ''
+        path_input = (data.get('path') or '').strip()
+        image_b64 = data.get('image') or ''
+        if not image_b64:
+            return jsonify({'success': False, 'error': 'No image data'}), 400
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'Mission directory required'}), 400
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            mission_path.mkdir(parents=True, exist_ok=True)
+        mission_resolved = mission_path.resolve()
+        if path_input:
+            path_obj = Path(path_input)
+            if not path_obj.is_absolute():
+                path_obj = mission_path / path_obj
+            path_obj = path_obj.resolve()
+            try:
+                path_obj.relative_to(mission_resolved)
+            except ValueError:
+                path_obj = mission_path / 'map_export.png'
+        else:
+            path_obj = mission_path / 'map_export.png'
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+        if image_b64.startswith('data:'):
+            image_b64 = image_b64.split(',', 1)[-1]
+        raw = base64.b64decode(image_b64)
+        path_obj.write_bytes(raw)
+        return jsonify({
+            'success': True,
+            'path': str(path_obj),
+            'message': f'Saved to {path_obj}'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 def load_effect_areas(effect_area_file_path):
     """
     Load effect areas from cfgeffectarea.json.

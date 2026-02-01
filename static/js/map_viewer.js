@@ -3650,6 +3650,132 @@ function draw() {
     }
 }
 
+// Compute world bounds from all marker data (markers, event spawns, territories, spawn points, effect areas)
+function getExportWorldBounds() {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    const consider = (x, z) => {
+        if (x != null && z != null && isFinite(x) && isFinite(z)) {
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+        }
+    };
+    markers.forEach(m => consider(m.x, m.z));
+    (eventSpawns || []).forEach(m => consider(m.x, m.z));
+    (playerSpawnPoints || []).forEach(m => consider(m.x, m.z));
+    (effectAreas || []).forEach(m => consider(m.x, m.z));
+    const typeNames = getAllTerritoryTypeNames();
+    typeNames.forEach(territoryType => {
+        const zones = territoryTypeZones[territoryType];
+        if (zones) zones.forEach(z => consider(z.x, z.z));
+    });
+    if (territoryTypeZones.zombieTerritoryZones) {
+        territoryTypeZones.zombieTerritoryZones.forEach(z => consider(z.x, z.z));
+    }
+    if (minX === Infinity) { minX = 0; maxX = imageWidth; minZ = 0; maxZ = imageHeight; }
+    return { minX, maxX, minZ, maxZ };
+}
+
+// Export map to PNG at 1 pixel per metre (imageWidth x imageHeight from dimension fields)
+// Uses actual data bounds from all sources so all visible markers fit; scales to fit export canvas
+function exportMapToImage(includeBackground) {
+    const exportW = Math.max(1, Math.floor(imageWidth));
+    const exportH = Math.max(1, Math.floor(imageHeight));
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = exportW;
+    exportCanvas.height = exportH;
+    const exportCtx = exportCanvas.getContext('2d');
+    if (!exportCtx) return null;
+
+    const savedMinX = minX, savedMaxX = maxX, savedMinZ = minZ, savedMaxZ = maxZ;
+    const savedScale = viewScale, savedOffsetX = viewOffsetX, savedOffsetY = viewOffsetY;
+    const savedCtx = ctx, savedCanvasW = canvasWidth, savedCanvasH = canvasHeight;
+
+    // Fixed 1 pixel per metre: world [0, imageWidth] x [0, imageHeight] maps to the full canvas.
+    // Map origin (0,0) at bottom-left; (imageWidth, imageHeight) at top-right in world = pixel (imageWidth, 0).
+    minX = 0;
+    maxX = imageWidth;
+    minZ = 0;
+    maxZ = imageHeight;
+    viewScale = 1;
+    viewOffsetX = 0;
+    viewOffsetY = 0;
+    canvasWidth = exportW;
+    canvasHeight = exportH;
+    ctx = exportCtx;
+
+    if (includeBackground) {
+        if (backgroundImage && backgroundImage.complete && backgroundImage.naturalWidth > 0) {
+            exportCtx.save();
+            exportCtx.imageSmoothingEnabled = true;
+            exportCtx.globalAlpha = backgroundImageOpacity;
+            exportCtx.drawImage(backgroundImage, 0, 0, backgroundImage.width, backgroundImage.height, 0, 0, exportW, exportH);
+            exportCtx.restore();
+        } else {
+            exportCtx.fillStyle = '#2E3440';
+            exportCtx.fillRect(0, 0, exportW, exportH);
+        }
+        drawGrid();
+    } else {
+        exportCtx.clearRect(0, 0, exportW, exportH);
+    }
+
+    drawMarkers();
+    drawEventSpawns();
+    drawTerritories();
+    drawZombieTerritories();
+    drawPlayerSpawnPoints();
+    drawEffectAreas();
+
+    minX = savedMinX; maxX = savedMaxX; minZ = savedMinZ; maxZ = savedMaxZ;
+    viewScale = savedScale; viewOffsetX = savedOffsetX; viewOffsetY = savedOffsetY;
+    ctx = savedCtx; canvasWidth = savedCanvasW; canvasHeight = savedCanvasH;
+
+    return exportCanvas.toDataURL('image/png');
+}
+
+async function handleExportMap() {
+    const includeBackground = document.getElementById('exportIncludeBackground').checked;
+    const pathInput = document.getElementById('exportPath');
+    const pathValue = (pathInput && pathInput.value) ? pathInput.value.trim() : '';
+    const dataUrl = exportMapToImage(includeBackground);
+    if (!dataUrl) {
+        updateStatus('Export failed: could not create image', true);
+        return;
+    }
+    const defaultPath = missionDir ? (missionDir + (missionDir.endsWith('/') || missionDir.endsWith('\\') ? '' : '/') + 'map_export.png') : '';
+    const pathToUse = pathValue || defaultPath;
+    try {
+        const response = await fetch('/api/export-map', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mission_dir: missionDir || '',
+                path: pathToUse,
+                image: dataUrl
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            if (result.path && pathInput) {
+                pathInput.value = result.path;
+                try {
+                    localStorage.setItem('map_viewer_exportPath', result.path);
+                } catch (e) { /* ignore */ }
+            }
+            updateStatus(result.message || `Saved to ${result.path}`);
+        } else {
+            throw new Error(result.error || 'Save failed');
+        }
+    } catch (err) {
+        console.error('Export save failed:', err);
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = 'map_export.png';
+        a.click();
+        updateStatus('Saved to server failed; downloaded map_export.png instead');
+    }
+}
+
 // Handle mouse down
 function handleMouseDown(e) {
     const rect = canvas.getBoundingClientRect();
@@ -7432,6 +7558,7 @@ const SIDEBAR_SECTIONS_STORAGE_KEY = 'map_viewer_sidebarSectionsOpen_v1';
 const SIDEBAR_SECTION_ORDER = [
     'mission',
     'backgroundImage',
+    'exportMap',
     'location',
     'display',
     'editMarkers',
@@ -7628,6 +7755,12 @@ async function restoreSavedState() {
                 valueDisplay.textContent = Math.round(backgroundImageOpacity * 100) + '%';
             }
         }
+    }
+    
+    const savedExportPath = localStorage.getItem('map_viewer_exportPath');
+    if (savedExportPath !== null) {
+        const exportPathEl = document.getElementById('exportPath');
+        if (exportPathEl) exportPathEl.value = savedExportPath;
     }
     
     // Restore filters
@@ -8120,6 +8253,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
     document.getElementById('copySelectedXmlBtn').addEventListener('click', copySelectedXml);
+    const exportMapBtn = document.getElementById('exportMapBtn');
+    if (exportMapBtn) exportMapBtn.addEventListener('click', handleExportMap);
+    const exportPathInput = document.getElementById('exportPath');
+    if (exportPathInput) {
+        exportPathInput.addEventListener('blur', () => {
+            try {
+                localStorage.setItem('map_viewer_exportPath', exportPathInput.value || '');
+            } catch (e) { /* ignore */ }
+        });
+    }
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
     document.getElementById('clearImageBtn').addEventListener('click', clearBackgroundImage);
     document.getElementById('applyDimensionsBtn').addEventListener('click', applyImageDimensions);

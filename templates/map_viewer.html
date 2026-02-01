@@ -107,6 +107,21 @@
                         </div>
                     </div>
                 
+                <div id="exportMapSection" class="sidebar-section-content" data-section-id="exportMap" data-section-title="Export map">
+                    <div class="control-group">
+                        <label>
+                            <input type="checkbox" id="exportIncludeBackground" checked> Include background image
+                        </label>
+                    </div>
+                    <div class="control-group">
+                        <label for="exportPath">Save path:</label>
+                        <input type="text" id="exportPath" class="mission-dir-input" placeholder="Mission folder (default)">
+                    </div>
+                    <div class="control-group">
+                        <button id="exportMapBtn" class="btn btn-primary">Export to PNG</button>
+                    </div>
+                </div>
+                
                 <!-- Filter Section -->
                 <div class="filter-section sidebar-section-content" id="filterSection" data-section-id="markerFilters" data-section-title="Group Filters" style="display: none;">
                     <div class="filter-builder">
