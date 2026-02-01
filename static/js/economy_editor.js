@@ -999,26 +999,40 @@ function displayTable() {
     });
     
     // Add Export checkbox handlers (DB-only field; when false, element is excluded from Export to XML)
+    // If multiple rows are selected and the clicked row is in the selection, apply to all selected rows
     container.querySelectorAll('.export-checkbox').forEach(checkbox => {
         checkbox.addEventListener('change', async (e) => {
             const elementKey = e.target.getAttribute('data-element-key');
             if (!elementKey) return;
             const newValue = e.target.checked;
+            const elementKeysToUpdate = (selectedRows.has(elementKey) && selectedRows.size > 0)
+                ? Array.from(selectedRows)
+                : [elementKey];
             try {
-                const response = await fetch(`/api/elements/${encodeURIComponent(elementKey)}/export`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        value: newValue,
-                        mission_dir: currentMissionDir || '',
-                        db_file_path: currentDbFilePath || ''
+                const promises = elementKeysToUpdate.map(key =>
+                    fetch(`/api/elements/${encodeURIComponent(key)}/export`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            value: newValue,
+                            mission_dir: currentMissionDir || '',
+                            db_file_path: currentDbFilePath || ''
+                        })
                     })
+                );
+                const responses = await Promise.all(promises);
+                const results = await Promise.all(responses.map(r => r.json()));
+                const failed = results.filter(r => !r.success);
+                if (failed.length > 0) throw new Error(failed[0].error || 'Failed to update');
+                elementKeysToUpdate.forEach(key => {
+                    const record = tableData.find(r => r._element_key === key);
+                    if (record) record._export = newValue;
                 });
-                const result = await response.json();
-                if (!result.success) throw new Error(result.error || 'Failed to update');
-                const record = tableData.find(r => r._element_key === elementKey);
-                if (record) record._export = newValue;
-                updateStatus('Export flag updated');
+                container.querySelectorAll('.export-checkbox').forEach(cb => {
+                    const key = cb.getAttribute('data-element-key');
+                    if (elementKeysToUpdate.includes(key)) cb.checked = newValue;
+                });
+                updateStatus(`Export flag updated${elementKeysToUpdate.length > 1 ? ` (${elementKeysToUpdate.length} elements)` : ''}`);
             } catch (err) {
                 console.error(err);
                 alert('Failed to update Export flag: ' + err.message);
@@ -2000,6 +2014,10 @@ async function saveItemtags() {
 }
 
 function getColumnType(columnKey) {
+    // Check for boolean columns
+    if (columnKey === '_export') {
+        return 'boolean';
+    }
     // Check for fixed list columns
     if (columnKey === '_valueflag_names' || columnKey === '_valueflags') {
         return 'valueflags';
@@ -2071,7 +2089,12 @@ function applyFilters(data) {
                                     columnType === 'valueflags' || columnType === 'usageflags' || 
                                     columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
             
-            if (hasDefinedValues && Array.isArray(filter.value)) {
+            if (columnType === 'boolean') {
+                // Handle boolean columns (e.g. _export)
+                const recordBool = columnValue === true || columnValue === 1;
+                const filterBool = filter.value === 'true' || filter.value === true;
+                matches = (recordBool === filterBool);
+            } else if (hasDefinedValues && Array.isArray(filter.value)) {
                 // Handle defined value columns (itemclass, itemtags, etc.)
                 matches = applyDefinedValueFilter(record, filter.column, filter.value, filter.criteria, columnType);
             } else {
@@ -2185,12 +2208,26 @@ function updateFilterUI() {
                             columnType === 'valueflags' || columnType === 'usageflags' || 
                             columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
     
-    if (hasDefinedValues) {
+    if (columnType === 'boolean') {
+        // Show dropdown (true/false), hide text input
+        filterValueInput.style.display = 'none';
+        filterValueSelect.style.display = 'block';
+        filterValueInput.value = '';
+        filterValueSelect.selectedIndex = -1;
+        filterValueSelect.multiple = false;
+        
+        filterCriteria.innerHTML = `
+            <option value="equals">Equals</option>
+        `;
+        
+        populateFilterValueDropdown(column, columnType);
+    } else if (hasDefinedValues) {
         // Show dropdown, hide text input
         filterValueInput.style.display = 'none';
         filterValueSelect.style.display = 'block';
         filterValueInput.value = ''; // Clear text input
         filterValueSelect.selectedIndex = -1; // Clear dropdown selection
+        filterValueSelect.multiple = true;
         
         // Update criteria options for defined value columns
         filterCriteria.innerHTML = `
@@ -2222,6 +2259,18 @@ function populateFilterValueDropdown(column, columnType) {
     if (!select) return;
     
     select.innerHTML = '';
+    
+    if (columnType === 'boolean') {
+        const trueOpt = document.createElement('option');
+        trueOpt.value = 'true';
+        trueOpt.textContent = 'True';
+        select.appendChild(trueOpt);
+        const falseOpt = document.createElement('option');
+        falseOpt.value = 'false';
+        falseOpt.textContent = 'False';
+        select.appendChild(falseOpt);
+        return;
+    }
     
     let options = [];
     switch (columnType) {
@@ -2275,7 +2324,14 @@ function addFilter() {
                             columnType === 'valueflags' || columnType === 'usageflags' || 
                             columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
     
-    if (hasDefinedValues) {
+    if (columnType === 'boolean') {
+        const selectedOpt = filterValueSelect.selectedOptions[0];
+        if (!selectedOpt || (selectedOpt.value !== 'true' && selectedOpt.value !== 'false')) {
+            alert('Please select True or False');
+            return;
+        }
+        value = selectedOpt.value; // "true" or "false"
+    } else if (hasDefinedValues) {
         const selectedOptions = Array.from(filterValueSelect.selectedOptions).map(opt => parseInt(opt.value));
         if (selectedOptions.length === 0) {
             alert('Please select at least one value');
@@ -2397,6 +2453,8 @@ function displayActiveFilters() {
                 return option ? option.name : `ID:${id}`;
             });
             valueDisplay = names.join(', ');
+        } else if (getColumnType(filter.column) === 'boolean') {
+            valueDisplay = filter.value === 'true' ? 'True' : (filter.value === 'false' ? 'False' : String(filter.value));
         } else {
             valueDisplay = filter.value;
         }
