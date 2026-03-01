@@ -1436,9 +1436,47 @@ class SelectionManager {
 // Create global selection manager instance
 const selectionManager = new SelectionManager();
 
+class BaseControlsManager {
+    createButton({ id, text, className = 'btn', marginLeftPx = 0, styles = {}, onClick = null }) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        if (id) btn.id = id;
+        btn.className = className;
+        btn.textContent = text;
+        if (marginLeftPx > 0) {
+            btn.style.marginLeft = `${marginLeftPx}px`;
+        }
+        Object.entries(styles || {}).forEach(([k, v]) => {
+            btn.style[k] = v;
+        });
+        if (onClick) btn.addEventListener('click', onClick);
+        return btn;
+    }
+
+    createInstructionsElement(instructions) {
+        const p = document.createElement('p');
+        p.className = 'edit-instructions';
+        p.style.fontSize = '11px';
+        p.style.color = 'var(--nord4)';
+        p.style.marginTop = '5px';
+        p.style.marginBottom = '5px';
+        (instructions || []).forEach((instruction, index) => {
+            if (index > 0) {
+                p.appendChild(document.createElement('br'));
+            }
+            const strong = document.createElement('strong');
+            strong.textContent = `${instruction.label}: `;
+            p.appendChild(strong);
+            p.appendChild(document.createTextNode(instruction.text));
+        });
+        return p;
+    }
+}
+
 // Edit Controls Manager - unified UI system for edit mode controls
-class EditControlsManager {
+class EditControlsManager extends BaseControlsManager {
     constructor(containerId) {
+        super();
         this.container = document.getElementById(containerId);
         this.activeControls = new Map(); // Map<markerType, HTMLElement>
         if (!this.container) {
@@ -1526,24 +1564,7 @@ class EditControlsManager {
     }
     
     createInstructions(instructions) {
-        const p = document.createElement('p');
-        p.className = 'edit-instructions';
-        p.style.fontSize = '11px';
-        p.style.color = 'var(--nord4)';
-        p.style.marginTop = '5px';
-        p.style.marginBottom = '5px';
-        
-        instructions.forEach((instruction, index) => {
-            if (index > 0) {
-                p.appendChild(document.createElement('br'));
-            }
-            const strong = document.createElement('strong');
-            strong.textContent = `${instruction.label}: `;
-            p.appendChild(strong);
-            p.appendChild(document.createTextNode(instruction.text));
-        });
-        
-        return p;
+        return this.createInstructionsElement(instructions);
     }
     
     createCustomControl(controlConfig) {
@@ -1660,44 +1681,52 @@ class EditControlsManager {
         container.style.marginTop = '8px';
         
         // Save button (always present)
-        const saveBtn = document.createElement('button');
-        saveBtn.id = `save${this.capitalize(markerType)}Btn`;
-        saveBtn.textContent = 'Save Changes';
-        saveBtn.style.padding = '6px 12px';
-        saveBtn.style.background = 'var(--nord10)';
-        saveBtn.style.color = 'white';
-        saveBtn.style.border = 'none';
-        saveBtn.style.borderRadius = '4px';
-        saveBtn.style.cursor = 'pointer';
-        saveBtn.addEventListener('click', async () => {
-            const result = await saveMarkerChanges(markerType);
-            if (result.success) {
-                updateStatus(result.message);
-                markerTypes[markerType].selected.clear();
-                updateSelectedCount();
-                draw();
-            } else {
-                updateStatus(`Error saving: ${result.message}`, true);
+        const saveBtn = this.createButton({
+            id: `save${this.capitalize(markerType)}Btn`,
+            text: 'Save Changes',
+            className: '',
+            styles: {
+                padding: '6px 12px',
+                background: 'var(--nord10)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+            },
+            onClick: async () => {
+                const result = await saveMarkerChanges(markerType);
+                if (result.success) {
+                    updateStatus(result.message);
+                    markerTypes[markerType].selected.clear();
+                    updateSelectedCount();
+                    draw();
+                } else {
+                    updateStatus(`Error saving: ${result.message}`, true);
+                }
             }
         });
         container.appendChild(saveBtn);
         
         // Discard button (if configured)
         if (config.showDiscardButton) {
-            const discardBtn = document.createElement('button');
-            discardBtn.id = `discard${this.capitalize(markerType)}Btn`;
-            discardBtn.textContent = 'Discard Changes';
-            discardBtn.style.marginLeft = '8px';
-            discardBtn.style.padding = '6px 12px';
-            discardBtn.style.background = 'var(--nord3)';
-            discardBtn.style.color = 'white';
-            discardBtn.style.border = 'none';
-            discardBtn.style.borderRadius = '4px';
-            discardBtn.style.cursor = 'pointer';
-            discardBtn.addEventListener('click', () => {
-                restoreMarkerPositions(markerType);
-                updateSelectedCount();
-                draw();
+            const discardBtn = this.createButton({
+                id: `discard${this.capitalize(markerType)}Btn`,
+                text: 'Discard Changes',
+                className: '',
+                marginLeftPx: 8,
+                styles: {
+                    padding: '6px 12px',
+                    background: 'var(--nord3)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                },
+                onClick: () => {
+                    restoreMarkerPositions(markerType);
+                    updateSelectedCount();
+                    draw();
+                }
             });
             container.appendChild(discardBtn);
         }
@@ -1820,6 +1849,64 @@ class EditControlsManager {
         );
         
         return instructions;
+    }
+}
+
+class AiPatrolControlsManager extends BaseControlsManager {
+    constructor() {
+        super();
+        this.topContainer = document.getElementById('aiPatrolTopActionsContainer');
+        this.waypointContainer = document.getElementById('aiPatrolWaypointActionsContainer');
+        this.footerContainer = document.getElementById('aiPatrolFooterActionsContainer');
+    }
+
+    initialize() {
+        if (!this.topContainer || !this.waypointContainer || !this.footerContainer) {
+            console.error('AiPatrolControlsManager: one or more containers not found');
+            return;
+        }
+        this.renderTopActions();
+        this.renderWaypointActions();
+        this.renderFooterActions();
+    }
+
+    renderTopActions() {
+        this.topContainer.innerHTML = '';
+        this.topContainer.appendChild(this.createButton({
+            id: 'aiPatrolAddBtn',
+            text: 'Add patrol',
+            className: 'btn btn-small'
+        }));
+        this.topContainer.appendChild(this.createButton({
+            id: 'aiPatrolDeleteBtn',
+            text: 'Delete patrol',
+            className: 'btn btn-small',
+            marginLeftPx: 8
+        }));
+    }
+
+    renderWaypointActions() {
+        this.waypointContainer.innerHTML = '';
+        this.waypointContainer.appendChild(this.createButton({
+            id: 'aiPatrolUndoWaypointBtn',
+            text: 'Undo waypoint edit',
+            className: 'btn btn-small'
+        }));
+    }
+
+    renderFooterActions() {
+        this.footerContainer.innerHTML = '';
+        this.footerContainer.appendChild(this.createButton({
+            id: 'aiPatrolSaveBtn',
+            text: 'Save changes',
+            className: 'btn btn-primary'
+        }));
+        this.footerContainer.appendChild(this.createButton({
+            id: 'aiPatrolDiscardBtn',
+            text: 'Discard changes',
+            className: 'btn',
+            marginLeftPx: 8
+        }));
     }
 }
 
@@ -3646,6 +3733,25 @@ function updateAiPatrolEditingUI() {
     typeRadios.forEach(r => { r.disabled = !aiPatrolEditingEnabled; });
     const undoBtn = document.getElementById('aiPatrolUndoWaypointBtn');
     if (undoBtn) undoBtn.disabled = !aiPatrolEditingEnabled;
+}
+
+function renderInstructionLines(containerEl, instructions) {
+    if (!containerEl) return;
+    containerEl.innerHTML = '';
+    const baseControlsManager = new BaseControlsManager();
+    containerEl.appendChild(baseControlsManager.createInstructionsElement(instructions));
+}
+
+function renderAiPatrolEditingInstructions() {
+    const container = document.getElementById('aiPatrolInstructions');
+    if (!container) return;
+    const instructions = [
+        { label: 'Add', text: 'Click map to add waypoint at cursor' },
+        { label: 'Move', text: 'Click and drag waypoint marker' },
+        { label: 'Resize', text: 'Click and drag ring edge or white handle' },
+        { label: 'Delete', text: 'Right-click waypoint marker to delete' }
+    ];
+    renderInstructionLines(container, instructions);
 }
 
 function isWaypointPatrol(patrol) {
@@ -6123,99 +6229,80 @@ function setAiPatrolEditingEnabled(enabled) {
     requestDraw();
 }
 
-function getCategoryDisplayName(category) {
-    return category === 'markers' ? 'Marker editing' : 'AI patrol editing';
-}
-
-async function hasCategoryUnsavedChanges(category) {
-    if (category === 'markers') {
-        return getDirtyMarkerTypes().length > 0;
-    }
-    if (category === 'aiPatrols') {
-        return !!aiPatrolHasUnsavedChanges;
-    }
-    return false;
-}
-
-async function saveCategoryChanges(category) {
-    if (category === 'markers') {
-        const dirtyTypes = getDirtyMarkerTypes();
-        for (const markerType of dirtyTypes) {
-            const result = await saveMarkerChanges(markerType);
-            if (!result || !result.success) {
-                updateStatus(result?.message || `Failed to save ${markerType}`, true);
-                return false;
+const EDIT_CATEGORY_ADAPTERS = {
+    markers: {
+        label: 'Marker editing',
+        isActive: () => markersEditingActive(),
+        hasUnsavedChanges: () => getDirtyMarkerTypes().length > 0,
+        setActive: async (enabled) => setMarkersEditingEnabled(enabled),
+        saveChanges: async () => {
+            const dirtyTypes = getDirtyMarkerTypes();
+            for (const markerType of dirtyTypes) {
+                const result = await saveMarkerChanges(markerType);
+                if (!result || !result.success) {
+                    updateStatus(result?.message || `Failed to save ${markerType}`, true);
+                    return false;
+                }
             }
+            return true;
+        },
+        discardChanges: () => {
+            const dirtyTypes = getDirtyMarkerTypes();
+            dirtyTypes.forEach(markerType => restoreMarkerPositions(markerType));
         }
-        return true;
+    },
+    aiPatrols: {
+        label: 'AI patrol editing',
+        isActive: () => !!aiPatrolEditingEnabled,
+        hasUnsavedChanges: () => !!aiPatrolHasUnsavedChanges,
+        setActive: async (enabled) => setAiPatrolEditingEnabled(enabled),
+        saveChanges: async () => saveAiPatrols(),
+        discardChanges: () => discardAiPatrolChanges()
     }
-    if (category === 'aiPatrols') {
-        return await saveAiPatrols();
-    }
-    return true;
-}
+};
 
-function discardCategoryChanges(category) {
-    if (category === 'markers') {
-        const dirtyTypes = getDirtyMarkerTypes();
-        dirtyTypes.forEach(markerType => restoreMarkerPositions(markerType));
-        return;
-    }
-    if (category === 'aiPatrols') {
-        discardAiPatrolChanges();
-    }
+function getEditCategoryAdapter(category) {
+    return EDIT_CATEGORY_ADAPTERS[category] || null;
 }
 
 async function resolveUnsavedChangesBeforeExit(category) {
-    if (!await hasCategoryUnsavedChanges(category)) return true;
-    const label = getCategoryDisplayName(category);
+    const adapter = getEditCategoryAdapter(category);
+    if (!adapter) return true;
+    if (!adapter.hasUnsavedChanges()) return true;
     const discard = window.confirm(
-        `Unsaved changes in ${label}.\n\n` +
+        `Unsaved changes in ${adapter.label}.\n\n` +
         `OK = Discard changes and switch mode\n` +
         `Cancel = Keep changes and stay in current mode`
     );
     if (discard) {
-        discardCategoryChanges(category);
+        adapter.discardChanges();
         return true;
     }
     return false;
 }
 
 async function requestEditCategoryState(category, enabled) {
+    const adapter = getEditCategoryAdapter(category);
+    if (!adapter) return false;
     if (enabled) {
         if (activeEditCategory === category) return true;
         if (activeEditCategory) {
             const canExitCurrent = await resolveUnsavedChangesBeforeExit(activeEditCategory);
             if (!canExitCurrent) return false;
-            if (activeEditCategory === 'markers') {
-                await setMarkersEditingEnabled(false);
-            } else if (activeEditCategory === 'aiPatrols') {
-                setAiPatrolEditingEnabled(false);
-            }
+            const currentAdapter = getEditCategoryAdapter(activeEditCategory);
+            if (currentAdapter) await currentAdapter.setActive(false);
         }
-        if (category === 'markers') {
-            await setMarkersEditingEnabled(true);
-        } else if (category === 'aiPatrols') {
-            setAiPatrolEditingEnabled(true);
-        }
+        await adapter.setActive(true);
         activeEditCategory = category;
         return true;
     }
     if (activeEditCategory !== category) {
-        if (category === 'markers') {
-            await setMarkersEditingEnabled(false);
-        } else if (category === 'aiPatrols') {
-            setAiPatrolEditingEnabled(false);
-        }
+        await adapter.setActive(false);
         return true;
     }
     const canExit = await resolveUnsavedChangesBeforeExit(category);
     if (!canExit) return false;
-    if (category === 'markers') {
-        await setMarkersEditingEnabled(false);
-    } else if (category === 'aiPatrols') {
-        setAiPatrolEditingEnabled(false);
-    }
+    await adapter.setActive(false);
     activeEditCategory = null;
     return true;
 }
@@ -9005,6 +9092,7 @@ function updateTerritoryTypeEditUI() {
 
 // Global EditControlsManager instance
 let editControlsManager = null;
+let aiPatrolControlsManager = null;
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
@@ -9018,6 +9106,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Initialize edit markers UI
     initializeEditMarkersUI();
+    aiPatrolControlsManager = new AiPatrolControlsManager();
+    aiPatrolControlsManager.initialize();
+    renderAiPatrolEditingInstructions();
     
     // Initialize height filter slider with default values
     initializeHeightFilter();

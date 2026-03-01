@@ -80,17 +80,16 @@
                     <!-- AI Patrols -->
                     <div id="aiPatrolSection" class="sidebar-section-content" data-section-id="aiPatrols" data-section-title="AI patrols">
                         <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="aiPatrolEditingEnabled"> Patrol editing
+                            </label>
+                        </div>
+                        <div class="control-group">
                             <label for="aiPatrolSelect">Patrol:</label>
                             <select id="aiPatrolSelect" class="filter-select">
                                 <!-- Populated from AIPatrolSettings.json -->
                             </select>
-                            <label style="display: block; margin-top: 8px;">
-                                <input type="checkbox" id="aiPatrolEditingEnabled"> Patrol editing
-                            </label>
-                            <div style="margin-top: 8px;">
-                                <button id="aiPatrolAddBtn" class="btn btn-small" type="button">Add patrol</button>
-                                <button id="aiPatrolDeleteBtn" class="btn btn-small" type="button" style="margin-left: 8px;">Delete patrol</button>
-                            </div>
+                            <div id="aiPatrolTopActionsContainer" style="margin-top: 8px;"></div>
                             <label style="display: block; margin-top: 8px;">
                                 <input type="checkbox" id="aiPatrolShowSelectedOnly"> Show only selected patrol on map
                             </label>
@@ -176,10 +175,8 @@
                         
                         <div class="control-group" id="aiPatrolWaypointsSection">
                             <label>Waypoints (waypoint patrols):</label>
-                            <p style="font-size: 0.85em; color: var(--nord4); margin: 4px 0 6px;">
-                                With patrol editing enabled, click map to add waypoints, drag waypoints to move, and right-click waypoint to delete.
-                            </p>
-                            <button id="aiPatrolUndoWaypointBtn" class="btn btn-small" type="button" style="margin-left: 8px;">Undo waypoint edit</button>
+                            <div id="aiPatrolInstructions"></div>
+                            <div id="aiPatrolWaypointActionsContainer"></div>
                         </div>
                         
                         <div class="control-group" id="aiPatrolGroupSection">
@@ -190,10 +187,7 @@
                             </p>
                         </div>
                         
-                        <div class="control-group">
-                            <button id="aiPatrolSaveBtn" class="btn btn-primary" type="button">Save changes</button>
-                            <button id="aiPatrolDiscardBtn" class="btn" type="button" style="margin-left: 8px;">Discard changes</button>
-                        </div>
+                        <div class="control-group" id="aiPatrolFooterActionsContainer"></div>
                     </div>
                     
                     <div id="locationSection" class="sidebar-section-content" data-section-id="location" data-section-title="Location">
