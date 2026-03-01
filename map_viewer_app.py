@@ -587,10 +587,25 @@ def get_ai_patrol_options_catalog_path():
 AI_PATROL_OVERRIDE_FIELDS = [
     'AccuracyMin',
     'AccuracyMax',
+    'CanBeLooted',
+    'CanBeTriggeredByAI',
+    'CanSpawnInContaminatedArea',
+    'DefaultLookAngle',
+    'DespawnRadius',
+    'DespawnTime',
+    'Formation',
+    'FormationLooseness',
+    'FormationScale',
+    'HeadshotResistance',
+    'LoadBalancingCategory',
+    'LootDropOnDeath',
     'MinDistRadius',
     'MaxDistRadius',
+    'Persist',
+    'RespawnTime',
     'SniperProneDistanceThreshold',
     'ThreatDistanceLimit',
+    'WaypointInterpolation',
     'NoiseInvestigationDistanceLimit',
     'MaxFlankingDistance',
     'EnableFlankingOutsideCombat',
@@ -598,6 +613,36 @@ AI_PATROL_OVERRIDE_FIELDS = [
     'DamageMultiplier',
     'DamageReceivedMultiplier',
 ]
+
+AI_PATROL_OVERRIDE_DEFAULT_FALLBACKS = {
+    'AccuracyMin': '-1',
+    'AccuracyMax': '-1',
+    'CanBeLooted': '1',
+    'CanBeTriggeredByAI': '0',
+    'CanSpawnInContaminatedArea': '0',
+    'DefaultLookAngle': '0',
+    'DespawnRadius': '-1',
+    'DespawnTime': '-1',
+    'Formation': '',
+    'FormationLooseness': '0',
+    'FormationScale': '0',
+    'HeadshotResistance': '0',
+    'LoadBalancingCategory': '',
+    'LootDropOnDeath': '',
+    'MinDistRadius': '-1',
+    'MaxDistRadius': '-1',
+    'Persist': '0',
+    'RespawnTime': '-2',
+    'SniperProneDistanceThreshold': '0',
+    'ThreatDistanceLimit': '-1',
+    'WaypointInterpolation': '',
+    'NoiseInvestigationDistanceLimit': '-1',
+    'MaxFlankingDistance': '-1',
+    'EnableFlankingOutsideCombat': '-1',
+    'UseRandomWaypointAsStartPoint': '0',
+    'DamageMultiplier': '-1',
+    'DamageReceivedMultiplier': '-1',
+}
 
 
 def extract_ai_patrol_options_from_patrols(patrols):
@@ -679,7 +724,7 @@ def extract_ai_patrol_override_defaults_from_patrols(patrols):
                 continue
             counts[value] = counts.get(value, 0) + 1
         if not counts:
-            defaults[field] = '-1.0'
+            defaults[field] = AI_PATROL_OVERRIDE_DEFAULT_FALLBACKS.get(field, '-1')
             continue
         defaults[field] = max(counts.items(), key=lambda item: item[1])[0]
     return defaults
@@ -692,7 +737,7 @@ def _normalize_override_defaults(values):
     for field in AI_PATROL_OVERRIDE_FIELDS:
         raw = source.get(field)
         value = '' if raw is None else str(raw).strip()
-        normalized[field] = value if value else '-1.0'
+        normalized[field] = value if value else AI_PATROL_OVERRIDE_DEFAULT_FALLBACKS.get(field, '-1')
     return normalized
 
 

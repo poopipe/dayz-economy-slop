@@ -87,18 +87,33 @@
             "NONE"
         ],
         "overrideDefaults": {
-            "AccuracyMin": "-1.0",
-            "AccuracyMax": "-1.0",
-            "MinDistRadius": "-1.0",
-            "MaxDistRadius": "-1.0",
-            "SniperProneDistanceThreshold": "0.0",
-            "ThreatDistanceLimit": "-1.0",
-            "NoiseInvestigationDistanceLimit": "-1.0",
-            "MaxFlankingDistance": "-1.0",
+            "AccuracyMin": "-1",
+            "AccuracyMax": "-1",
+            "CanBeLooted": "1",
+            "CanBeTriggeredByAI": "0",
+            "CanSpawnInContaminatedArea": "0",
+            "DefaultLookAngle": "0",
+            "DespawnRadius": "-1",
+            "DespawnTime": "-1",
+            "Formation": "",
+            "FormationLooseness": "0",
+            "FormationScale": "0",
+            "HeadshotResistance": "0",
+            "LoadBalancingCategory": "",
+            "LootDropOnDeath": "",
+            "MinDistRadius": "-1",
+            "MaxDistRadius": "-1",
+            "Persist": "0",
+            "RespawnTime": "-2",
+            "SniperProneDistanceThreshold": "0",
+            "ThreatDistanceLimit": "-1",
+            "WaypointInterpolation": "",
+            "NoiseInvestigationDistanceLimit": "-1",
+            "MaxFlankingDistance": "-1",
             "EnableFlankingOutsideCombat": "-1",
             "UseRandomWaypointAsStartPoint": "0",
-            "DamageMultiplier": "-1.0",
-            "DamageReceivedMultiplier": "-1.0"
+            "DamageMultiplier": "-1",
+            "DamageReceivedMultiplier": "-1"
         }
     }
 }

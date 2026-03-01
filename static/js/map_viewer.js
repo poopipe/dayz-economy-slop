@@ -105,10 +105,25 @@ const AI_PATROL_UNLIMITED_RELOAD_OPTIONS = [
 const AI_PATROL_OVERRIDE_FIELDS = [
     'AccuracyMin',
     'AccuracyMax',
+    'CanBeLooted',
+    'CanBeTriggeredByAI',
+    'CanSpawnInContaminatedArea',
+    'DefaultLookAngle',
+    'DespawnRadius',
+    'DespawnTime',
+    'Formation',
+    'FormationLooseness',
+    'FormationScale',
+    'HeadshotResistance',
+    'LoadBalancingCategory',
+    'LootDropOnDeath',
     'MinDistRadius',
     'MaxDistRadius',
+    'Persist',
+    'RespawnTime',
     'SniperProneDistanceThreshold',
     'ThreatDistanceLimit',
+    'WaypointInterpolation',
     'NoiseInvestigationDistanceLimit',
     'MaxFlankingDistance',
     'EnableFlankingOutsideCombat',
@@ -116,6 +131,47 @@ const AI_PATROL_OVERRIDE_FIELDS = [
     'DamageMultiplier',
     'DamageReceivedMultiplier'
 ];
+
+const AI_PATROL_REQUIRED_EXPORT_DEFAULTS = {
+    AccuracyMax: -1,
+    AccuracyMin: -1,
+    CanBeLooted: 1,
+    CanBeTriggeredByAI: 0,
+    CanSpawnInContaminatedArea: 0,
+    Chance: 1,
+    DamageMultiplier: -1,
+    DamageReceivedMultiplier: -1,
+    DefaultLookAngle: 0,
+    DefaultStance: 'STANDING',
+    DespawnRadius: -1,
+    DespawnTime: -1,
+    EnableFlankingOutsideCombat: -1,
+    Faction: 'West',
+    Formation: '',
+    FormationLooseness: 0,
+    FormationScale: 0,
+    HeadshotResistance: 0,
+    LoadBalancingCategory: '',
+    Loadout: '',
+    LootDropOnDeath: '',
+    LootingBehaviour: '',
+    MaxDistRadius: -1,
+    MaxFlankingDistance: -1,
+    MaxSpreadRadius: 20,
+    MinDistRadius: -1,
+    MinSpreadRadius: 5,
+    Name: 'heli-west',
+    NoiseInvestigationDistanceLimit: -1,
+    NumberOfAI: 1,
+    NumberOfAIMax: 3,
+    ObjectClassName: 'Wreck_UH1Y',
+    Persist: 0,
+    RespawnTime: -2,
+    SniperProneDistanceThreshold: 0,
+    ThreatDistanceLimit: -1,
+    UseRandomWaypointAsStartPoint: 0,
+    WaypointInterpolation: ''
+};
 
 // Marker type color system (centralized)
 const MARKER_TYPE_COLORS = {
@@ -7482,11 +7538,46 @@ function aiPatrolValuesEquivalent(a, b) {
     return av === bv;
 }
 
+function aiPatrolCoerceToDefaultType(value, defaultValue) {
+    if (typeof defaultValue === 'number') {
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        const parsed = Number.parseFloat(String(value ?? '').trim());
+        return Number.isFinite(parsed) ? parsed : defaultValue;
+    }
+    if (typeof defaultValue === 'string') {
+        if (value === undefined || value === null) return defaultValue;
+        return String(value);
+    }
+    return value ?? defaultValue;
+}
+
+function normalizeAiPatrolForExport(patrol) {
+    const normalized = { ...(patrol || {}) };
+    const hasWaypointsArray = Array.isArray(normalized.Waypoints);
+    Object.entries(AI_PATROL_REQUIRED_EXPORT_DEFAULTS).forEach(([field, defaultValue]) => {
+        const raw = normalized[field];
+        const isEmptyString = typeof raw === 'string' && raw.trim() === '';
+        if (raw === undefined || raw === null || isEmptyString) {
+            normalized[field] = defaultValue;
+            return;
+        }
+        normalized[field] = aiPatrolCoerceToDefaultType(raw, defaultValue);
+    });
+    if (hasWaypointsArray) {
+        normalized.ObjectClassName = '';
+    } else if (!String(normalized.ObjectClassName ?? '').trim()) {
+        normalized.ObjectClassName = AI_PATROL_REQUIRED_EXPORT_DEFAULTS.ObjectClassName;
+    }
+    return normalized;
+}
+
 function normalizeAiPatrolOverrideDefaults(source) {
     const defaults = {};
     AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
         const value = aiPatrolValueAsString(source?.[field]);
-        defaults[field] = value || '-1.0';
+        const fallback = aiPatrolValueAsString(AI_PATROL_REQUIRED_EXPORT_DEFAULTS[field]);
+        defaults[field] = value || fallback || '-1';
     });
     return defaults;
 }
@@ -7561,15 +7652,18 @@ function syncSelectedAiPatrolFromForm() {
             delete patrol[field];
         }
     });
-    patrol.ObjectClassName = v('aiPatrolObjectClassName')?.value || '';
+    const nextObjectClassName = v('aiPatrolObjectClassName')?.value || '';
     patrol.MinSpreadRadius = nextMinRadius;
     patrol.MaxSpreadRadius = nextMaxRadius;
     const type = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
-    if (type === 'group' && Array.isArray(patrol.Waypoints)) {
-        patrol.Waypoints = [];
-    }
-    if (type === 'waypoints' && !Array.isArray(patrol.Waypoints)) {
-        patrol.Waypoints = [];
+    if (type === 'group') {
+        delete patrol.Waypoints;
+        patrol.ObjectClassName = nextObjectClassName;
+    } else {
+        if (!Array.isArray(patrol.Waypoints)) {
+            patrol.Waypoints = [];
+        }
+        patrol.ObjectClassName = '';
     }
 }
 
@@ -8052,16 +8146,18 @@ async function saveAiPatrols() {
         return false;
     }
     try {
+        const patrolsForSave = aiPatrols.map(normalizeAiPatrolForExport);
         const response = await fetch('/api/ai-patrols/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 mission_dir: missionDir,
-                patrols: aiPatrols
+                patrols: patrolsForSave
             })
         });
         const data = await response.json();
         if (!data.success) throw new Error(data.error || 'Save failed');
+        aiPatrols = patrolsForSave;
         aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
         aiPatrolUndoStack = [];
         aiPatrolHasUnsavedChanges = false;
