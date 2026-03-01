@@ -3627,10 +3627,8 @@ function updateAiPatrolDirtyStatus() {
     }
 }
 
-function canEditSelectedAiPatrolOnMap() {
-    if (!aiPatrolEditingEnabled) return false;
-    const patrol = getSelectedAiPatrol();
-    return isWaypointPatrol(patrol);
+function canEditAiPatrolOnMap() {
+    return !!aiPatrolEditingEnabled;
 }
 
 function updateAiPatrolEditingUI() {
@@ -7201,36 +7199,29 @@ async function loadAiPatrols() {
 }
 
 function handleAiPatrolMapClick(screenX, screenY, e) {
-    const patrol = getSelectedAiPatrol();
-    if (!patrol) return false;
-    if (!canEditSelectedAiPatrolOnMap()) return false;
+    if (!canEditAiPatrolOnMap()) return false;
     const world = screenToWorld(screenX, screenY);
-    if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
-    // If clicking near an existing waypoint, select and start drag
-    const threshold = 10;
-    let hitIndex = -1;
-    let bestDist = Infinity;
-    patrol.Waypoints.forEach((wp, idx) => {
-        if (!Array.isArray(wp) || wp.length < 3) return;
-        const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
-        const dx = sx.x - screenX;
-        const dy = sx.y - screenY;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < threshold && d < bestDist) {
-            bestDist = d;
-            hitIndex = idx;
+    const nearest = findNearestAiPatrolWaypoint(screenX, screenY);
+    // If clicking near an existing waypoint marker, switch active patrol to that marker's patrol.
+    if (nearest && nearest.patrolIndex >= 0 && nearest.waypointIndex >= 0) {
+        if (selectedAiPatrolIndex !== nearest.patrolIndex) {
+            selectedAiPatrolIndex = nearest.patrolIndex;
+            const select = document.getElementById('aiPatrolSelect');
+            if (select) select.value = String(nearest.patrolIndex);
+            applyAiPatrolToForm();
         }
-    });
-    if (hitIndex >= 0) {
-        aiPatrolSelectedWaypointIndex = hitIndex;
+        aiPatrolSelectedWaypointIndex = nearest.waypointIndex;
         aiPatrolIsDraggingWaypoint = true;
-        aiPatrolDraggedWaypointIndex = hitIndex;
+        aiPatrolDraggedWaypointIndex = nearest.waypointIndex;
         pushAiPatrolUndoState();
         markAiPatrolDirty();
         updateAiPatrolDirtyStatus();
         requestDraw();
         return true;
     }
+    const patrol = getSelectedAiPatrol();
+    if (!patrol) return false;
+    if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
     // Otherwise add new waypoint at end
     pushAiPatrolUndoState();
     patrol.Waypoints.push([Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100]);
@@ -7256,32 +7247,43 @@ function handleAiPatrolWaypointDrag(screenX, screenY) {
 }
 
 function findNearestAiPatrolWaypoint(screenX, screenY, threshold = 12) {
-    const patrol = getSelectedAiPatrol();
-    if (!patrol || !Array.isArray(patrol.Waypoints)) return -1;
-    let hitIndex = -1;
+    if (!Array.isArray(aiPatrols) || aiPatrols.length === 0) return null;
+    let best = null;
     let bestDist = Infinity;
-    patrol.Waypoints.forEach((wp, idx) => {
-        if (!Array.isArray(wp) || wp.length < 3) return;
-        const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
-        const dx = sx.x - screenX;
-        const dy = sx.y - screenY;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < threshold && d < bestDist) {
-            bestDist = d;
-            hitIndex = idx;
-        }
-    });
-    return hitIndex;
+    for (let pIdx = 0; pIdx < aiPatrols.length; pIdx++) {
+        if (showSelectedAiPatrolOnly && pIdx !== selectedAiPatrolIndex) continue;
+        const patrol = aiPatrols[pIdx];
+        if (!isWaypointPatrol(patrol)) continue;
+        patrol.Waypoints.forEach((wp, wIdx) => {
+            if (!Array.isArray(wp) || wp.length < 3) return;
+            const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
+            const dx = sx.x - screenX;
+            const dy = sx.y - screenY;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < threshold && d < bestDist) {
+                bestDist = d;
+                best = { patrolIndex: pIdx, waypointIndex: wIdx };
+            }
+        });
+    }
+    return best;
 }
 
 function deleteAiPatrolWaypointAt(screenX, screenY) {
+    if (!canEditAiPatrolOnMap()) return false;
+    const nearest = findNearestAiPatrolWaypoint(screenX, screenY);
+    if (!nearest || nearest.patrolIndex < 0 || nearest.waypointIndex < 0) return false;
+    if (selectedAiPatrolIndex !== nearest.patrolIndex) {
+        selectedAiPatrolIndex = nearest.patrolIndex;
+        const select = document.getElementById('aiPatrolSelect');
+        if (select) select.value = String(nearest.patrolIndex);
+        applyAiPatrolToForm();
+    }
     const patrol = getSelectedAiPatrol();
-    if (!patrol || !Array.isArray(patrol.Waypoints) || !canEditSelectedAiPatrolOnMap()) return false;
-    const hitIndex = findNearestAiPatrolWaypoint(screenX, screenY);
-    if (hitIndex < 0) return false;
+    if (!patrol || !Array.isArray(patrol.Waypoints)) return false;
     pushAiPatrolUndoState();
-    patrol.Waypoints.splice(hitIndex, 1);
-    aiPatrolSelectedWaypointIndex = Math.min(hitIndex, patrol.Waypoints.length - 1);
+    patrol.Waypoints.splice(nearest.waypointIndex, 1);
+    aiPatrolSelectedWaypointIndex = Math.min(nearest.waypointIndex, patrol.Waypoints.length - 1);
     markAiPatrolDirty();
     updateAiPatrolDirtyStatus();
     requestDraw();
@@ -7327,7 +7329,7 @@ function detectAiPatrolRadiusTarget(screenX, screenY, patrol) {
 
 function tryStartAiPatrolRadiusEdit(screenX, screenY) {
     const patrol = getSelectedAiPatrol();
-    if (!patrol || !canEditSelectedAiPatrolOnMap()) return false;
+    if (!patrol || !canEditAiPatrolOnMap() || !isWaypointPatrol(patrol)) return false;
     syncSelectedAiPatrolFromForm();
     const target = detectAiPatrolRadiusTarget(screenX, screenY, patrol);
     if (!target) return false;
