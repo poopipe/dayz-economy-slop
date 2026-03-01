@@ -9249,10 +9249,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (aiPatrolDiscardBtn) {
         aiPatrolDiscardBtn.addEventListener('click', discardAiPatrolChanges);
     }
-    const aiPatrolClearBtn = document.getElementById('aiPatrolClearBtn');
-    if (aiPatrolClearBtn) {
-        aiPatrolClearBtn.addEventListener('click', clearAiPatrolForm);
-    }
     updateAiPatrolEditingUI();
     if (markersEditingActive()) {
         activeEditCategory = 'markers';
