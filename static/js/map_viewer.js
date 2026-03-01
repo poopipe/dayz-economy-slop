@@ -4051,6 +4051,9 @@ function drawMarquee() {
     overlayCtx.clearRect(0, 0, canvasWidth, canvasHeight);
     
     if (!isMarqueeSelecting) return;
+
+    // Keep AI patrol waypoint/radius overlays visible during marquee drag.
+    drawAiPatrolOverlayOnMap();
     
     const rectX = Math.min(marqueeStartX, marqueeCurrentX);
     const rectY = Math.min(marqueeStartY, marqueeCurrentY);
