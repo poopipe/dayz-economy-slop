@@ -7309,6 +7309,16 @@ function handleAiPatrolMapClick(screenX, screenY, e) {
     const patrol = getSelectedAiPatrol();
     if (!patrol) return false;
     if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
+    // New waypoint placement requires Ctrl/Cmd+Click.
+    if (!e.ctrlKey && !e.metaKey) {
+        return false;
+    }
+    // Group-based patrols cannot receive waypoint placement clicks.
+    const patrolType = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
+    if (patrolType !== 'waypoints') {
+        updateStatus('Cannot place waypoints for group-based patrols. Switch patrol type to Waypoint first.', true);
+        return true;
+    }
     // Otherwise add new waypoint at end
     pushAiPatrolUndoState();
     patrol.Waypoints.push([Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100]);
