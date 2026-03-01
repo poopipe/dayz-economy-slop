@@ -546,6 +546,114 @@ def load_effect_areas(effect_area_file_path):
         return []
 
 
+def load_ai_patrol_settings(settings_file_path):
+    """
+    Load AI patrol settings from AIPatrolSettings.json.
+    Returns a dict with global options and patrol list.
+    """
+    if not settings_file_path or not Path(settings_file_path).exists():
+        print(f"AI patrol settings file does not exist: {settings_file_path}")
+        return {
+            'patrols': [],
+            'options': {
+                'factions': [],
+                'loadouts': [],
+                'behaviours': [],
+                'stances': [],
+                'speeds': [],
+                'lootingBehaviours': []
+            }
+        }
+    
+    try:
+        with open(settings_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        patrols = data.get('Patrols', [])
+        if not isinstance(patrols, list):
+            patrols = []
+        
+        # Collect distinct option values from existing patrols
+        factions = set()
+        loadouts = set()
+        behaviours = set()
+        stances = set()
+        speeds = set()
+        looting_behaviours = set()
+        
+        for p in patrols:
+            if not isinstance(p, dict):
+                continue
+            faction = p.get('Faction')
+            if faction:
+                factions.add(faction)
+            loadout = p.get('Loadout')
+            if loadout:
+                loadouts.add(loadout)
+            behaviour = p.get('Behaviour')
+            if behaviour:
+                behaviours.add(behaviour)
+            stance = p.get('DefaultStance')
+            if stance:
+                stances.add(stance)
+            speed = p.get('Speed')
+            if speed:
+                speeds.add(speed)
+            utspeed = p.get('UnderThreatSpeed')
+            if utspeed:
+                speeds.add(utspeed)
+            loot = p.get('LootingBehaviour')
+            if loot is not None:
+                looting_behaviours.add(loot)
+        
+        options = {
+            'factions': sorted(factions),
+            'loadouts': sorted(loadouts),
+            'behaviours': sorted(behaviours),
+            'stances': sorted(stances),
+            'speeds': sorted(speeds),
+            'lootingBehaviours': sorted(looting_behaviours),
+        }
+        
+        # Return patrols as-is; frontend will decide which fields to expose/edit
+        return {
+            'patrols': patrols,
+            'options': options
+        }
+    except Exception as e:
+        import traceback
+        print(f"Error loading AI patrol settings: {e}")
+        traceback.print_exc()
+        return {
+            'patrols': [],
+            'options': {
+                'factions': [],
+                'loadouts': [],
+                'behaviours': [],
+                'stances': [],
+                'speeds': [],
+                'lootingBehaviours': []
+            }
+        }
+
+
+def save_ai_patrol_settings(settings_file_path, patrols):
+    """Save Patrols array back to AIPatrolSettings.json (preserve all non-Patrols keys)."""
+    if not settings_file_path or not Path(settings_file_path).exists():
+        return {'success': False, 'error': f'File does not exist: {settings_file_path}'}
+    try:
+        with open(settings_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        data['Patrols'] = patrols if isinstance(patrols, list) else []
+        with open(settings_file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        return {'success': True, 'count': len(data['Patrols'])}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
 @app.route('/api/effect-areas')
 def get_effect_areas():
     """Get effect area data from cfgeffectarea.json."""
@@ -587,6 +695,61 @@ def get_effect_areas():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/ai-patrols')
+def get_ai_patrols():
+    """Get AI patrol settings (Patrols + option lists) from AIPatrolSettings.json."""
+    try:
+        mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'No mission directory specified'}), 400
+        
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Mission directory does not exist: {mission_dir}'
+            }), 404
+        
+        settings_path = mission_path / 'expansion' / 'settings' / 'AIPatrolSettings.json'
+        print(f"Loading AI patrol settings from: {settings_path}")
+        result = load_ai_patrol_settings(str(settings_path))
+        
+        return jsonify({
+            'success': True,
+            'patrols': result['patrols'],
+            'options': result['options']
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai-patrols/save', methods=['POST'])
+def save_ai_patrols():
+    """Save Patrols array to AIPatrolSettings.json."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'No mission directory specified'}), 400
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return jsonify({'success': False, 'error': f'Mission directory does not exist: {mission_dir}'}), 404
+        settings_path = mission_path / 'expansion' / 'settings' / 'AIPatrolSettings.json'
+        patrols = data.get('patrols', [])
+        result = save_ai_patrol_settings(str(settings_path), patrols)
+        if not result.get('success'):
+            return jsonify({'success': False, 'error': result.get('error', 'Save failed')}), 500
+        return jsonify({'success': True, 'count': result.get('count', 0), 'message': f"Saved {result.get('count', 0)} patrols"})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def save_effect_areas(effect_area_file_path, effect_areas_data, deleted_indices=None, new_indices=None):

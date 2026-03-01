@@ -46,6 +46,9 @@
                             <label>
                                 <input type="checkbox" id="showPlayerSpawnPoints" checked> Show Player Spawn Points
                             </label>
+                            <label>
+                                <input type="checkbox" id="showAiPatrolMarkers" checked> Show AI Patrol Markers
+                            </label>
                             <button id="clearSelectionBtn" class="btn">Clear Selection</button>
                             <button id="copySelectedXmlBtn" class="btn btn-primary">Copy Selected XML</button>
                         </div>
@@ -71,6 +74,126 @@
                         <!-- Dynamically generated checkboxes and controls -->
                         <div id="editMarkersContainer">
                             <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <!-- AI Patrols -->
+                    <div id="aiPatrolSection" class="sidebar-section-content" data-section-id="aiPatrols" data-section-title="AI patrols">
+                        <div class="control-group">
+                            <label for="aiPatrolSelect">Patrol:</label>
+                            <select id="aiPatrolSelect" class="filter-select">
+                                <!-- Populated from AIPatrolSettings.json -->
+                            </select>
+                            <label style="display: block; margin-top: 8px;">
+                                <input type="checkbox" id="aiPatrolEditingEnabled"> Patrol editing
+                            </label>
+                            <div style="margin-top: 8px;">
+                                <button id="aiPatrolAddBtn" class="btn btn-small" type="button">Add patrol</button>
+                                <button id="aiPatrolDeleteBtn" class="btn btn-small" type="button" style="margin-left: 8px;">Delete patrol</button>
+                            </div>
+                            <label style="display: block; margin-top: 8px;">
+                                <input type="checkbox" id="aiPatrolShowSelectedOnly"> Show only selected patrol on map
+                            </label>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolName">Name:</label>
+                            <input type="text" id="aiPatrolName" class="mission-dir-input" placeholder="Enter patrol name...">
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolFaction">Faction:</label>
+                            <select id="aiPatrolFaction" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolLoadout">Loadout:</label>
+                            <select id="aiPatrolLoadout" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolBehaviour">Behaviour:</label>
+                            <select id="aiPatrolBehaviour" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolDefaultStance">Default stance:</label>
+                            <select id="aiPatrolDefaultStance" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label>Speed:</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="aiPatrolSpeed" class="filter-select" style="flex: 1;">
+                                    <!-- Options populated from existing patrols -->
+                                </select>
+                                <select id="aiPatrolUnderThreatSpeed" class="filter-select" style="flex: 1;">
+                                    <!-- Options populated from existing patrols -->
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolLootingBehaviour">Looting behaviour:</label>
+                            <select id="aiPatrolLootingBehaviour" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label>Patrol type:</label>
+                            <label style="display: block; margin-top: 4px;">
+                                <input type="radio" name="aiPatrolType" value="waypoints" checked>
+                                Waypoint patrol (ordered list of waypoints)
+                            </label>
+                            <label style="display: block; margin-top: 4px;">
+                                <input type="radio" name="aiPatrolType" value="group">
+                                Group-based patrol (uses ObjectClassName)
+                            </label>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label>Spread radius (metres):</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolMinSpreadRadius" style="display:inline-block; width: 120px;">Min:</label>
+                                    <input type="number" id="aiPatrolMinSpreadRadius" class="dimension-input" min="0" step="1" value="0">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolMaxSpreadRadius" style="display:inline-block; width: 120px;">Max:</label>
+                                    <input type="number" id="aiPatrolMaxSpreadRadius" class="dimension-input" min="0" step="1" value="0">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group" id="aiPatrolWaypointsSection">
+                            <label>Waypoints (waypoint patrols):</label>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin: 4px 0 6px;">
+                                With patrol editing enabled, click map to add waypoints, drag waypoints to move, and right-click waypoint to delete.
+                            </p>
+                            <button id="aiPatrolUndoWaypointBtn" class="btn btn-small" type="button" style="margin-left: 8px;">Undo waypoint edit</button>
+                        </div>
+                        
+                        <div class="control-group" id="aiPatrolGroupSection">
+                            <label for="aiPatrolObjectClassName">ObjectClassName (group-based patrols):</label>
+                            <input type="text" id="aiPatrolObjectClassName" class="mission-dir-input" placeholder="Enter ObjectClassName...">
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                For now this is a free-text value taken from AIPatrolSettings.json.
+                            </p>
+                        </div>
+                        
+                        <div class="control-group">
+                            <button id="aiPatrolSaveBtn" class="btn btn-primary" type="button">Save changes</button>
+                            <button id="aiPatrolDiscardBtn" class="btn" type="button" style="margin-left: 8px;">Discard changes</button>
+                            <button id="aiPatrolClearBtn" class="btn" type="button" style="margin-left: 8px;">Clear form</button>
                         </div>
                     </div>
                     

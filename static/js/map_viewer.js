@@ -63,6 +63,29 @@ let hoveredMarkerIndex = -1;
 let tooltipX = 0;
 let tooltipY = 0;
 
+// AI patrols (from AIPatrolSettings.json)
+let aiPatrols = []; // Raw patrol objects from JSON
+let aiPatrolOptions = {
+    factions: [],
+    loadouts: [],
+    behaviours: [],
+    stances: [],
+    speeds: [],
+    lootingBehaviours: []
+};
+let selectedAiPatrolIndex = -1;
+let aiPatrolsOriginal = [];
+let aiPatrolHasUnsavedChanges = false;
+let aiPatrolUndoStack = [];
+let aiPatrolSelectedWaypointIndex = -1;
+let aiPatrolIsDraggingWaypoint = false;
+let aiPatrolDraggedWaypointIndex = -1;
+let aiPatrolEditingEnabled = false;
+let aiPatrolIsEditingRadius = false;
+let aiPatrolRadiusTarget = 'max';
+let showAiPatrolMarkers = true;
+let showSelectedAiPatrolOnly = false;
+
 // Marker type color system (centralized)
 const MARKER_TYPE_COLORS = {
     markers: { baseColor: '#0066ff' },        // regular group markers
@@ -2124,7 +2147,12 @@ function initCanvas() {
         const y = (e.clientY - rect.top) * scaleY;
         
         if (e.button === 2) {
-            // Right click - copy location
+            // AI patrol waypoint edit mode: right-click near a waypoint deletes it.
+            if (deleteAiPatrolWaypointAt(x, y)) {
+                e.preventDefault();
+                return;
+            }
+            // Default right click - copy location
             handleRightClick(x, y);
             e.preventDefault();
         } else if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
@@ -2136,6 +2164,16 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
+            // AI patrol map-edit modes take precedence over regular selection/edit interactions
+            if (tryStartAiPatrolRadiusEdit(x, y)) {
+                e.preventDefault();
+                return;
+            }
+            if (handleAiPatrolMapClick(x, y, e)) {
+                e.preventDefault();
+                return;
+            }
+            
             // In edit mode, check for Ctrl+Click to add markers
             if ((e.ctrlKey || e.metaKey)) {
                 // Check each editable type for Ctrl+Click add
@@ -2217,6 +2255,22 @@ function initCanvas() {
         tooltipX = x;
         tooltipY = y;
         
+        // Handle AI patrol waypoint drag
+        if (aiPatrolIsDraggingWaypoint) {
+            if (handleAiPatrolWaypointDrag(x, y)) {
+                requestDraw();
+            }
+            e.preventDefault();
+            return;
+        }
+        if (aiPatrolIsEditingRadius) {
+            if (handleAiPatrolRadiusDrag(x, y)) {
+                requestDraw();
+            }
+            e.preventDefault();
+            return;
+        }
+        
         // Handle dragging or radius editing
         if (isDragging || isEditingRadius) {
             handleDrag(x, y);
@@ -2243,7 +2297,18 @@ function initCanvas() {
     });
     
     canvas.addEventListener('mouseup', (e) => {
-        if ((isDragging || isEditingRadius) && e.button === 0) {
+        if (aiPatrolIsDraggingWaypoint && e.button === 0) {
+            aiPatrolIsDraggingWaypoint = false;
+            aiPatrolDraggedWaypointIndex = -1;
+            requestDraw();
+            e.preventDefault();
+            return;
+        } else if (aiPatrolIsEditingRadius && e.button === 0) {
+            endAiPatrolRadiusEdit();
+            requestDraw();
+            e.preventDefault();
+            return;
+        } else if ((isDragging || isEditingRadius) && e.button === 0) {
             // End drag or radius edit on left mouse button release
             handleDragEnd();
             e.preventDefault();
@@ -2258,6 +2323,10 @@ function initCanvas() {
     
     // Also handle mouseup on window to catch cases where mouse leaves canvas during drag
     window.addEventListener('mouseup', (e) => {
+        if (aiPatrolIsEditingRadius && e.button === 0) {
+            endAiPatrolRadiusEdit();
+            requestDraw();
+        }
         if ((isDragging || isEditingRadius) && e.button === 0) {
             handleDragEnd();
         }
@@ -3530,6 +3599,175 @@ function drawDynamicHighlightsOnOverlay() {
     }
 }
 
+function getSelectedAiPatrol() {
+    if (selectedAiPatrolIndex < 0 || selectedAiPatrolIndex >= aiPatrols.length) return null;
+    const patrol = aiPatrols[selectedAiPatrolIndex];
+    return patrol && typeof patrol === 'object' ? patrol : null;
+}
+
+function cloneAiPatrolData(data) {
+    return JSON.parse(JSON.stringify(data || []));
+}
+
+function pushAiPatrolUndoState() {
+    aiPatrolUndoStack.push(cloneAiPatrolData(aiPatrols));
+    if (aiPatrolUndoStack.length > 100) {
+        aiPatrolUndoStack.shift();
+    }
+}
+
+function markAiPatrolDirty() {
+    aiPatrolHasUnsavedChanges = true;
+}
+
+function updateAiPatrolDirtyStatus() {
+    if (aiPatrolHasUnsavedChanges) {
+        updateStatus('AI patrol has unsaved changes. Save or Discard.');
+    }
+}
+
+function canEditSelectedAiPatrolOnMap() {
+    if (!aiPatrolEditingEnabled) return false;
+    const patrol = getSelectedAiPatrol();
+    return isWaypointPatrol(patrol);
+}
+
+function updateAiPatrolEditingUI() {
+    const editableIds = [
+        'aiPatrolAddBtn', 'aiPatrolDeleteBtn',
+        'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
+        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+    ];
+    editableIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !aiPatrolEditingEnabled;
+    });
+    const typeRadios = document.querySelectorAll('input[name="aiPatrolType"]');
+    typeRadios.forEach(r => { r.disabled = !aiPatrolEditingEnabled; });
+    const undoBtn = document.getElementById('aiPatrolUndoWaypointBtn');
+    if (undoBtn) undoBtn.disabled = !aiPatrolEditingEnabled;
+}
+
+function isWaypointPatrol(patrol) {
+    return !!(patrol && Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0);
+}
+
+function getAiPatrolCenterWorld(patrol) {
+    if (isWaypointPatrol(patrol)) {
+        const wp = patrol.Waypoints[0];
+        if (Array.isArray(wp) && wp.length >= 3) {
+            return { x: Number(wp[0]) || 0, z: Number(wp[2]) || 0 };
+        }
+    }
+    // Fallback: center of current viewport
+    const center = screenToWorld(canvasWidth / 2, canvasHeight / 2);
+    return { x: center.x, z: center.z };
+}
+
+function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
+    if (!isWaypointPatrol(patrol)) return;
+    const isSelectedPatrol = patrolIndex === selectedPatrolIndex;
+    const center = getAiPatrolCenterWorld(patrol);
+    const centerScreen = worldToScreen(center.x, center.z);
+    const minSpread = Math.max(0, Number(patrol.MinSpreadRadius) || 0);
+    const maxSpread = Math.max(minSpread, Number(patrol.MaxSpreadRadius) || 0);
+    const hoverTarget = (isSelectedPatrol && aiPatrolEditingEnabled && !aiPatrolIsEditingRadius)
+        ? detectAiPatrolRadiusTarget(tooltipX, tooltipY, patrol)
+        : '';
+    const isMinHovered = hoverTarget === 'min';
+    const isMaxHovered = hoverTarget === 'max';
+    const isMinEditing = isSelectedPatrol && aiPatrolIsEditingRadius && aiPatrolRadiusTarget === 'min';
+    const isMaxEditing = isSelectedPatrol && aiPatrolIsEditingRadius && aiPatrolRadiusTarget === 'max';
+    const ringAlpha = isSelectedPatrol ? 0.95 : 0.5;
+    const lineAlpha = isSelectedPatrol ? 0.95 : 0.5;
+    const centerColor = isSelectedPatrol ? '#ffffff' : 'rgba(255,255,255,0.7)';
+    
+    // Draw spread rings
+    overlayCtx.save();
+    overlayCtx.lineWidth = (isSelectedPatrol && (isMinHovered || isMinEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
+    overlayCtx.strokeStyle = (isSelectedPatrol && (isMinHovered || isMinEditing))
+        ? '#ffffff'
+        : `rgba(255, 193, 7, ${ringAlpha})`;
+    overlayCtx.beginPath();
+    overlayCtx.arc(centerScreen.x, centerScreen.y, minSpread * viewScale, 0, Math.PI * 2);
+    overlayCtx.stroke();
+    overlayCtx.lineWidth = (isSelectedPatrol && (isMaxHovered || isMaxEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
+    overlayCtx.strokeStyle = (isSelectedPatrol && (isMaxHovered || isMaxEditing))
+        ? '#ffffff'
+        : `rgba(255, 87, 34, ${ringAlpha})`;
+    overlayCtx.beginPath();
+    overlayCtx.arc(centerScreen.x, centerScreen.y, maxSpread * viewScale, 0, Math.PI * 2);
+    overlayCtx.stroke();
+    if (isSelectedPatrol && aiPatrolEditingEnabled) {
+        const drawHandle = (screenRadius, active) => {
+            const hx = centerScreen.x + screenRadius;
+            const hy = centerScreen.y;
+            overlayCtx.fillStyle = active ? '#ffd166' : '#ffffff';
+            overlayCtx.strokeStyle = '#000000';
+            overlayCtx.lineWidth = 2;
+            overlayCtx.beginPath();
+            overlayCtx.arc(hx, hy, 6, 0, Math.PI * 2);
+            overlayCtx.fill();
+            overlayCtx.stroke();
+        };
+        drawHandle(minSpread * viewScale, isMinHovered || isMinEditing);
+        drawHandle(maxSpread * viewScale, isMaxHovered || isMaxEditing);
+    }
+    // Center marker
+    overlayCtx.fillStyle = centerColor;
+    overlayCtx.beginPath();
+    overlayCtx.arc(centerScreen.x, centerScreen.y, 3, 0, Math.PI * 2);
+    overlayCtx.fill();
+    overlayCtx.restore();
+    
+    // Draw waypoint polyline + points
+    if (Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0) {
+        overlayCtx.save();
+        overlayCtx.strokeStyle = `rgba(80, 220, 120, ${lineAlpha})`;
+        overlayCtx.lineWidth = isSelectedPatrol ? 2 : 1.5;
+        overlayCtx.beginPath();
+        patrol.Waypoints.forEach((wp, idx) => {
+            if (!Array.isArray(wp) || wp.length < 3) return;
+            const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
+            if (idx === 0) {
+                overlayCtx.moveTo(sx.x, sx.y);
+            } else {
+                overlayCtx.lineTo(sx.x, sx.y);
+            }
+        });
+        overlayCtx.stroke();
+        
+        patrol.Waypoints.forEach((wp, idx) => {
+            if (!Array.isArray(wp) || wp.length < 3) return;
+            const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
+            const selectedWaypoint = isSelectedPatrol && idx === aiPatrolSelectedWaypointIndex;
+            overlayCtx.fillStyle = selectedWaypoint ? '#ffd166' : (isSelectedPatrol ? '#50dc78' : 'rgba(80,220,120,0.75)');
+            overlayCtx.beginPath();
+            overlayCtx.arc(sx.x, sx.y, selectedWaypoint ? 7 : 5, 0, Math.PI * 2);
+            overlayCtx.fill();
+            overlayCtx.fillStyle = '#0b0f14';
+            overlayCtx.font = '10px sans-serif';
+            overlayCtx.fillText(String(idx + 1), sx.x + 7, sx.y - 7);
+        });
+        overlayCtx.restore();
+    }
+}
+
+function drawAiPatrolOverlayOnMap() {
+    if (!overlayCtx || !showAiPatrolMarkers) return;
+    if (!Array.isArray(aiPatrols) || aiPatrols.length === 0) return;
+    if (showSelectedAiPatrolOnly) {
+        const patrol = getSelectedAiPatrol();
+        if (!patrol) return;
+        drawSingleAiPatrolOverlay(patrol, selectedAiPatrolIndex, selectedAiPatrolIndex);
+        return;
+    }
+    aiPatrols.forEach((patrol, idx) => {
+        drawSingleAiPatrolOverlay(patrol, idx, selectedAiPatrolIndex);
+    });
+}
+
 // Draw marquee selection rectangle on overlay canvas
 function drawMarquee() {
     if (!overlayCtx) return;
@@ -3594,6 +3832,7 @@ function drawOverlayLayer() {
     
     overlayCtx.clearRect(0, 0, canvasWidth, canvasHeight);
     drawDynamicHighlightsOnOverlay();
+    drawAiPatrolOverlayOnMap();
     drawTooltip();
 }
 
@@ -4839,7 +5078,7 @@ function addMarkerAt(markerType, screenX, screenY) {
     
     const worldPos = screenToWorld(screenX, screenY);
     const x = Math.round(worldPos.x * 100) / 100;
-    const y = Math.round(worldPos.y * 100) / 100;
+    const y = (worldPos.y !== undefined && worldPos.y !== null && isFinite(worldPos.y)) ? Math.round(worldPos.y * 100) / 100 : 0;
     const z = Math.round(worldPos.z * 100) / 100;
     
     const array = typeConfig.getArray();
@@ -6546,6 +6785,7 @@ async function loadGroups() {
         await loadEventSpawns();
         await loadTerritories();
         await loadPlayerSpawnPoints();
+        await loadAiPatrols();
         
         // Initialize height filter slider with max y-coordinate
         initializeHeightFilter();
@@ -6576,6 +6816,494 @@ async function loadGroups() {
         updateStatus(`Error loading markers: ${error.message}`, true);
         console.error('Error loading markers:', error);
     }
+}
+
+function populateSimpleSelect(selectEl, options, { includeEmpty = true, emptyLabel = '(None)' } = {}) {
+    if (!selectEl) return;
+    const current = selectEl.value;
+    selectEl.innerHTML = '';
+    if (includeEmpty) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = emptyLabel;
+        selectEl.appendChild(empty);
+    }
+    (options || []).forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = String(v);
+        opt.textContent = String(v);
+        selectEl.appendChild(opt);
+    });
+    if (current && Array.from(selectEl.options).some(o => o.value === current)) {
+        selectEl.value = current;
+    }
+}
+
+function updateAiPatrolTypeUI() {
+    const patrolTypeEl = document.querySelector('input[name="aiPatrolType"]:checked');
+    const type = patrolTypeEl ? patrolTypeEl.value : 'waypoints';
+    const wpSection = document.getElementById('aiPatrolWaypointsSection');
+    const groupSection = document.getElementById('aiPatrolGroupSection');
+    if (wpSection) wpSection.style.display = type === 'waypoints' ? 'block' : 'none';
+    if (groupSection) groupSection.style.display = type === 'group' ? 'block' : 'none';
+}
+
+function syncSelectedAiPatrolFromForm() {
+    const patrol = getSelectedAiPatrol();
+    if (!patrol) return;
+    const v = (id) => document.getElementById(id);
+    patrol.Name = v('aiPatrolName')?.value || patrol.Name || '';
+    patrol.Faction = v('aiPatrolFaction')?.value || '';
+    patrol.Loadout = v('aiPatrolLoadout')?.value || '';
+    patrol.Behaviour = v('aiPatrolBehaviour')?.value || '';
+    patrol.DefaultStance = v('aiPatrolDefaultStance')?.value || '';
+    patrol.Speed = v('aiPatrolSpeed')?.value || '';
+    patrol.UnderThreatSpeed = v('aiPatrolUnderThreatSpeed')?.value || '';
+    patrol.LootingBehaviour = v('aiPatrolLootingBehaviour')?.value || '';
+    patrol.ObjectClassName = v('aiPatrolObjectClassName')?.value || '';
+    patrol.MinSpreadRadius = Math.max(0, parseFloat(v('aiPatrolMinSpreadRadius')?.value || '0') || 0);
+    patrol.MaxSpreadRadius = Math.max(patrol.MinSpreadRadius, parseFloat(v('aiPatrolMaxSpreadRadius')?.value || '0') || 0);
+    const type = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
+    if (type === 'group' && Array.isArray(patrol.Waypoints)) {
+        patrol.Waypoints = [];
+    }
+    if (type === 'waypoints' && !Array.isArray(patrol.Waypoints)) {
+        patrol.Waypoints = [];
+    }
+}
+
+function applyAiPatrolToForm() {
+    const patrol = getSelectedAiPatrol();
+    const v = (id) => document.getElementById(id);
+    if (!patrol) return;
+    if (v('aiPatrolName')) v('aiPatrolName').value = patrol.Name || '';
+    if (v('aiPatrolFaction')) v('aiPatrolFaction').value = patrol.Faction || '';
+    if (v('aiPatrolLoadout')) v('aiPatrolLoadout').value = patrol.Loadout || '';
+    if (v('aiPatrolBehaviour')) v('aiPatrolBehaviour').value = patrol.Behaviour || '';
+    if (v('aiPatrolDefaultStance')) v('aiPatrolDefaultStance').value = patrol.DefaultStance || '';
+    if (v('aiPatrolSpeed')) v('aiPatrolSpeed').value = patrol.Speed || '';
+    if (v('aiPatrolUnderThreatSpeed')) v('aiPatrolUnderThreatSpeed').value = patrol.UnderThreatSpeed || '';
+    if (v('aiPatrolLootingBehaviour')) v('aiPatrolLootingBehaviour').value = patrol.LootingBehaviour || '';
+    if (v('aiPatrolObjectClassName')) v('aiPatrolObjectClassName').value = patrol.ObjectClassName || '';
+    if (v('aiPatrolMinSpreadRadius')) v('aiPatrolMinSpreadRadius').value = String(Math.max(0, Number(patrol.MinSpreadRadius) || 0));
+    if (v('aiPatrolMaxSpreadRadius')) v('aiPatrolMaxSpreadRadius').value = String(Math.max(0, Number(patrol.MaxSpreadRadius) || 0));
+    const inferredType = isWaypointPatrol(patrol) ? 'waypoints' : 'group';
+    const typeRadio = document.querySelector(`input[name="aiPatrolType"][value="${inferredType}"]`);
+    if (typeRadio) typeRadio.checked = true;
+    updateAiPatrolTypeUI();
+}
+
+function refreshAiPatrolSelect() {
+    const select = document.getElementById('aiPatrolSelect');
+    if (!select) return;
+    const current = selectedAiPatrolIndex;
+    select.innerHTML = '';
+    aiPatrols.forEach((p, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = p?.Name || `Patrol ${idx + 1}`;
+        select.appendChild(opt);
+    });
+    if (current >= 0 && current < aiPatrols.length) {
+        select.value = String(current);
+    } else if (aiPatrols.length > 0) {
+        selectedAiPatrolIndex = 0;
+        select.value = '0';
+    } else {
+        selectedAiPatrolIndex = -1;
+    }
+}
+
+function getAiPatrolSpreadDefaults() {
+    const mins = [];
+    const maxs = [];
+    aiPatrols.forEach(p => {
+        const min = Number(p?.MinSpreadRadius);
+        const max = Number(p?.MaxSpreadRadius);
+        if (Number.isFinite(min) && min > 0) mins.push(min);
+        if (Number.isFinite(max) && max > 0) maxs.push(max);
+    });
+    return {
+        min: mins.length > 0 ? mins[Math.floor(mins.length / 2)] : 1,
+        max: maxs.length > 0 ? maxs[Math.floor(maxs.length / 2)] : 50
+    };
+}
+
+function generateUniqueAiPatrolName(baseName = 'New Patrol') {
+    const existing = new Set(aiPatrols.map(p => String(p?.Name || '').trim()).filter(Boolean));
+    if (!existing.has(baseName)) return baseName;
+    let n = 2;
+    while (existing.has(`${baseName} ${n}`)) n += 1;
+    return `${baseName} ${n}`;
+}
+
+function createDefaultAiPatrol() {
+    const defaults = getAiPatrolSpreadDefaults();
+    const pick = (arr, fallback = '') => (Array.isArray(arr) && arr.length > 0 ? String(arr[0]) : fallback);
+    return {
+        Name: generateUniqueAiPatrolName('New Patrol'),
+        Faction: pick(aiPatrolOptions.factions),
+        Loadout: pick(aiPatrolOptions.loadouts),
+        Behaviour: pick(aiPatrolOptions.behaviours, 'HALT'),
+        DefaultStance: pick(aiPatrolOptions.stances, 'ERECT'),
+        Speed: pick(aiPatrolOptions.speeds, 'LIMITED'),
+        UnderThreatSpeed: pick(aiPatrolOptions.speeds, 'FULL'),
+        LootingBehaviour: pick(aiPatrolOptions.lootingBehaviours),
+        MinSpreadRadius: defaults.min,
+        MaxSpreadRadius: defaults.max,
+        ObjectClassName: '',
+        Waypoints: []
+    };
+}
+
+function addAiPatrol() {
+    if (selectedAiPatrolIndex >= 0) {
+        syncSelectedAiPatrolFromForm();
+    }
+    pushAiPatrolUndoState();
+    aiPatrols.push(createDefaultAiPatrol());
+    selectedAiPatrolIndex = aiPatrols.length - 1;
+    aiPatrolSelectedWaypointIndex = -1;
+    aiPatrolIsEditingRadius = false;
+    aiPatrolIsDraggingWaypoint = false;
+    aiPatrolDraggedWaypointIndex = -1;
+    markAiPatrolDirty();
+    refreshAiPatrolSelect();
+    applyAiPatrolToForm();
+    updateAiPatrolDirtyStatus();
+    requestDraw();
+}
+
+function deleteSelectedAiPatrol() {
+    if (selectedAiPatrolIndex < 0 || selectedAiPatrolIndex >= aiPatrols.length) {
+        updateStatus('No AI patrol selected to delete', true);
+        return;
+    }
+    syncSelectedAiPatrolFromForm();
+    pushAiPatrolUndoState();
+    aiPatrols.splice(selectedAiPatrolIndex, 1);
+    if (aiPatrols.length === 0) {
+        selectedAiPatrolIndex = -1;
+    } else if (selectedAiPatrolIndex >= aiPatrols.length) {
+        selectedAiPatrolIndex = aiPatrols.length - 1;
+    }
+    aiPatrolSelectedWaypointIndex = -1;
+    aiPatrolIsEditingRadius = false;
+    aiPatrolIsDraggingWaypoint = false;
+    aiPatrolDraggedWaypointIndex = -1;
+    markAiPatrolDirty();
+    refreshAiPatrolSelect();
+    if (selectedAiPatrolIndex >= 0) {
+        applyAiPatrolToForm();
+    } else {
+        const ids = [
+            'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
+            'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
+            'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+        ];
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.tagName === 'SELECT') el.selectedIndex = 0;
+            else el.value = '';
+        });
+        const select = document.getElementById('aiPatrolSelect');
+        if (select) select.value = '';
+    }
+    updateAiPatrolDirtyStatus();
+    requestDraw();
+}
+
+async function loadAiPatrols() {
+    if (!missionDir) return;
+    try {
+        const response = await fetch(`/api/ai-patrols?mission_dir=${encodeURIComponent(missionDir)}`);
+        const data = await response.json();
+        if (!data.success) {
+            aiPatrols = [];
+            aiPatrolOptions = { factions: [], loadouts: [], behaviours: [], stances: [], speeds: [], lootingBehaviours: [] };
+            return;
+        }
+        aiPatrols = Array.isArray(data.patrols) ? data.patrols : [];
+        aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
+        aiPatrolUndoStack = [];
+        aiPatrolHasUnsavedChanges = false;
+        aiPatrolSelectedWaypointIndex = -1;
+        aiPatrolIsDraggingWaypoint = false;
+        aiPatrolDraggedWaypointIndex = -1;
+        aiPatrolOptions = data.options || aiPatrolOptions;
+        populateSimpleSelect(document.getElementById('aiPatrolFaction'), aiPatrolOptions.factions);
+        populateSimpleSelect(document.getElementById('aiPatrolLoadout'), aiPatrolOptions.loadouts);
+        populateSimpleSelect(document.getElementById('aiPatrolBehaviour'), aiPatrolOptions.behaviours, { includeEmpty: false });
+        populateSimpleSelect(document.getElementById('aiPatrolDefaultStance'), aiPatrolOptions.stances, { includeEmpty: false });
+        populateSimpleSelect(document.getElementById('aiPatrolSpeed'), aiPatrolOptions.speeds, { includeEmpty: false });
+        populateSimpleSelect(document.getElementById('aiPatrolUnderThreatSpeed'), aiPatrolOptions.speeds, { includeEmpty: false });
+        populateSimpleSelect(document.getElementById('aiPatrolLootingBehaviour'), aiPatrolOptions.lootingBehaviours, { includeEmpty: true, emptyLabel: '(None)' });
+        refreshAiPatrolSelect();
+        applyAiPatrolToForm();
+        requestDraw();
+    } catch (error) {
+        console.error('Error loading AI patrols:', error);
+    }
+}
+
+function handleAiPatrolMapClick(screenX, screenY, e) {
+    const patrol = getSelectedAiPatrol();
+    if (!patrol) return false;
+    if (!canEditSelectedAiPatrolOnMap()) return false;
+    const world = screenToWorld(screenX, screenY);
+    if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
+    // If clicking near an existing waypoint, select and start drag
+    const threshold = 10;
+    let hitIndex = -1;
+    let bestDist = Infinity;
+    patrol.Waypoints.forEach((wp, idx) => {
+        if (!Array.isArray(wp) || wp.length < 3) return;
+        const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
+        const dx = sx.x - screenX;
+        const dy = sx.y - screenY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < threshold && d < bestDist) {
+            bestDist = d;
+            hitIndex = idx;
+        }
+    });
+    if (hitIndex >= 0) {
+        aiPatrolSelectedWaypointIndex = hitIndex;
+        aiPatrolIsDraggingWaypoint = true;
+        aiPatrolDraggedWaypointIndex = hitIndex;
+        pushAiPatrolUndoState();
+        markAiPatrolDirty();
+        updateAiPatrolDirtyStatus();
+        requestDraw();
+        return true;
+    }
+    // Otherwise add new waypoint at end
+    pushAiPatrolUndoState();
+    patrol.Waypoints.push([Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100]);
+    aiPatrolSelectedWaypointIndex = patrol.Waypoints.length - 1;
+    const wpTypeRadio = document.querySelector('input[name="aiPatrolType"][value="waypoints"]');
+    if (wpTypeRadio) wpTypeRadio.checked = true;
+    updateAiPatrolTypeUI();
+    markAiPatrolDirty();
+    updateAiPatrolDirtyStatus();
+    requestDraw();
+    return true;
+}
+
+function handleAiPatrolWaypointDrag(screenX, screenY) {
+    if (!aiPatrolIsDraggingWaypoint) return false;
+    const patrol = getSelectedAiPatrol();
+    if (!patrol || !Array.isArray(patrol.Waypoints)) return false;
+    if (aiPatrolDraggedWaypointIndex < 0 || aiPatrolDraggedWaypointIndex >= patrol.Waypoints.length) return false;
+    const world = screenToWorld(screenX, screenY);
+    patrol.Waypoints[aiPatrolDraggedWaypointIndex] = [Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100];
+    aiPatrolSelectedWaypointIndex = aiPatrolDraggedWaypointIndex;
+    return true;
+}
+
+function findNearestAiPatrolWaypoint(screenX, screenY, threshold = 12) {
+    const patrol = getSelectedAiPatrol();
+    if (!patrol || !Array.isArray(patrol.Waypoints)) return -1;
+    let hitIndex = -1;
+    let bestDist = Infinity;
+    patrol.Waypoints.forEach((wp, idx) => {
+        if (!Array.isArray(wp) || wp.length < 3) return;
+        const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
+        const dx = sx.x - screenX;
+        const dy = sx.y - screenY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < threshold && d < bestDist) {
+            bestDist = d;
+            hitIndex = idx;
+        }
+    });
+    return hitIndex;
+}
+
+function deleteAiPatrolWaypointAt(screenX, screenY) {
+    const patrol = getSelectedAiPatrol();
+    if (!patrol || !Array.isArray(patrol.Waypoints) || !canEditSelectedAiPatrolOnMap()) return false;
+    const hitIndex = findNearestAiPatrolWaypoint(screenX, screenY);
+    if (hitIndex < 0) return false;
+    pushAiPatrolUndoState();
+    patrol.Waypoints.splice(hitIndex, 1);
+    aiPatrolSelectedWaypointIndex = Math.min(hitIndex, patrol.Waypoints.length - 1);
+    markAiPatrolDirty();
+    updateAiPatrolDirtyStatus();
+    requestDraw();
+    return true;
+}
+
+function detectAiPatrolRadiusTarget(screenX, screenY, patrol) {
+    if (!patrol) return '';
+    const center = getAiPatrolCenterWorld(patrol);
+    const centerScreen = worldToScreen(center.x, center.z);
+    const minSpread = Math.max(0, Number(patrol.MinSpreadRadius) || 0);
+    const maxSpread = Math.max(minSpread, Number(patrol.MaxSpreadRadius) || 0);
+    const rings = [
+        { target: 'min', radius: minSpread },
+        { target: 'max', radius: maxSpread }
+    ];
+    const handleRadius = 6;
+    let closest = '';
+    let closestDist = Infinity;
+    for (const ring of rings) {
+        const screenRadius = ring.radius * viewScale;
+        const handleX = centerScreen.x + screenRadius;
+        const handleY = centerScreen.y;
+        const hdx = handleX - screenX;
+        const hdy = handleY - screenY;
+        const handleDist = Math.sqrt(hdx * hdx + hdy * hdy);
+        if (handleDist < handleRadius + MARKER_INTERACTION_THRESHOLD && handleDist < closestDist) {
+            closest = ring.target;
+            closestDist = handleDist;
+            continue;
+        }
+        const dx = centerScreen.x - screenX;
+        const dy = centerScreen.y - screenY;
+        const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
+        const distanceFromEdge = Math.abs(distanceFromCenter - screenRadius);
+        if (distanceFromEdge < MARKER_INTERACTION_THRESHOLD && distanceFromCenter > screenRadius * 0.5 && distanceFromEdge < closestDist) {
+            closest = ring.target;
+            closestDist = distanceFromEdge;
+        }
+    }
+    return closest;
+}
+
+function tryStartAiPatrolRadiusEdit(screenX, screenY) {
+    const patrol = getSelectedAiPatrol();
+    if (!patrol || !canEditSelectedAiPatrolOnMap()) return false;
+    syncSelectedAiPatrolFromForm();
+    const target = detectAiPatrolRadiusTarget(screenX, screenY, patrol);
+    if (!target) return false;
+    pushAiPatrolUndoState();
+    aiPatrolIsEditingRadius = true;
+    aiPatrolRadiusTarget = target;
+    markAiPatrolDirty();
+    return true;
+}
+
+function handleAiPatrolRadiusDrag(screenX, screenY) {
+    if (!aiPatrolIsEditingRadius) return false;
+    const patrol = getSelectedAiPatrol();
+    if (!patrol) return false;
+    const center = getAiPatrolCenterWorld(patrol);
+    const centerScreen = worldToScreen(center.x, center.z);
+    const dx = screenX - centerScreen.x;
+    const dy = screenY - centerScreen.y;
+    const newRadius = Math.max(1, Math.sqrt(dx * dx + dy * dy) / viewScale);
+    const currentMin = Math.max(0, Number(patrol.MinSpreadRadius) || 0);
+    const currentMax = Math.max(currentMin, Number(patrol.MaxSpreadRadius) || 0);
+    if (aiPatrolRadiusTarget === 'min') {
+        patrol.MinSpreadRadius = Math.min(newRadius, currentMax);
+        if (patrol.MaxSpreadRadius < patrol.MinSpreadRadius) patrol.MaxSpreadRadius = patrol.MinSpreadRadius;
+    } else {
+        patrol.MaxSpreadRadius = Math.max(newRadius, currentMin);
+        if (patrol.MinSpreadRadius > patrol.MaxSpreadRadius) patrol.MinSpreadRadius = patrol.MaxSpreadRadius;
+    }
+    applyAiPatrolToForm();
+    updateAiPatrolDirtyStatus();
+    return true;
+}
+
+function endAiPatrolRadiusEdit() {
+    if (!aiPatrolIsEditingRadius) return;
+    const patrol = getSelectedAiPatrol();
+    if (patrol) {
+        patrol.MinSpreadRadius = Math.round((Number(patrol.MinSpreadRadius) || 0) * 100) / 100;
+        patrol.MaxSpreadRadius = Math.round((Number(patrol.MaxSpreadRadius) || 0) * 100) / 100;
+        if (patrol.MaxSpreadRadius < patrol.MinSpreadRadius) {
+            patrol.MaxSpreadRadius = patrol.MinSpreadRadius;
+        }
+        applyAiPatrolToForm();
+    }
+    aiPatrolIsEditingRadius = false;
+    aiPatrolRadiusTarget = 'max';
+}
+
+function undoAiPatrolEdit() {
+    if (aiPatrolUndoStack.length === 0) {
+        updateStatus('No AI patrol edits to undo');
+        return;
+    }
+    aiPatrols = aiPatrolUndoStack.pop();
+    markAiPatrolDirty();
+    refreshAiPatrolSelect();
+    applyAiPatrolToForm();
+    requestDraw();
+}
+
+function discardAiPatrolChanges() {
+    aiPatrols = cloneAiPatrolData(aiPatrolsOriginal);
+    aiPatrolUndoStack = [];
+    aiPatrolHasUnsavedChanges = false;
+    aiPatrolSelectedWaypointIndex = -1;
+    aiPatrolIsDraggingWaypoint = false;
+    aiPatrolDraggedWaypointIndex = -1;
+    refreshAiPatrolSelect();
+    applyAiPatrolToForm();
+    requestDraw();
+    updateStatus('Discarded AI patrol changes');
+}
+
+async function saveAiPatrols() {
+    syncSelectedAiPatrolFromForm();
+    if (!missionDir) {
+        updateStatus('Mission directory is required to save patrols', true);
+        return;
+    }
+    try {
+        const response = await fetch('/api/ai-patrols/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                patrols: aiPatrols
+            })
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Save failed');
+        aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
+        aiPatrolUndoStack = [];
+        aiPatrolHasUnsavedChanges = false;
+        refreshAiPatrolSelect();
+        updateStatus(data.message || 'AI patrols saved');
+    } catch (error) {
+        updateStatus(`Error saving AI patrols: ${error.message}`, true);
+    }
+}
+
+function clearAiPatrolForm() {
+    if (aiPatrolHasUnsavedChanges) {
+        updateStatus('Unsaved AI patrol changes. Save or Discard before clearing form.', true);
+        return;
+    }
+    selectedAiPatrolIndex = -1;
+    const select = document.getElementById('aiPatrolSelect');
+    if (select) select.value = '';
+    const ids = [
+        'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
+        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+    ];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        else el.value = '';
+    });
+    const defaults = getAiPatrolSpreadDefaults();
+    const minEl = document.getElementById('aiPatrolMinSpreadRadius');
+    const maxEl = document.getElementById('aiPatrolMaxSpreadRadius');
+    if (minEl) minEl.value = String(defaults.min);
+    if (maxEl) maxEl.value = String(defaults.max);
+    aiPatrolIsEditingRadius = false;
+    aiPatrolSelectedWaypointIndex = -1;
+    aiPatrolIsDraggingWaypoint = false;
+    aiPatrolDraggedWaypointIndex = -1;
+    requestDraw();
 }
 
 // Load background image
@@ -7544,6 +8272,9 @@ function saveFilterAndDisplaySettings() {
     localStorage.setItem('map_viewer_showTerritories', showTerritories.toString());
     localStorage.setItem('map_viewer_showEffectAreas', showEffectAreas.toString());
     localStorage.setItem('map_viewer_showPlayerSpawnPoints', showPlayerSpawnPoints.toString());
+    localStorage.setItem('map_viewer_showAiPatrolMarkers', showAiPatrolMarkers.toString());
+    localStorage.setItem('map_viewer_showSelectedAiPatrolOnly', showSelectedAiPatrolOnly.toString());
+    localStorage.setItem('map_viewer_aiPatrolEditingEnabled', aiPatrolEditingEnabled.toString());
     localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
     localStorage.setItem('map_viewer_backgroundImageOpacity', backgroundImageOpacity.toString());
     
@@ -7562,6 +8293,7 @@ const SIDEBAR_SECTION_ORDER = [
     'location',
     'display',
     'editMarkers',
+    'aiPatrols',
     'markerFilters',
     'eventSpawnFilters',
     'territoryFilters',
@@ -7735,6 +8467,27 @@ async function restoreSavedState() {
         showPlayerSpawnPoints = savedShowPlayerSpawnPoints === 'true';
         const checkbox = document.getElementById('showPlayerSpawnPoints');
         if (checkbox) checkbox.checked = showPlayerSpawnPoints;
+    }
+    
+    const savedShowAiPatrolMarkers = localStorage.getItem('map_viewer_showAiPatrolMarkers');
+    if (savedShowAiPatrolMarkers !== null) {
+        showAiPatrolMarkers = savedShowAiPatrolMarkers === 'true';
+        const checkbox = document.getElementById('showAiPatrolMarkers');
+        if (checkbox) checkbox.checked = showAiPatrolMarkers;
+    }
+    
+    const savedShowSelectedAiPatrolOnly = localStorage.getItem('map_viewer_showSelectedAiPatrolOnly');
+    if (savedShowSelectedAiPatrolOnly !== null) {
+        showSelectedAiPatrolOnly = savedShowSelectedAiPatrolOnly === 'true';
+        const checkbox = document.getElementById('aiPatrolShowSelectedOnly');
+        if (checkbox) checkbox.checked = showSelectedAiPatrolOnly;
+    }
+    
+    const savedAiPatrolEditingEnabled = localStorage.getItem('map_viewer_aiPatrolEditingEnabled');
+    if (savedAiPatrolEditingEnabled !== null) {
+        aiPatrolEditingEnabled = savedAiPatrolEditingEnabled === 'true';
+        const checkbox = document.getElementById('aiPatrolEditingEnabled');
+        if (checkbox) checkbox.checked = aiPatrolEditingEnabled;
     }
     
     const savedShowBackgroundImage = localStorage.getItem('map_viewer_showBackgroundImage');
@@ -8188,6 +8941,15 @@ document.addEventListener('DOMContentLoaded', () => {
         saveFilterAndDisplaySettings();
     });
     
+    const showAiPatrolMarkersCheckbox = document.getElementById('showAiPatrolMarkers');
+    if (showAiPatrolMarkersCheckbox) {
+        showAiPatrolMarkersCheckbox.addEventListener('change', (e) => {
+            showAiPatrolMarkers = e.target.checked;
+            requestDraw();
+            saveFilterAndDisplaySettings();
+        });
+    }
+    
     // Note: Edit controls and button handlers are now created dynamically by EditControlsManager
     // Checkboxes are created by initializeEditMarkersUI()
     
@@ -8263,6 +9025,121 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) { /* ignore */ }
         });
     }
+    
+    // AI Patrol UI
+    const aiPatrolSelect = document.getElementById('aiPatrolSelect');
+    if (aiPatrolSelect) {
+        aiPatrolSelect.addEventListener('change', (e) => {
+            if (aiPatrolHasUnsavedChanges && selectedAiPatrolIndex >= 0) {
+                e.target.value = String(selectedAiPatrolIndex);
+                updateStatus('Unsaved AI patrol changes. Save or Discard before switching patrol.', true);
+                return;
+            }
+            syncSelectedAiPatrolFromForm();
+            const idx = parseInt(e.target.value, 10);
+            selectedAiPatrolIndex = Number.isFinite(idx) ? idx : -1;
+            aiPatrolSelectedWaypointIndex = -1;
+            applyAiPatrolToForm();
+            requestDraw();
+        });
+    }
+    
+    const aiPatrolShowSelectedOnlyCheckbox = document.getElementById('aiPatrolShowSelectedOnly');
+    if (aiPatrolShowSelectedOnlyCheckbox) {
+        aiPatrolShowSelectedOnlyCheckbox.checked = showSelectedAiPatrolOnly;
+        aiPatrolShowSelectedOnlyCheckbox.addEventListener('change', (e) => {
+            showSelectedAiPatrolOnly = e.target.checked;
+            requestDraw();
+            saveFilterAndDisplaySettings();
+        });
+    }
+    
+    const aiPatrolAddBtn = document.getElementById('aiPatrolAddBtn');
+    if (aiPatrolAddBtn) {
+        aiPatrolAddBtn.addEventListener('click', () => {
+            if (!aiPatrolEditingEnabled) return;
+            addAiPatrol();
+        });
+    }
+    
+    const aiPatrolDeleteBtn = document.getElementById('aiPatrolDeleteBtn');
+    if (aiPatrolDeleteBtn) {
+        aiPatrolDeleteBtn.addEventListener('click', () => {
+            if (!aiPatrolEditingEnabled) return;
+            deleteSelectedAiPatrol();
+        });
+    }
+    
+    const aiPatrolEditingEnabledCheckbox = document.getElementById('aiPatrolEditingEnabled');
+    if (aiPatrolEditingEnabledCheckbox) {
+        aiPatrolEditingEnabledCheckbox.checked = aiPatrolEditingEnabled;
+        aiPatrolEditingEnabledCheckbox.addEventListener('change', (e) => {
+            aiPatrolEditingEnabled = !!e.target.checked;
+            aiPatrolIsDraggingWaypoint = false;
+            aiPatrolDraggedWaypointIndex = -1;
+            aiPatrolIsEditingRadius = false;
+            updateAiPatrolEditingUI();
+            requestDraw();
+            saveFilterAndDisplaySettings();
+            updateStatus(aiPatrolEditingEnabled
+                ? 'Patrol editing enabled (waypoint click/drag/delete and radius edge drag)'
+                : 'Patrol editing disabled');
+        });
+    }
+    
+    ['aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
+     'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour',
+     'aiPatrolObjectClassName', 'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', () => {
+                if (!aiPatrolEditingEnabled) return;
+                if (selectedAiPatrolIndex < 0) return;
+                pushAiPatrolUndoState();
+                syncSelectedAiPatrolFromForm();
+                markAiPatrolDirty();
+                updateAiPatrolDirtyStatus();
+                requestDraw();
+            });
+        }
+    });
+    
+    document.querySelectorAll('input[name="aiPatrolType"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            if (!aiPatrolEditingEnabled) return;
+            if (selectedAiPatrolIndex < 0) return;
+            pushAiPatrolUndoState();
+            syncSelectedAiPatrolFromForm();
+            markAiPatrolDirty();
+            updateAiPatrolDirtyStatus();
+            updateAiPatrolTypeUI();
+            requestDraw();
+        });
+    });
+    
+    const aiPatrolUndoWaypointBtn = document.getElementById('aiPatrolUndoWaypointBtn');
+    if (aiPatrolUndoWaypointBtn) {
+        aiPatrolUndoWaypointBtn.addEventListener('click', () => {
+            if (!aiPatrolEditingEnabled) return;
+            undoAiPatrolEdit();
+        });
+    }
+    
+    const aiPatrolSaveBtn = document.getElementById('aiPatrolSaveBtn');
+    if (aiPatrolSaveBtn) {
+        aiPatrolSaveBtn.addEventListener('click', saveAiPatrols);
+    }
+    const aiPatrolDiscardBtn = document.getElementById('aiPatrolDiscardBtn');
+    if (aiPatrolDiscardBtn) {
+        aiPatrolDiscardBtn.addEventListener('click', discardAiPatrolChanges);
+    }
+    const aiPatrolClearBtn = document.getElementById('aiPatrolClearBtn');
+    if (aiPatrolClearBtn) {
+        aiPatrolClearBtn.addEventListener('click', clearAiPatrolForm);
+    }
+    updateAiPatrolEditingUI();
+    updateAiPatrolTypeUI();
+    
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
     document.getElementById('clearImageBtn').addEventListener('click', clearBackgroundImage);
     document.getElementById('applyDimensionsBtn').addEventListener('click', applyImageDimensions);
