@@ -85,6 +85,7 @@ let aiPatrolIsEditingRadius = false;
 let aiPatrolRadiusTarget = 'max';
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
+let activeEditCategory = null; // 'markers' | 'aiPatrols' | null
 
 // Marker type color system (centralized)
 const MARKER_TYPE_COLORS = {
@@ -6069,6 +6070,158 @@ function handleFilterToSingleType(markerType, enabled) {
     }
 }
 
+function markerTypeHasChanges(markerType) {
+    const cfg = markerTypes[markerType];
+    return !!(cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0));
+}
+
+function getDirtyMarkerTypes() {
+    return Object.keys(markerTypes).filter(markerTypeHasChanges);
+}
+
+function markersEditingActive() {
+    return Object.values(editingEnabled).some(v => v === true);
+}
+
+async function setMarkersEditingEnabled(enabled) {
+    const select = document.getElementById('editMarkerTypeSelect');
+    const checkbox = document.getElementById('markerEditingEnabled');
+    if (!select || !checkbox) return;
+    select.disabled = !enabled;
+    checkbox.checked = enabled;
+    if (!enabled) {
+        for (const markerType of Object.keys(markerTypes)) {
+            if (editingEnabled[markerType]) {
+                await handleEditingToggle(markerType, false);
+            }
+        }
+        if (editControlsManager) {
+            editControlsManager.activeControls.forEach((controls) => {
+                controls.style.display = 'none';
+            });
+        }
+        draw();
+        return;
+    }
+    if (!select.value && select.options.length > 0) {
+        select.value = select.options[0].value;
+    }
+    if (select.value) {
+        await handleEditingToggle(select.value, true);
+    }
+    draw();
+}
+
+function setAiPatrolEditingEnabled(enabled) {
+    aiPatrolEditingEnabled = enabled;
+    if (!enabled) {
+        aiPatrolIsDraggingWaypoint = false;
+        aiPatrolDraggedWaypointIndex = -1;
+        aiPatrolIsEditingRadius = false;
+    }
+    const checkbox = document.getElementById('aiPatrolEditingEnabled');
+    if (checkbox) checkbox.checked = enabled;
+    updateAiPatrolEditingUI();
+    requestDraw();
+}
+
+function getCategoryDisplayName(category) {
+    return category === 'markers' ? 'Marker editing' : 'AI patrol editing';
+}
+
+async function hasCategoryUnsavedChanges(category) {
+    if (category === 'markers') {
+        return getDirtyMarkerTypes().length > 0;
+    }
+    if (category === 'aiPatrols') {
+        return !!aiPatrolHasUnsavedChanges;
+    }
+    return false;
+}
+
+async function saveCategoryChanges(category) {
+    if (category === 'markers') {
+        const dirtyTypes = getDirtyMarkerTypes();
+        for (const markerType of dirtyTypes) {
+            const result = await saveMarkerChanges(markerType);
+            if (!result || !result.success) {
+                updateStatus(result?.message || `Failed to save ${markerType}`, true);
+                return false;
+            }
+        }
+        return true;
+    }
+    if (category === 'aiPatrols') {
+        return await saveAiPatrols();
+    }
+    return true;
+}
+
+function discardCategoryChanges(category) {
+    if (category === 'markers') {
+        const dirtyTypes = getDirtyMarkerTypes();
+        dirtyTypes.forEach(markerType => restoreMarkerPositions(markerType));
+        return;
+    }
+    if (category === 'aiPatrols') {
+        discardAiPatrolChanges();
+    }
+}
+
+async function resolveUnsavedChangesBeforeExit(category) {
+    if (!await hasCategoryUnsavedChanges(category)) return true;
+    const label = getCategoryDisplayName(category);
+    const discard = window.confirm(
+        `Unsaved changes in ${label}.\n\n` +
+        `OK = Discard changes and switch mode\n` +
+        `Cancel = Keep changes and stay in current mode`
+    );
+    if (discard) {
+        discardCategoryChanges(category);
+        return true;
+    }
+    return false;
+}
+
+async function requestEditCategoryState(category, enabled) {
+    if (enabled) {
+        if (activeEditCategory === category) return true;
+        if (activeEditCategory) {
+            const canExitCurrent = await resolveUnsavedChangesBeforeExit(activeEditCategory);
+            if (!canExitCurrent) return false;
+            if (activeEditCategory === 'markers') {
+                await setMarkersEditingEnabled(false);
+            } else if (activeEditCategory === 'aiPatrols') {
+                setAiPatrolEditingEnabled(false);
+            }
+        }
+        if (category === 'markers') {
+            await setMarkersEditingEnabled(true);
+        } else if (category === 'aiPatrols') {
+            setAiPatrolEditingEnabled(true);
+        }
+        activeEditCategory = category;
+        return true;
+    }
+    if (activeEditCategory !== category) {
+        if (category === 'markers') {
+            await setMarkersEditingEnabled(false);
+        } else if (category === 'aiPatrols') {
+            setAiPatrolEditingEnabled(false);
+        }
+        return true;
+    }
+    const canExit = await resolveUnsavedChangesBeforeExit(category);
+    if (!canExit) return false;
+    if (category === 'markers') {
+        await setMarkersEditingEnabled(false);
+    } else if (category === 'aiPatrols') {
+        setAiPatrolEditingEnabled(false);
+    }
+    activeEditCategory = null;
+    return true;
+}
+
 // Update visibility checkboxes in the UI to reflect current state
 function updateVisibilityCheckboxes() {
     const showMarkersCheckbox = document.getElementById('showMarkers');
@@ -7252,7 +7405,7 @@ async function saveAiPatrols() {
     syncSelectedAiPatrolFromForm();
     if (!missionDir) {
         updateStatus('Mission directory is required to save patrols', true);
-        return;
+        return false;
     }
     try {
         const response = await fetch('/api/ai-patrols/save', {
@@ -7270,8 +7423,10 @@ async function saveAiPatrols() {
         aiPatrolHasUnsavedChanges = false;
         refreshAiPatrolSelect();
         updateStatus(data.message || 'AI patrols saved');
+        return true;
     } catch (error) {
         updateStatus(`Error saving AI patrols: ${error.message}`, true);
+        return false;
     }
 }
 
@@ -8770,51 +8925,10 @@ function initializeEditMarkersUI() {
     // Handle marker editing checkbox changes
     editingToggleCheckbox.addEventListener('change', async (e) => {
         const enabled = e.target.checked;
-        select.disabled = !enabled;
-        
-        if (!enabled) {
-            // Prevent disabling marker editing if any active type has changes.
-            for (const markerType of Object.keys(markerTypes)) {
-                if (!editingEnabled[markerType]) continue;
-                const cfg = markerTypes[markerType];
-                const hasChanges = cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0);
-                if (hasChanges) {
-                    editingToggleCheckbox.checked = true;
-                    updateStatus(`Unsaved changes for ${cfg.getDisplayName()}. Save or Discard to exit edit mode.`, true);
-                    const sel = document.getElementById('editMarkerTypeSelect');
-                    if (sel) sel.value = markerType;
-                    return;
-                }
-            }
-            
-            // Turn off editing for all types
-            for (const markerType of Object.keys(markerTypes)) {
-                if (editingEnabled[markerType]) {
-                    await handleEditingToggle(markerType, false);
-                }
-            }
-            
-            // Hide all edit controls
-            if (editControlsManager) {
-                editControlsManager.activeControls.forEach((controls) => {
-                    controls.style.display = 'none';
-                });
-            }
-            
-            draw();
-            return;
+        const changed = await requestEditCategoryState('markers', enabled);
+        if (!changed) {
+            editingToggleCheckbox.checked = !enabled;
         }
-        
-        // Enabled: ensure we have a selected marker type
-        if (!select.value && select.options.length > 0) {
-            select.value = select.options[0].value;
-        }
-        
-        if (select.value) {
-            await handleEditingToggle(select.value, true);
-        }
-        
-        draw();
     });
 }
 
@@ -8891,7 +9005,7 @@ function updateTerritoryTypeEditUI() {
 let editControlsManager = null;
 
 // Event listeners
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initCanvas();
     
     // Setup background image handler
@@ -8907,7 +9021,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeHeightFilter();
     
     // Restore saved state
-    restoreSavedState();
+    await restoreSavedState();
     
     document.getElementById('loadDataBtn').addEventListener('click', loadGroups);
     document.getElementById('showGrid').addEventListener('change', (e) => {
@@ -9073,16 +9187,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const aiPatrolEditingEnabledCheckbox = document.getElementById('aiPatrolEditingEnabled');
     if (aiPatrolEditingEnabledCheckbox) {
         aiPatrolEditingEnabledCheckbox.checked = aiPatrolEditingEnabled;
-        aiPatrolEditingEnabledCheckbox.addEventListener('change', (e) => {
-            aiPatrolEditingEnabled = !!e.target.checked;
-            aiPatrolIsDraggingWaypoint = false;
-            aiPatrolDraggedWaypointIndex = -1;
-            aiPatrolIsEditingRadius = false;
-            updateAiPatrolEditingUI();
-            requestDraw();
+        aiPatrolEditingEnabledCheckbox.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            const changed = await requestEditCategoryState('aiPatrols', enabled);
+            if (!changed) {
+                aiPatrolEditingEnabledCheckbox.checked = !enabled;
+                return;
+            }
             saveFilterAndDisplaySettings();
-            updateStatus(aiPatrolEditingEnabled
-                ? 'Patrol editing enabled (waypoint click/drag/delete and radius edge drag)'
+            updateStatus(enabled
+                ? 'Patrol editing enabled (waypoint click/drag/delete and radius edge/handle drag)'
                 : 'Patrol editing disabled');
         });
     }
@@ -9138,6 +9252,14 @@ document.addEventListener('DOMContentLoaded', () => {
         aiPatrolClearBtn.addEventListener('click', clearAiPatrolForm);
     }
     updateAiPatrolEditingUI();
+    if (markersEditingActive()) {
+        activeEditCategory = 'markers';
+        setAiPatrolEditingEnabled(false);
+    } else if (aiPatrolEditingEnabled) {
+        activeEditCategory = 'aiPatrols';
+    } else {
+        activeEditCategory = null;
+    }
     updateAiPatrolTypeUI();
     
     document.getElementById('loadImageBtn').addEventListener('click', loadBackgroundImage);
