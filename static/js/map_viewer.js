@@ -83,6 +83,9 @@ let aiPatrolDraggedWaypointIndex = -1;
 let aiPatrolEditingEnabled = false;
 let aiPatrolIsEditingRadius = false;
 let aiPatrolRadiusTarget = 'max';
+let aiPatrolRadiusEditPatrolIndices = [];
+let aiPatrolRadiusEditStartValues = new Map(); // Map<patrolIndex,{ min, max }>
+let aiPatrolRadiusEditReferencePatrolIndex = -1;
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
 let activeEditCategory = null; // 'markers' | 'aiPatrols' | null
@@ -2128,6 +2131,57 @@ class MarkerRenderer {
     }
 }
 
+// AI patrol waypoint adapter for shared marker selection/edit mechanisms.
+markerTypes.aiPatrolWaypoints = {
+    baseColor: '#50dc78',
+    hiddenFromMarkerEditDropdown: true,
+    belongsToMarkersCategory: false,
+    getArray: () => getAiPatrolWaypointMarkerArray(),
+    setArray: () => {},
+    getShowFlag: () => showAiPatrolMarkers,
+    canEditRadius: false, // Radius remains patrol-specific (min/max rings).
+    canEditDimensions: false,
+    saveEndpoint: null,
+    getDisplayName: () => 'AI Patrol Waypoints',
+    getEditControlsId: () => '',
+    getEditCheckboxId: () => '',
+    getMarker: (index) => getAiPatrolWaypointMarkerByFlatIndex(index),
+    isDeleted: () => false,
+    getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+    isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        return Math.sqrt(dx * dx + dy * dy) < MARKER_INTERACTION_THRESHOLD;
+    },
+    createNew: (x, y, z) => ({ x, y, z }),
+    getOriginalData: (marker) => ({ x: marker.x, y: marker.y, z: marker.z }),
+    restoreOriginal: (marker, original) => {
+        marker.x = original.x;
+        marker.y = original.y;
+        marker.z = original.z;
+    },
+    prepareSaveData: () => ({}),
+    getTooltipLines: (marker) => {
+        const patrol = aiPatrols[marker.patrolIndex];
+        return [
+            patrol?.Name || `Patrol ${marker.patrolIndex + 1}`,
+            `Waypoint ${marker.waypointIndex + 1}`,
+            '',
+            `X: ${(Number(marker.x) || 0).toFixed(2)} m`,
+            `Y: ${(Number(marker.y) || 0).toFixed(2)} m`,
+            `Z: ${(Number(marker.z) || 0).toFixed(2)} m`
+        ];
+    },
+    selected: new Set(),
+    deleted: new Set(),
+    new: new Set(),
+    originalPositions: new Map(),
+    uiConfig: {
+        showDiscardButton: false,
+        customControls: []
+    }
+};
+
 // Global editing state (kept for backward compatibility, now delegates to state manager)
 let editingEnabled = {};
 Object.keys(markerTypes).forEach(type => {
@@ -2252,12 +2306,8 @@ function initCanvas() {
             panStartOffsetY = viewOffsetY;
             e.preventDefault();
         } else if (e.button === 0) {
-            // AI patrol map-edit modes take precedence over regular selection/edit interactions
+            // AI patrol radius edit mode takes precedence over regular marker interactions.
             if (tryStartAiPatrolRadiusEdit(x, y)) {
-                e.preventDefault();
-                return;
-            }
-            if (handleAiPatrolMapClick(x, y, e)) {
                 e.preventDefault();
                 return;
             }
@@ -2320,7 +2370,7 @@ function initCanvas() {
             }
             
             // Check for drag on non-radius-editable types
-            if (tryStartDrag(x, y)) {
+            if (!e.altKey && tryStartDrag(x, y)) {
                 e.preventDefault();
                 return;
             }
@@ -2343,14 +2393,6 @@ function initCanvas() {
         tooltipX = x;
         tooltipY = y;
         
-        // Handle AI patrol waypoint drag
-        if (aiPatrolIsDraggingWaypoint) {
-            if (handleAiPatrolWaypointDrag(x, y)) {
-                requestDraw();
-            }
-            e.preventDefault();
-            return;
-        }
         if (aiPatrolIsEditingRadius) {
             if (handleAiPatrolRadiusDrag(x, y)) {
                 requestDraw();
@@ -2385,13 +2427,7 @@ function initCanvas() {
     });
     
     canvas.addEventListener('mouseup', (e) => {
-        if (aiPatrolIsDraggingWaypoint && e.button === 0) {
-            aiPatrolIsDraggingWaypoint = false;
-            aiPatrolDraggedWaypointIndex = -1;
-            requestDraw();
-            e.preventDefault();
-            return;
-        } else if (aiPatrolIsEditingRadius && e.button === 0) {
+        if (aiPatrolIsEditingRadius && e.button === 0) {
             endAiPatrolRadiusEdit();
             requestDraw();
             e.preventDefault();
@@ -3714,23 +3750,155 @@ function updateAiPatrolDirtyStatus() {
     }
 }
 
+function getAiPatrolWaypointFlatRefs() {
+    const refs = [];
+    if (!Array.isArray(aiPatrols)) return refs;
+    aiPatrols.forEach((patrol, patrolIndex) => {
+        if (!isWaypointPatrol(patrol)) return;
+        if (!Array.isArray(patrol.Waypoints)) return;
+        patrol.Waypoints.forEach((wp, waypointIndex) => {
+            if (!Array.isArray(wp) || wp.length < 3) return;
+            refs.push({ patrolIndex, waypointIndex });
+        });
+    });
+    return refs;
+}
+
+function getAiPatrolWaypointRefByFlatIndex(index) {
+    const refs = getAiPatrolWaypointFlatRefs();
+    return refs[index] || null;
+}
+
+function getAiPatrolWaypointMarkerByFlatIndex(index) {
+    const ref = getAiPatrolWaypointRefByFlatIndex(index);
+    if (!ref) return null;
+    const waypoint = aiPatrols[ref.patrolIndex]?.Waypoints?.[ref.waypointIndex];
+    const patrol = aiPatrols[ref.patrolIndex];
+    if (!Array.isArray(waypoint) || !patrol) return null;
+    return {
+        patrolIndex: ref.patrolIndex,
+        waypointIndex: ref.waypointIndex,
+        get x() { return Number(waypoint[0]) || 0; },
+        set x(v) { waypoint[0] = Number(v) || 0; },
+        get y() { return Number(waypoint[1]) || 0; },
+        set y(v) { waypoint[1] = Number(v) || 0; },
+        get z() { return Number(waypoint[2]) || 0; },
+        set z(v) { waypoint[2] = Number(v) || 0; },
+        get radius() { return Math.max(0, Number(patrol.MaxSpreadRadius) || 0); },
+        set radius(v) { patrol.MaxSpreadRadius = Math.max(0, Number(v) || 0); }
+    };
+}
+
+function getAiPatrolWaypointMarkerArray() {
+    const refs = getAiPatrolWaypointFlatRefs();
+    const markers = [];
+    refs.forEach((_, index) => {
+        const marker = getAiPatrolWaypointMarkerByFlatIndex(index);
+        if (marker) markers.push(marker);
+    });
+    return markers;
+}
+
+function getAiPatrolWaypointSelectedSet() {
+    return markerTypes.aiPatrolWaypoints?.selected || new Set();
+}
+
+function isAiPatrolWaypointRefSelected(patrolIndex, waypointIndex) {
+    const selected = getAiPatrolWaypointSelectedSet();
+    if (selected.size === 0) return false;
+    for (const flatIndex of selected) {
+        const ref = getAiPatrolWaypointRefByFlatIndex(flatIndex);
+        if (!ref) continue;
+        if (ref.patrolIndex === patrolIndex && ref.waypointIndex === waypointIndex) return true;
+    }
+    return false;
+}
+
+function clearAiPatrolWaypointSelection() {
+    const selected = markerTypes.aiPatrolWaypoints?.selected;
+    if (selected) selected.clear();
+    aiPatrolSelectedWaypointIndex = -1;
+}
+
+function resetAiPatrolWaypointAdapterState() {
+    const cfg = markerTypes.aiPatrolWaypoints;
+    if (!cfg) return;
+    cfg.selected.clear();
+    cfg.deleted.clear();
+    cfg.new.clear();
+    cfg.originalPositions.clear();
+}
+
+function getSelectedAiPatrolIndicesFromWaypointSelection() {
+    const selected = getAiPatrolWaypointSelectedSet();
+    const indices = new Set();
+    selected.forEach(flatIndex => {
+        const ref = getAiPatrolWaypointRefByFlatIndex(flatIndex);
+        if (ref) indices.add(ref.patrolIndex);
+    });
+    return Array.from(indices.values());
+}
+
+function isAiPatrolMixedWaypointSelection() {
+    return getSelectedAiPatrolIndicesFromWaypointSelection().length > 1;
+}
+
+function syncAiPatrolSelectionFromWaypointSet(preferredFlatIndex = null) {
+    const selected = getAiPatrolWaypointSelectedSet();
+    if (!selected || selected.size === 0) {
+        aiPatrolSelectedWaypointIndex = -1;
+        updateAiPatrolEditingUI();
+        return;
+    }
+    let chosenFlatIndex = preferredFlatIndex;
+    if (!Number.isInteger(chosenFlatIndex) || !selected.has(chosenFlatIndex)) {
+        chosenFlatIndex = selected.values().next().value;
+    }
+    const ref = getAiPatrolWaypointRefByFlatIndex(chosenFlatIndex);
+    if (!ref) return;
+    selectedAiPatrolIndex = ref.patrolIndex;
+    aiPatrolSelectedWaypointIndex = ref.waypointIndex;
+    const select = document.getElementById('aiPatrolSelect');
+    if (select) select.value = String(ref.patrolIndex);
+    applyAiPatrolToForm();
+    updateAiPatrolEditingUI();
+}
+
+function resetAiPatrolInteractionState(clearSelection = false) {
+    aiPatrolIsDraggingWaypoint = false;
+    aiPatrolDraggedWaypointIndex = -1;
+    aiPatrolIsEditingRadius = false;
+    aiPatrolRadiusTarget = 'max';
+    aiPatrolRadiusEditReferencePatrolIndex = -1;
+    aiPatrolRadiusEditPatrolIndices = [];
+    aiPatrolRadiusEditStartValues.clear();
+    if (clearSelection) {
+        clearAiPatrolWaypointSelection();
+        resetAiPatrolWaypointAdapterState();
+    }
+}
+
 function canEditAiPatrolOnMap() {
-    return !!aiPatrolEditingEnabled;
+    return !!aiPatrolEditingEnabled && !!editingEnabled.aiPatrolWaypoints;
 }
 
 function updateAiPatrolEditingUI() {
-    const editableIds = [
-        'aiPatrolAddBtn', 'aiPatrolDeleteBtn',
+    const mixedSelection = isAiPatrolMixedWaypointSelection();
+    const geometryFieldIds = ['aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'];
+    const nonGeometryFieldIds = [
         'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
-        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
-        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName'
     ];
-    editableIds.forEach(id => {
+    ['aiPatrolAddBtn', 'aiPatrolDeleteBtn', ...geometryFieldIds].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = !aiPatrolEditingEnabled;
     });
+    nonGeometryFieldIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !aiPatrolEditingEnabled || mixedSelection;
+    });
     const typeRadios = document.querySelectorAll('input[name="aiPatrolType"]');
-    typeRadios.forEach(r => { r.disabled = !aiPatrolEditingEnabled; });
+    typeRadios.forEach(r => { r.disabled = !aiPatrolEditingEnabled || mixedSelection; });
     const undoBtn = document.getElementById('aiPatrolUndoWaypointBtn');
     if (undoBtn) undoBtn.disabled = !aiPatrolEditingEnabled;
 }
@@ -3746,10 +3914,11 @@ function renderAiPatrolEditingInstructions() {
     const container = document.getElementById('aiPatrolInstructions');
     if (!container) return;
     const instructions = [
-        { label: 'Add', text: 'Click map to add waypoint at cursor' },
-        { label: 'Move', text: 'Click and drag waypoint marker' },
+        { label: 'Add', text: 'Ctrl+Click map to add waypoint at cursor' },
+        { label: 'Select', text: 'Alt+Click waypoint marker to toggle selection' },
+        { label: 'Move', text: 'Click and drag selected waypoint marker(s)' },
         { label: 'Resize', text: 'Click and drag ring edge or white handle' },
-        { label: 'Delete', text: 'Right-click waypoint marker to delete' }
+        { label: 'Delete', text: 'Right-click selected waypoint marker(s) to delete' }
     ];
     renderInstructionLines(container, instructions);
 }
@@ -3773,38 +3942,39 @@ function getAiPatrolCenterWorld(patrol) {
 function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
     if (!isWaypointPatrol(patrol)) return;
     const isSelectedPatrol = patrolIndex === selectedPatrolIndex;
+    const isRadiusEditPatrol = aiPatrolIsEditingRadius && aiPatrolRadiusEditPatrolIndices.includes(patrolIndex);
     const center = getAiPatrolCenterWorld(patrol);
     const centerScreen = worldToScreen(center.x, center.z);
     const minSpread = Math.max(0, Number(patrol.MinSpreadRadius) || 0);
     const maxSpread = Math.max(minSpread, Number(patrol.MaxSpreadRadius) || 0);
-    const hoverTarget = (isSelectedPatrol && aiPatrolEditingEnabled && !aiPatrolIsEditingRadius)
+    const hoverTarget = (aiPatrolEditingEnabled && !aiPatrolIsEditingRadius)
         ? detectAiPatrolRadiusTarget(tooltipX, tooltipY, patrol)
         : '';
     const isMinHovered = hoverTarget === 'min';
     const isMaxHovered = hoverTarget === 'max';
-    const isMinEditing = isSelectedPatrol && aiPatrolIsEditingRadius && aiPatrolRadiusTarget === 'min';
-    const isMaxEditing = isSelectedPatrol && aiPatrolIsEditingRadius && aiPatrolRadiusTarget === 'max';
+    const isMinEditing = isRadiusEditPatrol && aiPatrolRadiusTarget === 'min';
+    const isMaxEditing = isRadiusEditPatrol && aiPatrolRadiusTarget === 'max';
     const ringAlpha = isSelectedPatrol ? 0.95 : 0.5;
     const lineAlpha = isSelectedPatrol ? 0.95 : 0.5;
     const centerColor = isSelectedPatrol ? '#ffffff' : 'rgba(255,255,255,0.7)';
     
     // Draw spread rings
     overlayCtx.save();
-    overlayCtx.lineWidth = (isSelectedPatrol && (isMinHovered || isMinEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
-    overlayCtx.strokeStyle = (isSelectedPatrol && (isMinHovered || isMinEditing))
+    overlayCtx.lineWidth = ((isSelectedPatrol || isRadiusEditPatrol) && (isMinHovered || isMinEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
+    overlayCtx.strokeStyle = ((isSelectedPatrol || isRadiusEditPatrol) && (isMinHovered || isMinEditing))
         ? '#ffffff'
         : `rgba(255, 193, 7, ${ringAlpha})`;
     overlayCtx.beginPath();
     overlayCtx.arc(centerScreen.x, centerScreen.y, minSpread * viewScale, 0, Math.PI * 2);
     overlayCtx.stroke();
-    overlayCtx.lineWidth = (isSelectedPatrol && (isMaxHovered || isMaxEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
-    overlayCtx.strokeStyle = (isSelectedPatrol && (isMaxHovered || isMaxEditing))
+    overlayCtx.lineWidth = ((isSelectedPatrol || isRadiusEditPatrol) && (isMaxHovered || isMaxEditing)) ? 3 : (isSelectedPatrol ? 2 : 1.5);
+    overlayCtx.strokeStyle = ((isSelectedPatrol || isRadiusEditPatrol) && (isMaxHovered || isMaxEditing))
         ? '#ffffff'
         : `rgba(255, 87, 34, ${ringAlpha})`;
     overlayCtx.beginPath();
     overlayCtx.arc(centerScreen.x, centerScreen.y, maxSpread * viewScale, 0, Math.PI * 2);
     overlayCtx.stroke();
-    if (isSelectedPatrol && aiPatrolEditingEnabled) {
+    if ((isSelectedPatrol || isRadiusEditPatrol) && aiPatrolEditingEnabled) {
         const drawHandle = (screenRadius, active) => {
             const hx = centerScreen.x + screenRadius;
             const hy = centerScreen.y;
@@ -3846,7 +4016,7 @@ function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
         patrol.Waypoints.forEach((wp, idx) => {
             if (!Array.isArray(wp) || wp.length < 3) return;
             const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
-            const selectedWaypoint = isSelectedPatrol && idx === aiPatrolSelectedWaypointIndex;
+            const selectedWaypoint = isAiPatrolWaypointRefSelected(patrolIndex, idx);
             overlayCtx.fillStyle = selectedWaypoint ? '#ffd166' : (isSelectedPatrol ? '#50dc78' : 'rgba(80,220,120,0.75)');
             overlayCtx.beginPath();
             overlayCtx.arc(sx.x, sx.y, selectedWaypoint ? 7 : 5, 0, Math.PI * 2);
@@ -4133,6 +4303,7 @@ function handleMouseDown(e) {
         // Check for marker click first using selection manager
         if (selectionManager.selectAtPoint(x, y, { altKey: e.altKey })) {
             // Marker was selected
+            syncAiPatrolSelectionFromWaypointSet();
             updateSelectedCount();
             requestDraw();
         } else {
@@ -4167,9 +4338,11 @@ function handleMouseUp(e) {
             selectionManager.selectInRectangle(rectX, rectY, rectWidth, rectHeight, {
                 altKey: e.altKey
             });
+            syncAiPatrolSelectionFromWaypointSet();
         } else {
             // Small rectangle - treat as empty click
             selectionManager.clearAllSelections();
+            syncAiPatrolSelectionFromWaypointSet();
         }
         
         isMarqueeSelecting = false;
@@ -4192,6 +4365,7 @@ function selectMarkersInRectangle(rectX, rectY, rectWidth, rectHeight, addToSele
     selectionManager.selectInRectangle(rectX, rectY, rectWidth, rectHeight, {
         altKey: !addToSelection
     });
+    syncAiPatrolSelectionFromWaypointSet();
 }
 
 // Handle wheel (zoom)
@@ -4380,6 +4554,13 @@ function isMarkerVisible(markerType, index) {
         }
         return true;
     }
+    if (markerType === 'aiPatrolWaypoints') {
+        if (!showAiPatrolMarkers) return false;
+        const ref = getAiPatrolWaypointRefByFlatIndex(index);
+        if (!ref) return false;
+        if (showSelectedAiPatrolOnly && ref.patrolIndex !== selectedAiPatrolIndex) return false;
+        return true;
+    }
     if (markerType === 'territoryZones') {
         // Check if the territory containing this zone is visible
         const mapEntry = zoneToTerritoryMap.get(index);
@@ -4471,6 +4652,7 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
 // Select marker at point (delegates to SelectionManager)
 function selectAtPoint(screenX, screenY, altKey = false) {
     const found = selectionManager.selectAtPoint(screenX, screenY, { altKey });
+    syncAiPatrolSelectionFromWaypointSet();
     if (found) {
         updateSelectedCount();
         draw();
@@ -4738,6 +4920,12 @@ function tryStartDragForType(markerType, screenX, screenY) {
                 // Store the actual marker position, not the click position
                 dragStartWorldX = draggedMarkerX;
                 dragStartWorldZ = draggedMarkerZ;
+                if (markerType === 'aiPatrolWaypoints') {
+                    pushAiPatrolUndoState();
+                    markAiPatrolDirty();
+                    updateAiPatrolDirtyStatus();
+                    syncAiPatrolSelectionFromWaypointSet(index);
+                }
                 
                 return true;
             }
@@ -4763,6 +4951,14 @@ function tryStartDragForType(markerType, screenX, screenY) {
                 dragStartY = screenY;
                 dragStartWorldX = marker.x;
                 dragStartWorldZ = marker.z;
+                if (markerType === 'aiPatrolWaypoints') {
+                    typeConfig.selected.clear();
+                    typeConfig.selected.add(index);
+                    pushAiPatrolUndoState();
+                    markAiPatrolDirty();
+                    updateAiPatrolDirtyStatus();
+                    syncAiPatrolSelectionFromWaypointSet(index);
+                }
                 
                 return true;
             }
@@ -4992,6 +5188,9 @@ function handleDragEnd() {
     }
     
     isDragging = false;
+    if (draggedMarkerType === 'aiPatrolWaypoints') {
+        syncAiPatrolSelectionFromWaypointSet(draggedMarkerIndex);
+    }
     draggedMarkerType = null;
     draggedMarkerIndex = -1;
     draggedSelectedMarkers.clear();
@@ -5000,6 +5199,13 @@ function handleDragEnd() {
 
 // Handle Delete/Backspace key press
 function handleDeleteKey(e) {
+    const aiWaypointCfg = markerTypes.aiPatrolWaypoints;
+    if (editingEnabled.aiPatrolWaypoints && aiWaypointCfg && aiWaypointCfg.selected.size > 0) {
+        deleteSelectedAiPatrolWaypoints();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+    }
     // Check each editable type for selected markers to delete
     for (const markerType of Object.keys(markerTypes)) {
         const typeConfig = markerTypes[markerType];
@@ -5178,6 +5384,38 @@ function deleteSelectedMarkers(markerType) {
 function addMarkerAt(markerType, screenX, screenY) {
     const typeConfig = markerTypes[markerType];
     if (!typeConfig || !editingEnabled[markerType]) {
+        return;
+    }
+
+    if (markerType === 'aiPatrolWaypoints') {
+        if (!canEditAiPatrolOnMap()) return;
+        const patrol = getSelectedAiPatrol();
+        if (!patrol) return;
+        const patrolType = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
+        if (patrolType !== 'waypoints') {
+            updateStatus('Cannot place waypoints for group-based patrols. Switch patrol type to Waypoint first.', true);
+            return;
+        }
+        if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
+        pushAiPatrolUndoState();
+        const worldPos = screenToWorld(screenX, screenY);
+        patrol.Waypoints.push([
+            Math.round(worldPos.x * 100) / 100,
+            0.0,
+            Math.round(worldPos.z * 100) / 100
+        ]);
+        clearAiPatrolWaypointSelection();
+        const newWaypointIndex = patrol.Waypoints.length - 1;
+        aiPatrolSelectedWaypointIndex = newWaypointIndex;
+        const refs = getAiPatrolWaypointFlatRefs();
+        const flatIndex = refs.findIndex(ref => ref.patrolIndex === selectedAiPatrolIndex && ref.waypointIndex === newWaypointIndex);
+        if (flatIndex >= 0) {
+            markerTypes.aiPatrolWaypoints.selected.add(flatIndex);
+        }
+        markAiPatrolDirty();
+        updateAiPatrolDirtyStatus();
+        updateAiPatrolEditingUI();
+        requestDraw();
         return;
     }
     
@@ -6179,12 +6417,16 @@ function markerTypeHasChanges(markerType) {
     return !!(cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0));
 }
 
+function isMarkersCategoryType(markerType) {
+    return markerTypes[markerType]?.belongsToMarkersCategory !== false;
+}
+
 function getDirtyMarkerTypes() {
-    return Object.keys(markerTypes).filter(markerTypeHasChanges);
+    return Object.keys(markerTypes).filter(markerType => isMarkersCategoryType(markerType) && markerTypeHasChanges(markerType));
 }
 
 function markersEditingActive() {
-    return Object.values(editingEnabled).some(v => v === true);
+    return Object.keys(editingEnabled).some(markerType => isMarkersCategoryType(markerType) && editingEnabled[markerType]);
 }
 
 async function setMarkersEditingEnabled(enabled) {
@@ -6195,6 +6437,7 @@ async function setMarkersEditingEnabled(enabled) {
     checkbox.checked = enabled;
     if (!enabled) {
         for (const markerType of Object.keys(markerTypes)) {
+            if (!isMarkersCategoryType(markerType)) continue;
             if (editingEnabled[markerType]) {
                 await handleEditingToggle(markerType, false);
             }
@@ -6218,10 +6461,10 @@ async function setMarkersEditingEnabled(enabled) {
 
 function setAiPatrolEditingEnabled(enabled) {
     aiPatrolEditingEnabled = enabled;
+    editingEnabled.aiPatrolWaypoints = !!enabled;
+    markerStateManager.setEditingEnabled('aiPatrolWaypoints', !!enabled);
     if (!enabled) {
-        aiPatrolIsDraggingWaypoint = false;
-        aiPatrolDraggedWaypointIndex = -1;
-        aiPatrolIsEditingRadius = false;
+        resetAiPatrolInteractionState(true);
     }
     const checkbox = document.getElementById('aiPatrolEditingEnabled');
     if (checkbox) checkbox.checked = enabled;
@@ -7090,6 +7333,18 @@ function syncSelectedAiPatrolFromForm() {
     const patrol = getSelectedAiPatrol();
     if (!patrol) return;
     const v = (id) => document.getElementById(id);
+    const nextMinRadius = Math.max(0, parseFloat(v('aiPatrolMinSpreadRadius')?.value || '0') || 0);
+    const nextMaxRadius = Math.max(nextMinRadius, parseFloat(v('aiPatrolMaxSpreadRadius')?.value || '0') || 0);
+    if (isAiPatrolMixedWaypointSelection()) {
+        const selectedPatrolIndices = getSelectedAiPatrolIndicesFromWaypointSelection();
+        selectedPatrolIndices.forEach(idx => {
+            const p = aiPatrols[idx];
+            if (!p) return;
+            p.MinSpreadRadius = nextMinRadius;
+            p.MaxSpreadRadius = nextMaxRadius;
+        });
+        return;
+    }
     patrol.Name = v('aiPatrolName')?.value || patrol.Name || '';
     patrol.Faction = v('aiPatrolFaction')?.value || '';
     patrol.Loadout = v('aiPatrolLoadout')?.value || '';
@@ -7099,8 +7354,8 @@ function syncSelectedAiPatrolFromForm() {
     patrol.UnderThreatSpeed = v('aiPatrolUnderThreatSpeed')?.value || '';
     patrol.LootingBehaviour = v('aiPatrolLootingBehaviour')?.value || '';
     patrol.ObjectClassName = v('aiPatrolObjectClassName')?.value || '';
-    patrol.MinSpreadRadius = Math.max(0, parseFloat(v('aiPatrolMinSpreadRadius')?.value || '0') || 0);
-    patrol.MaxSpreadRadius = Math.max(patrol.MinSpreadRadius, parseFloat(v('aiPatrolMaxSpreadRadius')?.value || '0') || 0);
+    patrol.MinSpreadRadius = nextMinRadius;
+    patrol.MaxSpreadRadius = nextMaxRadius;
     const type = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
     if (type === 'group' && Array.isArray(patrol.Waypoints)) {
         patrol.Waypoints = [];
@@ -7201,13 +7456,11 @@ function addAiPatrol() {
     pushAiPatrolUndoState();
     aiPatrols.push(createDefaultAiPatrol());
     selectedAiPatrolIndex = aiPatrols.length - 1;
-    aiPatrolSelectedWaypointIndex = -1;
-    aiPatrolIsEditingRadius = false;
-    aiPatrolIsDraggingWaypoint = false;
-    aiPatrolDraggedWaypointIndex = -1;
+    resetAiPatrolInteractionState(true);
     markAiPatrolDirty();
     refreshAiPatrolSelect();
     applyAiPatrolToForm();
+    updateAiPatrolEditingUI();
     updateAiPatrolDirtyStatus();
     requestDraw();
 }
@@ -7225,10 +7478,7 @@ function deleteSelectedAiPatrol() {
     } else if (selectedAiPatrolIndex >= aiPatrols.length) {
         selectedAiPatrolIndex = aiPatrols.length - 1;
     }
-    aiPatrolSelectedWaypointIndex = -1;
-    aiPatrolIsEditingRadius = false;
-    aiPatrolIsDraggingWaypoint = false;
-    aiPatrolDraggedWaypointIndex = -1;
+    resetAiPatrolInteractionState(true);
     markAiPatrolDirty();
     refreshAiPatrolSelect();
     if (selectedAiPatrolIndex >= 0) {
@@ -7248,6 +7498,7 @@ function deleteSelectedAiPatrol() {
         const select = document.getElementById('aiPatrolSelect');
         if (select) select.value = '';
     }
+    updateAiPatrolEditingUI();
     updateAiPatrolDirtyStatus();
     requestDraw();
 }
@@ -7266,9 +7517,7 @@ async function loadAiPatrols() {
         aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
         aiPatrolUndoStack = [];
         aiPatrolHasUnsavedChanges = false;
-        aiPatrolSelectedWaypointIndex = -1;
-        aiPatrolIsDraggingWaypoint = false;
-        aiPatrolDraggedWaypointIndex = -1;
+        resetAiPatrolInteractionState(true);
         aiPatrolOptions = data.options || aiPatrolOptions;
         populateSimpleSelect(document.getElementById('aiPatrolFaction'), aiPatrolOptions.factions);
         populateSimpleSelect(document.getElementById('aiPatrolLoadout'), aiPatrolOptions.loadouts);
@@ -7279,68 +7528,11 @@ async function loadAiPatrols() {
         populateSimpleSelect(document.getElementById('aiPatrolLootingBehaviour'), aiPatrolOptions.lootingBehaviours, { includeEmpty: true, emptyLabel: '(None)' });
         refreshAiPatrolSelect();
         applyAiPatrolToForm();
+        updateAiPatrolEditingUI();
         requestDraw();
     } catch (error) {
         console.error('Error loading AI patrols:', error);
     }
-}
-
-function handleAiPatrolMapClick(screenX, screenY, e) {
-    if (!canEditAiPatrolOnMap()) return false;
-    const world = screenToWorld(screenX, screenY);
-    const nearest = findNearestAiPatrolWaypoint(screenX, screenY);
-    // If clicking near an existing waypoint marker, switch active patrol to that marker's patrol.
-    if (nearest && nearest.patrolIndex >= 0 && nearest.waypointIndex >= 0) {
-        if (selectedAiPatrolIndex !== nearest.patrolIndex) {
-            selectedAiPatrolIndex = nearest.patrolIndex;
-            const select = document.getElementById('aiPatrolSelect');
-            if (select) select.value = String(nearest.patrolIndex);
-            applyAiPatrolToForm();
-        }
-        aiPatrolSelectedWaypointIndex = nearest.waypointIndex;
-        aiPatrolIsDraggingWaypoint = true;
-        aiPatrolDraggedWaypointIndex = nearest.waypointIndex;
-        pushAiPatrolUndoState();
-        markAiPatrolDirty();
-        updateAiPatrolDirtyStatus();
-        requestDraw();
-        return true;
-    }
-    const patrol = getSelectedAiPatrol();
-    if (!patrol) return false;
-    if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
-    // New waypoint placement requires Ctrl/Cmd+Click.
-    if (!e.ctrlKey && !e.metaKey) {
-        return false;
-    }
-    // Group-based patrols cannot receive waypoint placement clicks.
-    const patrolType = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
-    if (patrolType !== 'waypoints') {
-        updateStatus('Cannot place waypoints for group-based patrols. Switch patrol type to Waypoint first.', true);
-        return true;
-    }
-    // Otherwise add new waypoint at end
-    pushAiPatrolUndoState();
-    patrol.Waypoints.push([Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100]);
-    aiPatrolSelectedWaypointIndex = patrol.Waypoints.length - 1;
-    const wpTypeRadio = document.querySelector('input[name="aiPatrolType"][value="waypoints"]');
-    if (wpTypeRadio) wpTypeRadio.checked = true;
-    updateAiPatrolTypeUI();
-    markAiPatrolDirty();
-    updateAiPatrolDirtyStatus();
-    requestDraw();
-    return true;
-}
-
-function handleAiPatrolWaypointDrag(screenX, screenY) {
-    if (!aiPatrolIsDraggingWaypoint) return false;
-    const patrol = getSelectedAiPatrol();
-    if (!patrol || !Array.isArray(patrol.Waypoints)) return false;
-    if (aiPatrolDraggedWaypointIndex < 0 || aiPatrolDraggedWaypointIndex >= patrol.Waypoints.length) return false;
-    const world = screenToWorld(screenX, screenY);
-    patrol.Waypoints[aiPatrolDraggedWaypointIndex] = [Math.round(world.x * 100) / 100, 0.0, Math.round(world.z * 100) / 100];
-    aiPatrolSelectedWaypointIndex = aiPatrolDraggedWaypointIndex;
-    return true;
 }
 
 function findNearestAiPatrolWaypoint(screenX, screenY, threshold = 12) {
@@ -7376,15 +7568,68 @@ function deleteAiPatrolWaypointAt(screenX, screenY) {
         if (select) select.value = String(nearest.patrolIndex);
         applyAiPatrolToForm();
     }
-    const patrol = getSelectedAiPatrol();
-    if (!patrol || !Array.isArray(patrol.Waypoints)) return false;
+    const clickedFlatIndex = getAiPatrolWaypointFlatRefs().findIndex(ref => (
+        ref.patrolIndex === nearest.patrolIndex && ref.waypointIndex === nearest.waypointIndex
+    ));
+    if (clickedFlatIndex < 0) return false;
+    const selected = getAiPatrolWaypointSelectedSet();
+    if (!selected.has(clickedFlatIndex)) {
+        selected.clear();
+        selected.add(clickedFlatIndex);
+    }
+    const grouped = new Map();
+    Array.from(selected.values()).forEach(flatIndex => {
+        const ref = getAiPatrolWaypointRefByFlatIndex(flatIndex);
+        if (!ref) return;
+        if (!grouped.has(ref.patrolIndex)) grouped.set(ref.patrolIndex, []);
+        grouped.get(ref.patrolIndex).push(ref.waypointIndex);
+    });
     pushAiPatrolUndoState();
-    patrol.Waypoints.splice(nearest.waypointIndex, 1);
-    aiPatrolSelectedWaypointIndex = Math.min(nearest.waypointIndex, patrol.Waypoints.length - 1);
+    grouped.forEach((waypointIndices, patrolIndex) => {
+        const patrol = aiPatrols[patrolIndex];
+        if (!patrol || !Array.isArray(patrol.Waypoints)) return;
+        waypointIndices.sort((a, b) => b - a).forEach(index => {
+            if (index >= 0 && index < patrol.Waypoints.length) {
+                patrol.Waypoints.splice(index, 1);
+            }
+        });
+    });
+    clearAiPatrolWaypointSelection();
+    selectedAiPatrolIndex = nearest.patrolIndex;
     markAiPatrolDirty();
     updateAiPatrolDirtyStatus();
+    updateAiPatrolEditingUI();
     requestDraw();
     return true;
+}
+
+function deleteSelectedAiPatrolWaypoints() {
+    if (!canEditAiPatrolOnMap()) return;
+    const selected = markerTypes.aiPatrolWaypoints?.selected;
+    if (!selected || selected.size === 0) return;
+    const grouped = new Map();
+    Array.from(selected.values()).forEach(flatIndex => {
+        const ref = getAiPatrolWaypointRefByFlatIndex(flatIndex);
+        if (!ref) return;
+        if (!grouped.has(ref.patrolIndex)) grouped.set(ref.patrolIndex, []);
+        grouped.get(ref.patrolIndex).push(ref.waypointIndex);
+    });
+    if (grouped.size === 0) return;
+    pushAiPatrolUndoState();
+    grouped.forEach((waypointIndices, patrolIndex) => {
+        const patrol = aiPatrols[patrolIndex];
+        if (!patrol || !Array.isArray(patrol.Waypoints)) return;
+        waypointIndices.sort((a, b) => b - a).forEach(index => {
+            if (index >= 0 && index < patrol.Waypoints.length) {
+                patrol.Waypoints.splice(index, 1);
+            }
+        });
+    });
+    clearAiPatrolWaypointSelection();
+    markAiPatrolDirty();
+    updateAiPatrolDirtyStatus();
+    updateAiPatrolEditingUI();
+    requestDraw();
 }
 
 function detectAiPatrolRadiusTarget(screenX, screenY, patrol) {
@@ -7428,33 +7673,69 @@ function tryStartAiPatrolRadiusEdit(screenX, screenY) {
     const patrol = getSelectedAiPatrol();
     if (!patrol || !canEditAiPatrolOnMap() || !isWaypointPatrol(patrol)) return false;
     syncSelectedAiPatrolFromForm();
-    const target = detectAiPatrolRadiusTarget(screenX, screenY, patrol);
-    if (!target) return false;
+    const selectedPatrolIndices = getSelectedAiPatrolIndicesFromWaypointSelection();
+    const candidatePatrolIndices = selectedPatrolIndices.length > 0 ? selectedPatrolIndices : [selectedAiPatrolIndex];
+    let bestHit = null;
+    candidatePatrolIndices.forEach(patrolIndex => {
+        const p = aiPatrols[patrolIndex];
+        if (!isWaypointPatrol(p)) return;
+        const target = detectAiPatrolRadiusTarget(screenX, screenY, p);
+        if (!target) return;
+        const center = getAiPatrolCenterWorld(p);
+        const centerScreen = worldToScreen(center.x, center.z);
+        const dx = centerScreen.x - screenX;
+        const dy = centerScreen.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (!bestHit || distance < bestHit.distance) {
+            bestHit = { target, distance, patrolIndex };
+        }
+    });
+    if (!bestHit) return false;
     pushAiPatrolUndoState();
     aiPatrolIsEditingRadius = true;
-    aiPatrolRadiusTarget = target;
+    aiPatrolRadiusTarget = bestHit.target;
+    aiPatrolRadiusEditReferencePatrolIndex = bestHit.patrolIndex;
+    aiPatrolRadiusEditPatrolIndices = candidatePatrolIndices.filter(idx => isWaypointPatrol(aiPatrols[idx]));
+    aiPatrolRadiusEditStartValues.clear();
+    aiPatrolRadiusEditPatrolIndices.forEach(idx => {
+        const p = aiPatrols[idx];
+        if (!p) return;
+        aiPatrolRadiusEditStartValues.set(idx, {
+            min: Math.max(0, Number(p.MinSpreadRadius) || 0),
+            max: Math.max(0, Number(p.MaxSpreadRadius) || 0)
+        });
+    });
     markAiPatrolDirty();
     return true;
 }
 
 function handleAiPatrolRadiusDrag(screenX, screenY) {
     if (!aiPatrolIsEditingRadius) return false;
-    const patrol = getSelectedAiPatrol();
-    if (!patrol) return false;
-    const center = getAiPatrolCenterWorld(patrol);
+    const referencePatrol = aiPatrols[aiPatrolRadiusEditReferencePatrolIndex];
+    if (!referencePatrol) return false;
+    const center = getAiPatrolCenterWorld(referencePatrol);
     const centerScreen = worldToScreen(center.x, center.z);
     const dx = screenX - centerScreen.x;
     const dy = screenY - centerScreen.y;
-    const newRadius = Math.max(1, Math.sqrt(dx * dx + dy * dy) / viewScale);
-    const currentMin = Math.max(0, Number(patrol.MinSpreadRadius) || 0);
-    const currentMax = Math.max(currentMin, Number(patrol.MaxSpreadRadius) || 0);
-    if (aiPatrolRadiusTarget === 'min') {
-        patrol.MinSpreadRadius = Math.min(newRadius, currentMax);
-        if (patrol.MaxSpreadRadius < patrol.MinSpreadRadius) patrol.MaxSpreadRadius = patrol.MinSpreadRadius;
-    } else {
-        patrol.MaxSpreadRadius = Math.max(newRadius, currentMin);
-        if (patrol.MinSpreadRadius > patrol.MaxSpreadRadius) patrol.MinSpreadRadius = patrol.MaxSpreadRadius;
-    }
+    const nextReferenceRadius = Math.max(1, Math.sqrt(dx * dx + dy * dy) / viewScale);
+    const referenceStart = aiPatrolRadiusEditStartValues.get(aiPatrolRadiusEditReferencePatrolIndex);
+    if (!referenceStart) return false;
+    const baseValue = aiPatrolRadiusTarget === 'min' ? referenceStart.min : referenceStart.max;
+    const delta = nextReferenceRadius - baseValue;
+    aiPatrolRadiusEditPatrolIndices.forEach(idx => {
+        const p = aiPatrols[idx];
+        const start = aiPatrolRadiusEditStartValues.get(idx);
+        if (!p || !start) return;
+        const startMin = Math.max(0, Number(start.min) || 0);
+        const startMax = Math.max(startMin, Number(start.max) || 0);
+        if (aiPatrolRadiusTarget === 'min') {
+            p.MinSpreadRadius = Math.max(0, Math.min(startMin + delta, startMax));
+            p.MaxSpreadRadius = Math.max(startMax, p.MinSpreadRadius);
+        } else {
+            p.MaxSpreadRadius = Math.max(startMin, startMax + delta);
+            p.MinSpreadRadius = Math.min(startMin, p.MaxSpreadRadius);
+        }
+    });
     applyAiPatrolToForm();
     updateAiPatrolDirtyStatus();
     return true;
@@ -7462,17 +7743,20 @@ function handleAiPatrolRadiusDrag(screenX, screenY) {
 
 function endAiPatrolRadiusEdit() {
     if (!aiPatrolIsEditingRadius) return;
-    const patrol = getSelectedAiPatrol();
-    if (patrol) {
+    const patrolIndices = aiPatrolRadiusEditPatrolIndices.length > 0
+        ? aiPatrolRadiusEditPatrolIndices
+        : [selectedAiPatrolIndex];
+    patrolIndices.forEach(idx => {
+        const patrol = aiPatrols[idx];
+        if (!patrol) return;
         patrol.MinSpreadRadius = Math.round((Number(patrol.MinSpreadRadius) || 0) * 100) / 100;
         patrol.MaxSpreadRadius = Math.round((Number(patrol.MaxSpreadRadius) || 0) * 100) / 100;
         if (patrol.MaxSpreadRadius < patrol.MinSpreadRadius) {
             patrol.MaxSpreadRadius = patrol.MinSpreadRadius;
         }
-        applyAiPatrolToForm();
-    }
-    aiPatrolIsEditingRadius = false;
-    aiPatrolRadiusTarget = 'max';
+    });
+    applyAiPatrolToForm();
+    resetAiPatrolInteractionState(false);
 }
 
 function undoAiPatrolEdit() {
@@ -7481,9 +7765,11 @@ function undoAiPatrolEdit() {
         return;
     }
     aiPatrols = aiPatrolUndoStack.pop();
+    resetAiPatrolInteractionState(true);
     markAiPatrolDirty();
     refreshAiPatrolSelect();
     applyAiPatrolToForm();
+    updateAiPatrolEditingUI();
     requestDraw();
 }
 
@@ -7491,11 +7777,10 @@ function discardAiPatrolChanges() {
     aiPatrols = cloneAiPatrolData(aiPatrolsOriginal);
     aiPatrolUndoStack = [];
     aiPatrolHasUnsavedChanges = false;
-    aiPatrolSelectedWaypointIndex = -1;
-    aiPatrolIsDraggingWaypoint = false;
-    aiPatrolDraggedWaypointIndex = -1;
+    resetAiPatrolInteractionState(true);
     refreshAiPatrolSelect();
     applyAiPatrolToForm();
+    updateAiPatrolEditingUI();
     requestDraw();
     updateStatus('Discarded AI patrol changes');
 }
@@ -7520,7 +7805,9 @@ async function saveAiPatrols() {
         aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
         aiPatrolUndoStack = [];
         aiPatrolHasUnsavedChanges = false;
+        resetAiPatrolInteractionState(true);
         refreshAiPatrolSelect();
+        updateAiPatrolEditingUI();
         updateStatus(data.message || 'AI patrols saved');
         return true;
     } catch (error) {
@@ -7553,10 +7840,8 @@ function clearAiPatrolForm() {
     const maxEl = document.getElementById('aiPatrolMaxSpreadRadius');
     if (minEl) minEl.value = String(defaults.min);
     if (maxEl) maxEl.value = String(defaults.max);
-    aiPatrolIsEditingRadius = false;
-    aiPatrolSelectedWaypointIndex = -1;
-    aiPatrolIsDraggingWaypoint = false;
-    aiPatrolDraggedWaypointIndex = -1;
+    resetAiPatrolInteractionState(true);
+    updateAiPatrolEditingUI();
     requestDraw();
 }
 
@@ -8740,6 +9025,8 @@ async function restoreSavedState() {
     const savedAiPatrolEditingEnabled = localStorage.getItem('map_viewer_aiPatrolEditingEnabled');
     if (savedAiPatrolEditingEnabled !== null) {
         aiPatrolEditingEnabled = savedAiPatrolEditingEnabled === 'true';
+        editingEnabled.aiPatrolWaypoints = aiPatrolEditingEnabled;
+        markerStateManager.setEditingEnabled('aiPatrolWaypoints', aiPatrolEditingEnabled);
         const checkbox = document.getElementById('aiPatrolEditingEnabled');
         if (checkbox) checkbox.checked = aiPatrolEditingEnabled;
     }
@@ -8895,6 +9182,7 @@ function getAllEditableMarkerTypes() {
         // Excluding them here prevents duplicate dropdown entries like "Territory Zones (bear)" appearing twice.
         if (markerType === 'territoryZones') return;
         if (markerType.startsWith('territoryType_')) return;
+        if (markerTypes[markerType]?.hiddenFromMarkerEditDropdown) return;
         typesByKey.set(markerType, {
             key: markerType,
             displayName: markerTypes[markerType].getDisplayName(),
@@ -8987,6 +9275,7 @@ function initializeEditMarkersUI() {
 
         // Prevent switching away from a type with unsaved changes.
         for (const markerType of Object.keys(markerTypes)) {
+            if (!isMarkersCategoryType(markerType)) continue;
             if (!editingEnabled[markerType]) continue;
             const cfg = markerTypes[markerType];
             const hasChanges = cfg && (cfg.originalPositions.size > 0 || cfg.deleted.size > 0 || cfg.new.size > 0);
@@ -8999,6 +9288,7 @@ function initializeEditMarkersUI() {
         
         // Disable all editing
         for (const markerType of Object.keys(markerTypes)) {
+            if (!isMarkersCategoryType(markerType)) continue;
             if (editingEnabled[markerType]) {
                 await handleEditingToggle(markerType, false);
             }
@@ -9255,8 +9545,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             syncSelectedAiPatrolFromForm();
             const idx = parseInt(e.target.value, 10);
             selectedAiPatrolIndex = Number.isFinite(idx) ? idx : -1;
-            aiPatrolSelectedWaypointIndex = -1;
+            clearAiPatrolWaypointSelection();
             applyAiPatrolToForm();
+            updateAiPatrolEditingUI();
             requestDraw();
         });
     }
@@ -9312,10 +9603,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             el.addEventListener('change', () => {
                 if (!aiPatrolEditingEnabled) return;
                 if (selectedAiPatrolIndex < 0) return;
+                const mixedSelection = isAiPatrolMixedWaypointSelection();
+                const isGeometryField = id === 'aiPatrolMinSpreadRadius' || id === 'aiPatrolMaxSpreadRadius';
+                if (mixedSelection && !isGeometryField) {
+                    applyAiPatrolToForm();
+                    updateStatus('Mixed patrol waypoint selection: only waypoint move/delete and radius changes are allowed.', true);
+                    return;
+                }
                 pushAiPatrolUndoState();
                 syncSelectedAiPatrolFromForm();
                 markAiPatrolDirty();
                 updateAiPatrolDirtyStatus();
+                updateAiPatrolEditingUI();
                 requestDraw();
             });
         }
@@ -9325,6 +9624,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         radio.addEventListener('change', () => {
             if (!aiPatrolEditingEnabled) return;
             if (selectedAiPatrolIndex < 0) return;
+            if (isAiPatrolMixedWaypointSelection()) {
+                applyAiPatrolToForm();
+                updateStatus('Mixed patrol waypoint selection: patrol type changes are disabled.', true);
+                return;
+            }
             pushAiPatrolUndoState();
             syncSelectedAiPatrolFromForm();
             markAiPatrolDirty();
