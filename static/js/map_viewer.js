@@ -72,7 +72,8 @@ let aiPatrolOptions = {
     behaviours: [],
     stances: [],
     speeds: [],
-    lootingBehaviours: []
+    lootingBehaviours: [],
+    overrideDefaults: {}
 };
 let selectedAiPatrolIndex = -1;
 let aiPatrolsOriginal = [];
@@ -87,9 +88,34 @@ let aiPatrolRadiusTarget = 'max';
 let aiPatrolRadiusEditPatrolIndices = [];
 let aiPatrolRadiusEditStartValues = new Map(); // Map<patrolIndex,{ min, max }>
 let aiPatrolRadiusEditReferencePatrolIndex = -1;
+let aiPatrolInferredDefaults = {};
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
 let activeEditCategory = null; // 'markers' | 'aiPatrols' | null
+
+const AI_PATROL_SIMPLE_TEXT_FIELDS = ['NumberOfAI', 'NumberOfAIMax', 'Chance'];
+const AI_PATROL_UNLIMITED_RELOAD_OPTIONS = [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'All targets' },
+    { value: 2, label: 'Animals' },
+    { value: 4, label: 'Infected' },
+    { value: 8, label: 'Players' },
+    { value: 16, label: 'Vehicles' }
+];
+const AI_PATROL_OVERRIDE_FIELDS = [
+    'AccuracyMin',
+    'AccuracyMax',
+    'MinDistRadius',
+    'MaxDistRadius',
+    'SniperProneDistanceThreshold',
+    'ThreatDistanceLimit',
+    'NoiseInvestigationDistanceLimit',
+    'MaxFlankingDistance',
+    'EnableFlankingOutsideCombat',
+    'UseRandomWaypointAsStartPoint',
+    'DamageMultiplier',
+    'DamageReceivedMultiplier'
+];
 
 // Marker type color system (centralized)
 const MARKER_TYPE_COLORS = {
@@ -3888,7 +3914,10 @@ function updateAiPatrolEditingUI() {
     const geometryFieldIds = ['aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'];
     const nonGeometryFieldIds = [
         'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
-        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName'
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolUnlimitedReload', 'aiPatrolObjectClassName',
+        'aiPatrolClearLootingBehaviourBtn', 'aiPatrolNumberOfAI', 'aiPatrolNumberOfAIMax', 'aiPatrolChance',
+        ...AI_PATROL_OVERRIDE_FIELDS.map(aiPatrolFieldInputId),
+        ...AI_PATROL_OVERRIDE_FIELDS.map(aiPatrolOverrideCheckboxId)
     ];
     ['aiPatrolAddBtn', 'aiPatrolDeleteBtn', ...geometryFieldIds].forEach(id => {
         const el = document.getElementById(id);
@@ -3902,6 +3931,7 @@ function updateAiPatrolEditingUI() {
     typeRadios.forEach(r => { r.disabled = !aiPatrolEditingEnabled || mixedSelection; });
     const undoBtn = document.getElementById('aiPatrolUndoWaypointBtn');
     if (undoBtn) undoBtn.disabled = !aiPatrolEditingEnabled;
+    updateAiPatrolOverrideInputEnablement();
 }
 
 function renderInstructionLines(containerEl, instructions) {
@@ -3926,6 +3956,16 @@ function renderAiPatrolEditingInstructions() {
 
 function isWaypointPatrol(patrol) {
     return !!(patrol && Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0);
+}
+
+function getAiPatrolFactionHue(faction) {
+    const text = String(faction || '').trim();
+    if (!text) return 135; // fallback close to existing patrol green
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash + text.charCodeAt(i)) >>> 0;
+    }
+    return hash % 360;
 }
 
 function getAiPatrolCenterWorld(patrol) {
@@ -3957,6 +3997,11 @@ function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
     const isMaxEditing = isRadiusEditPatrol && aiPatrolRadiusTarget === 'max';
     const ringAlpha = isSelectedPatrol ? 0.95 : 0.5;
     const lineAlpha = isSelectedPatrol ? 0.95 : 0.5;
+    const factionHue = getAiPatrolFactionHue(patrol?.Faction);
+    const waypointLineColor = `hsla(${factionHue}, 78%, 60%, ${lineAlpha})`;
+    const waypointFillColor = isSelectedPatrol
+        ? `hsl(${factionHue}, 78%, 58%)`
+        : `hsla(${factionHue}, 78%, 58%, 0.75)`;
     const centerColor = isSelectedPatrol ? '#ffffff' : 'rgba(255,255,255,0.7)';
     
     // Draw spread rings
@@ -4000,7 +4045,7 @@ function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
     // Draw waypoint polyline + points
     if (Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0) {
         overlayCtx.save();
-        overlayCtx.strokeStyle = `rgba(80, 220, 120, ${lineAlpha})`;
+        overlayCtx.strokeStyle = waypointLineColor;
         overlayCtx.lineWidth = isSelectedPatrol ? 2 : 1.5;
         overlayCtx.beginPath();
         patrol.Waypoints.forEach((wp, idx) => {
@@ -4018,7 +4063,7 @@ function drawSingleAiPatrolOverlay(patrol, patrolIndex, selectedPatrolIndex) {
             if (!Array.isArray(wp) || wp.length < 3) return;
             const sx = worldToScreen(Number(wp[0]) || 0, Number(wp[2]) || 0);
             const selectedWaypoint = isAiPatrolWaypointRefSelected(patrolIndex, idx);
-            overlayCtx.fillStyle = selectedWaypoint ? '#ffd166' : (isSelectedPatrol ? '#50dc78' : 'rgba(80,220,120,0.75)');
+            overlayCtx.fillStyle = selectedWaypoint ? '#ffd166' : waypointFillColor;
             overlayCtx.beginPath();
             overlayCtx.arc(sx.x, sx.y, selectedWaypoint ? 7 : 5, 0, Math.PI * 2);
             overlayCtx.fill();
@@ -7325,9 +7370,11 @@ async function loadGroups() {
 
 function populateSimpleSelect(selectEl, options, { includeEmpty = true, emptyLabel = '(None)' } = {}) {
     if (!selectEl) return;
-    const current = selectEl.value;
+    const currentSingle = selectEl.value;
+    const currentMulti = Array.from(selectEl.selectedOptions || []).map(o => o.value);
+    const isMulti = !!selectEl.multiple;
     selectEl.innerHTML = '';
-    if (includeEmpty) {
+    if (includeEmpty && !isMulti) {
         const empty = document.createElement('option');
         empty.value = '';
         empty.textContent = emptyLabel;
@@ -7339,9 +7386,127 @@ function populateSimpleSelect(selectEl, options, { includeEmpty = true, emptyLab
         opt.textContent = String(v);
         selectEl.appendChild(opt);
     });
-    if (current && Array.from(selectEl.options).some(o => o.value === current)) {
-        selectEl.value = current;
+    if (isMulti) {
+        Array.from(selectEl.options).forEach(o => {
+            o.selected = currentMulti.includes(o.value);
+        });
+    } else if (currentSingle && Array.from(selectEl.options).some(o => o.value === currentSingle)) {
+        selectEl.value = currentSingle;
     }
+}
+
+function parseLootingBehaviourValues(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+    return raw.split('|').map(v => v.trim()).filter(Boolean);
+}
+
+function getSelectedValuesFromSelect(selectEl) {
+    if (!selectEl) return [];
+    return Array.from(selectEl.selectedOptions || [])
+        .map(o => String(o.value || '').trim())
+        .filter(Boolean);
+}
+
+function setSelectedValuesOnSelect(selectEl, values) {
+    if (!selectEl) return;
+    const selectedSet = new Set((values || []).map(v => String(v).trim()).filter(Boolean));
+    Array.from(selectEl.options).forEach(o => {
+        o.selected = selectedSet.has(o.value);
+    });
+}
+
+function populateAiPatrolUnlimitedReloadSelect() {
+    const select = document.getElementById('aiPatrolUnlimitedReload');
+    if (!select) return;
+    const current = Array.from(select.selectedOptions || []).map(o => o.value);
+    select.innerHTML = '';
+    AI_PATROL_UNLIMITED_RELOAD_OPTIONS.forEach(option => {
+        const el = document.createElement('option');
+        el.value = String(option.value);
+        el.textContent = `${option.label} (${option.value})`;
+        select.appendChild(el);
+    });
+    setSelectedValuesOnSelect(select, current);
+}
+
+function encodeUnlimitedReloadSelection(selectedValues) {
+    const selected = new Set((selectedValues || []).map(v => Number.parseInt(v, 10)).filter(Number.isFinite));
+    if (selected.has(1)) return 1;
+    if (selected.has(0) || selected.size === 0) return 0;
+    let total = 0;
+    [2, 4, 8, 16].forEach(bit => {
+        if (selected.has(bit)) total += bit;
+    });
+    return total || 0;
+}
+
+function decodeUnlimitedReloadSelection(value) {
+    const n = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(n) || n <= 0) return ['0'];
+    if (n === 1) return ['1'];
+    const selected = [];
+    [2, 4, 8, 16].forEach(bit => {
+        if ((n & bit) === bit) selected.push(String(bit));
+    });
+    return selected.length > 0 ? selected : ['0'];
+}
+
+function aiPatrolOverrideCheckboxId(field) {
+    return `aiPatrolUse${field}`;
+}
+
+function aiPatrolFieldInputId(field) {
+    return `aiPatrol${field}`;
+}
+
+function aiPatrolCoerceTextValue(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') return '';
+    if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
+    if (/^(true|false)$/i.test(raw)) return raw.toLowerCase() === 'true';
+    return raw;
+}
+
+function aiPatrolValueAsString(value) {
+    if (value === undefined || value === null) return '';
+    return String(value).trim();
+}
+
+function aiPatrolValuesEquivalent(a, b) {
+    const av = aiPatrolCoerceTextValue(aiPatrolValueAsString(a));
+    const bv = aiPatrolCoerceTextValue(aiPatrolValueAsString(b));
+    if (typeof av === 'number' && typeof bv === 'number') {
+        return Number.isFinite(av) && Number.isFinite(bv) && Math.abs(av - bv) < 1e-9;
+    }
+    return av === bv;
+}
+
+function normalizeAiPatrolOverrideDefaults(source) {
+    const defaults = {};
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const value = aiPatrolValueAsString(source?.[field]);
+        defaults[field] = value || '-1.0';
+    });
+    return defaults;
+}
+
+function getAiPatrolInferredDefault(field) {
+    const value = aiPatrolInferredDefaults[field];
+    return aiPatrolValueAsString(value) || '-1.0';
+}
+
+function updateAiPatrolOverrideInputEnablement() {
+    const mixedSelection = isAiPatrolMixedWaypointSelection();
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const checkbox = document.getElementById(aiPatrolOverrideCheckboxId(field));
+        const input = document.getElementById(aiPatrolFieldInputId(field));
+        const baseDisabled = !aiPatrolEditingEnabled || mixedSelection;
+        if (checkbox) checkbox.disabled = baseDisabled;
+        if (input) {
+            input.disabled = baseDisabled || !(checkbox && checkbox.checked);
+        }
+    });
 }
 
 function updateAiPatrolTypeUI() {
@@ -7376,7 +7541,26 @@ function syncSelectedAiPatrolFromForm() {
     patrol.DefaultStance = v('aiPatrolDefaultStance')?.value || '';
     patrol.Speed = v('aiPatrolSpeed')?.value || '';
     patrol.UnderThreatSpeed = v('aiPatrolUnderThreatSpeed')?.value || '';
-    patrol.LootingBehaviour = v('aiPatrolLootingBehaviour')?.value || '';
+    const lootingValues = getSelectedValuesFromSelect(v('aiPatrolLootingBehaviour'));
+    patrol.LootingBehaviour = lootingValues.join(' | ');
+    patrol.UnlimitedReload = encodeUnlimitedReloadSelection(getSelectedValuesFromSelect(v('aiPatrolUnlimitedReload')));
+    AI_PATROL_SIMPLE_TEXT_FIELDS.forEach(field => {
+        patrol[field] = aiPatrolCoerceTextValue(v(aiPatrolFieldInputId(field))?.value || '');
+    });
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const useOverride = !!v(aiPatrolOverrideCheckboxId(field))?.checked;
+        const inputValue = aiPatrolValueAsString(v(aiPatrolFieldInputId(field))?.value || '');
+        const defaultValue = getAiPatrolInferredDefault(field);
+        if (useOverride) {
+            patrol[field] = aiPatrolCoerceTextValue(inputValue || defaultValue);
+        } else if (Object.prototype.hasOwnProperty.call(patrol, field)) {
+            // Preserve "missing in source" semantics: keep absent fields absent.
+            // If field exists and override is disabled, normalize back to inferred default.
+            patrol[field] = aiPatrolCoerceTextValue(defaultValue);
+        } else {
+            delete patrol[field];
+        }
+    });
     patrol.ObjectClassName = v('aiPatrolObjectClassName')?.value || '';
     patrol.MinSpreadRadius = nextMinRadius;
     patrol.MaxSpreadRadius = nextMaxRadius;
@@ -7400,14 +7584,30 @@ function applyAiPatrolToForm() {
     if (v('aiPatrolDefaultStance')) v('aiPatrolDefaultStance').value = patrol.DefaultStance || '';
     if (v('aiPatrolSpeed')) v('aiPatrolSpeed').value = patrol.Speed || '';
     if (v('aiPatrolUnderThreatSpeed')) v('aiPatrolUnderThreatSpeed').value = patrol.UnderThreatSpeed || '';
-    if (v('aiPatrolLootingBehaviour')) v('aiPatrolLootingBehaviour').value = patrol.LootingBehaviour || '';
+    setSelectedValuesOnSelect(v('aiPatrolLootingBehaviour'), parseLootingBehaviourValues(patrol.LootingBehaviour || ''));
+    setSelectedValuesOnSelect(v('aiPatrolUnlimitedReload'), decodeUnlimitedReloadSelection(patrol.UnlimitedReload));
+    AI_PATROL_SIMPLE_TEXT_FIELDS.forEach(field => {
+        const input = v(aiPatrolFieldInputId(field));
+        if (input) input.value = aiPatrolValueAsString(patrol[field]);
+    });
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const checkbox = v(aiPatrolOverrideCheckboxId(field));
+        const input = v(aiPatrolFieldInputId(field));
+        const defaultValue = getAiPatrolInferredDefault(field);
+        const currentValue = aiPatrolValueAsString(patrol[field]);
+        const hasExplicitValue = Object.prototype.hasOwnProperty.call(patrol, field) && currentValue !== '';
+        const useOverride = hasExplicitValue && !aiPatrolValuesEquivalent(currentValue, defaultValue);
+        if (checkbox) checkbox.checked = useOverride;
+        if (input) input.value = useOverride ? currentValue : defaultValue;
+    });
     if (v('aiPatrolObjectClassName')) v('aiPatrolObjectClassName').value = patrol.ObjectClassName || '';
     if (v('aiPatrolMinSpreadRadius')) v('aiPatrolMinSpreadRadius').value = String(Math.max(0, Number(patrol.MinSpreadRadius) || 0));
     if (v('aiPatrolMaxSpreadRadius')) v('aiPatrolMaxSpreadRadius').value = String(Math.max(0, Number(patrol.MaxSpreadRadius) || 0));
-    const inferredType = isWaypointPatrol(patrol) ? 'waypoints' : 'group';
+    const inferredType = Array.isArray(patrol.Waypoints) ? 'waypoints' : 'group';
     const typeRadio = document.querySelector(`input[name="aiPatrolType"][value="${inferredType}"]`);
     if (typeRadio) typeRadio.checked = true;
     updateAiPatrolTypeUI();
+    updateAiPatrolOverrideInputEnablement();
 }
 
 function refreshAiPatrolSelect() {
@@ -7457,7 +7657,7 @@ function generateUniqueAiPatrolName(baseName = 'New Patrol') {
 function createDefaultAiPatrol() {
     const defaults = getAiPatrolSpreadDefaults();
     const pick = (arr, fallback = '') => (Array.isArray(arr) && arr.length > 0 ? String(arr[0]) : fallback);
-    return {
+    const patrol = {
         Name: generateUniqueAiPatrolName('New Patrol'),
         Faction: pick(aiPatrolOptions.factions),
         Loadout: pick(aiPatrolOptions.loadouts),
@@ -7466,11 +7666,19 @@ function createDefaultAiPatrol() {
         Speed: pick(aiPatrolOptions.speeds, 'LIMITED'),
         UnderThreatSpeed: pick(aiPatrolOptions.speeds, 'FULL'),
         LootingBehaviour: pick(aiPatrolOptions.lootingBehaviours),
+        UnlimitedReload: 0,
         MinSpreadRadius: defaults.min,
         MaxSpreadRadius: defaults.max,
         ObjectClassName: '',
         Waypoints: []
     };
+    AI_PATROL_SIMPLE_TEXT_FIELDS.forEach(field => {
+        patrol[field] = '';
+    });
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        patrol[field] = aiPatrolCoerceTextValue(getAiPatrolInferredDefault(field));
+    });
+    return patrol;
 }
 
 function addAiPatrol() {
@@ -7510,14 +7718,26 @@ function deleteSelectedAiPatrol() {
     } else {
         const ids = [
             'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
-            'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
-            'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+            'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolUnlimitedReload', 'aiPatrolObjectClassName',
+            'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius',
+            'aiPatrolNumberOfAI', 'aiPatrolNumberOfAIMax', 'aiPatrolChance',
+            ...AI_PATROL_OVERRIDE_FIELDS.map(aiPatrolFieldInputId)
         ];
         ids.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
-            if (el.tagName === 'SELECT') el.selectedIndex = 0;
+            if (el.tagName === 'SELECT') {
+                if (el.multiple) {
+                    Array.from(el.options).forEach(o => { o.selected = false; });
+                } else {
+                    el.selectedIndex = 0;
+                }
+            }
             else el.value = '';
+        });
+        AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+            const cb = document.getElementById(aiPatrolOverrideCheckboxId(field));
+            if (cb) cb.checked = false;
         });
         const select = document.getElementById('aiPatrolSelect');
         if (select) select.value = '';
@@ -7539,10 +7759,12 @@ async function loadAiPatrols() {
         const data = await response.json();
         if (!data.success) {
             aiPatrols = [];
-            aiPatrolOptions = { factions: [], loadouts: [], behaviours: [], stances: [], speeds: [], lootingBehaviours: [] };
+            aiPatrolInferredDefaults = normalizeAiPatrolOverrideDefaults({});
+            aiPatrolOptions = { factions: [], loadouts: [], behaviours: [], stances: [], speeds: [], lootingBehaviours: [], overrideDefaults: {} };
             return;
         }
         aiPatrols = Array.isArray(data.patrols) ? data.patrols : [];
+        aiPatrolInferredDefaults = normalizeAiPatrolOverrideDefaults(data.options?.overrideDefaults || {});
         if (typeof data.profile_dir === 'string' && data.profile_dir.trim()) {
             profileDir = data.profile_dir.trim();
             const profileInput = document.getElementById('profileDir');
@@ -7556,13 +7778,14 @@ async function loadAiPatrols() {
         aiPatrolHasUnsavedChanges = false;
         resetAiPatrolInteractionState(true);
         aiPatrolOptions = data.options || aiPatrolOptions;
+        populateAiPatrolUnlimitedReloadSelect();
         populateSimpleSelect(document.getElementById('aiPatrolFaction'), aiPatrolOptions.factions);
         populateSimpleSelect(document.getElementById('aiPatrolLoadout'), aiPatrolOptions.loadouts);
         populateSimpleSelect(document.getElementById('aiPatrolBehaviour'), aiPatrolOptions.behaviours, { includeEmpty: false });
         populateSimpleSelect(document.getElementById('aiPatrolDefaultStance'), aiPatrolOptions.stances, { includeEmpty: false });
         populateSimpleSelect(document.getElementById('aiPatrolSpeed'), aiPatrolOptions.speeds, { includeEmpty: false });
         populateSimpleSelect(document.getElementById('aiPatrolUnderThreatSpeed'), aiPatrolOptions.speeds, { includeEmpty: false });
-        populateSimpleSelect(document.getElementById('aiPatrolLootingBehaviour'), aiPatrolOptions.lootingBehaviours, { includeEmpty: true, emptyLabel: '(None)' });
+        populateSimpleSelect(document.getElementById('aiPatrolLootingBehaviour'), aiPatrolOptions.lootingBehaviours, { includeEmpty: false });
         refreshAiPatrolSelect();
         applyAiPatrolToForm();
         updateAiPatrolEditingUI();
@@ -7863,14 +8086,26 @@ function clearAiPatrolForm() {
     if (select) select.value = '';
     const ids = [
         'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
-        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolObjectClassName',
-        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolUnlimitedReload', 'aiPatrolObjectClassName',
+        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius',
+        'aiPatrolNumberOfAI', 'aiPatrolNumberOfAIMax', 'aiPatrolChance',
+        ...AI_PATROL_OVERRIDE_FIELDS.map(aiPatrolFieldInputId)
     ];
     ids.forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
-        if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        if (el.tagName === 'SELECT') {
+            if (el.multiple) {
+                Array.from(el.options).forEach(o => { o.selected = false; });
+            } else {
+                el.selectedIndex = 0;
+            }
+        }
         else el.value = '';
+    });
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const cb = document.getElementById(aiPatrolOverrideCheckboxId(field));
+        if (cb) cb.checked = false;
     });
     const defaults = getAiPatrolSpreadDefaults();
     const minEl = document.getElementById('aiPatrolMinSpreadRadius');
@@ -9649,9 +9884,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
-    ['aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
-     'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour',
-     'aiPatrolObjectClassName', 'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'].forEach(id => {
+    [
+        'aiPatrolName', 'aiPatrolFaction', 'aiPatrolLoadout', 'aiPatrolBehaviour', 'aiPatrolDefaultStance',
+        'aiPatrolSpeed', 'aiPatrolUnderThreatSpeed', 'aiPatrolLootingBehaviour', 'aiPatrolUnlimitedReload', 'aiPatrolObjectClassName',
+        'aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius',
+        'aiPatrolNumberOfAI', 'aiPatrolNumberOfAIMax', 'aiPatrolChance',
+        ...AI_PATROL_OVERRIDE_FIELDS.map(aiPatrolFieldInputId)
+    ].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', () => {
@@ -9673,6 +9912,40 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
     });
+    AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
+        const checkbox = document.getElementById(aiPatrolOverrideCheckboxId(field));
+        if (!checkbox) return;
+        checkbox.addEventListener('change', () => {
+            updateAiPatrolOverrideInputEnablement();
+            if (!aiPatrolEditingEnabled) return;
+            if (selectedAiPatrolIndex < 0) return;
+            if (isAiPatrolMixedWaypointSelection()) {
+                applyAiPatrolToForm();
+                updateStatus('Mixed patrol waypoint selection: only waypoint move/delete and radius changes are allowed.', true);
+                return;
+            }
+            pushAiPatrolUndoState();
+            syncSelectedAiPatrolFromForm();
+            markAiPatrolDirty();
+            updateAiPatrolDirtyStatus();
+            requestDraw();
+        });
+    });
+    const aiPatrolClearLootingBehaviourBtn = document.getElementById('aiPatrolClearLootingBehaviourBtn');
+    if (aiPatrolClearLootingBehaviourBtn) {
+        aiPatrolClearLootingBehaviourBtn.addEventListener('click', () => {
+            const lootingSelect = document.getElementById('aiPatrolLootingBehaviour');
+            setSelectedValuesOnSelect(lootingSelect, []);
+            if (!aiPatrolEditingEnabled) return;
+            if (selectedAiPatrolIndex < 0) return;
+            pushAiPatrolUndoState();
+            syncSelectedAiPatrolFromForm();
+            markAiPatrolDirty();
+            updateAiPatrolDirtyStatus();
+            updateAiPatrolEditingUI();
+            requestDraw();
+        });
+    }
     
     document.querySelectorAll('input[name="aiPatrolType"]').forEach(radio => {
         radio.addEventListener('change', () => {

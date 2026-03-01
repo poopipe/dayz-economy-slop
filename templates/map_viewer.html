@@ -132,23 +132,82 @@
                         </div>
                         
                         <div class="control-group">
-                            <label>Speed:</label>
-                            <div style="display: flex; gap: 8px;">
-                                <select id="aiPatrolSpeed" class="filter-select" style="flex: 1;">
-                                    <!-- Options populated from existing patrols -->
-                                </select>
-                                <select id="aiPatrolUnderThreatSpeed" class="filter-select" style="flex: 1;">
-                                    <!-- Options populated from existing patrols -->
-                                </select>
+                            <label>Movement speed:</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolSpeed" style="display: inline-block; width: 140px;">Speed:</label>
+                                    <select id="aiPatrolSpeed" class="filter-select" style="width: calc(100% - 150px);">
+                                        <!-- Options populated from existing patrols -->
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="aiPatrolUnderThreatSpeed" style="display: inline-block; width: 140px;">Under threat speed:</label>
+                                    <select id="aiPatrolUnderThreatSpeed" class="filter-select" style="width: calc(100% - 150px);">
+                                        <!-- Options populated from existing patrols -->
+                                    </select>
+                                </div>
                             </div>
                         </div>
                         
                         <div class="control-group">
                             <label for="aiPatrolLootingBehaviour">Looting behaviour:</label>
-                            <select id="aiPatrolLootingBehaviour" class="filter-select">
+                            <select id="aiPatrolLootingBehaviour" class="filter-select" multiple size="6">
                                 <!-- Options populated from existing patrols -->
                             </select>
+                            <button id="aiPatrolClearLootingBehaviourBtn" class="btn btn-small" style="margin-top: 6px;">Clear looting selection</button>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                Use Ctrl/Cmd+Click to select multiple values.
+                            </p>
                         </div>
+
+                        <div class="control-group" style="display: flex; flex-direction: column; align-items: stretch;">
+                            <label for="aiPatrolUnlimitedReload">Unlimited reload:</label>
+                            <select id="aiPatrolUnlimitedReload" class="filter-select" multiple size="6">
+                                <!-- Static options populated by JS -->
+                            </select>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                Use Ctrl/Cmd+Click to select multiple values. Off (0) and All targets (1) override other selections.
+                            </p>
+                        </div>
+
+                        <div class="control-group">
+                            <label>Spawn counts / chance:</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolNumberOfAI" style="display: inline-block; width: 140px;">NumberOfAI:</label>
+                                    <input type="text" id="aiPatrolNumberOfAI" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolNumberOfAIMax" style="display: inline-block; width: 140px;">NumberOfAIMax:</label>
+                                    <input type="text" id="aiPatrolNumberOfAIMax" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolChance" style="display: inline-block; width: 140px;">Chance:</label>
+                                    <input type="text" id="aiPatrolChance" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                            </div>
+                        </div>
+
+                        <details class="control-group">
+                            <summary style="cursor: pointer;">Advanced overrides</summary>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin: 6px 0;">
+                                Tick a checkbox to override the inferred default value.
+                            </p>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div><label><input type="checkbox" id="aiPatrolUseAccuracyMin"> AccuracyMin</label><input type="text" id="aiPatrolAccuracyMin" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseAccuracyMax"> AccuracyMax</label><input type="text" id="aiPatrolAccuracyMax" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMinDistRadius"> MinDistRadius</label><input type="text" id="aiPatrolMinDistRadius" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMaxDistRadius"> MaxDistRadius</label><input type="text" id="aiPatrolMaxDistRadius" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseSniperProneDistanceThreshold"> SniperProneDistanceThreshold</label><input type="text" id="aiPatrolSniperProneDistanceThreshold" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseThreatDistanceLimit"> ThreatDistanceLimit</label><input type="text" id="aiPatrolThreatDistanceLimit" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseNoiseInvestigationDistanceLimit"> NoiseInvestigationDistanceLimit</label><input type="text" id="aiPatrolNoiseInvestigationDistanceLimit" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMaxFlankingDistance"> MaxFlankingDistance</label><input type="text" id="aiPatrolMaxFlankingDistance" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseEnableFlankingOutsideCombat"> EnableFlankingOutsideCombat</label><input type="text" id="aiPatrolEnableFlankingOutsideCombat" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseUseRandomWaypointAsStartPoint"> UseRandomWaypointAsStartPoint</label><input type="text" id="aiPatrolUseRandomWaypointAsStartPoint" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDamageMultiplier"> DamageMultiplier</label><input type="text" id="aiPatrolDamageMultiplier" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDamageReceivedMultiplier"> DamageReceivedMultiplier</label><input type="text" id="aiPatrolDamageReceivedMultiplier" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                            </div>
+                        </details>
                         
                         <div class="control-group">
                             <label>Patrol type:</label>

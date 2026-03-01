@@ -577,6 +577,174 @@ def list_loadout_names(profile_dir):
         return None
 
 
+def get_ai_patrol_options_catalog_path():
+    """Get path to app-local AI patrol option catalog file."""
+    app_data_dir = Path(__file__).resolve().parent / 'data'
+    app_data_dir.mkdir(parents=True, exist_ok=True)
+    return app_data_dir / 'ai_patrol_options.json'
+
+
+AI_PATROL_OVERRIDE_FIELDS = [
+    'AccuracyMin',
+    'AccuracyMax',
+    'MinDistRadius',
+    'MaxDistRadius',
+    'SniperProneDistanceThreshold',
+    'ThreatDistanceLimit',
+    'NoiseInvestigationDistanceLimit',
+    'MaxFlankingDistance',
+    'EnableFlankingOutsideCombat',
+    'UseRandomWaypointAsStartPoint',
+    'DamageMultiplier',
+    'DamageReceivedMultiplier',
+]
+
+
+def extract_ai_patrol_options_from_patrols(patrols):
+    """Extract option lists from patrol data (used for first-time catalog bootstrap)."""
+    factions = set()
+    behaviours = set()
+    formations = set()
+    stances = set()
+    speeds = set()
+    looting_behaviours = set()
+
+    for p in patrols:
+        if not isinstance(p, dict):
+            continue
+        faction = p.get('Faction')
+        if faction:
+            factions.add(str(faction))
+        behaviour = p.get('Behaviour')
+        if behaviour:
+            behaviours.add(str(behaviour))
+        formation = p.get('Formation')
+        if formation:
+            formations.add(str(formation))
+        stance = p.get('DefaultStance')
+        if stance:
+            stances.add(str(stance))
+        speed = p.get('Speed')
+        if speed:
+            speeds.add(str(speed))
+        utspeed = p.get('UnderThreatSpeed')
+        if utspeed:
+            speeds.add(str(utspeed))
+        loot = p.get('LootingBehaviour')
+        if loot is not None and str(loot) != '':
+            for token in str(loot).split('|'):
+                token = token.strip()
+                if token:
+                    looting_behaviours.add(token)
+
+    return {
+        'factions': sorted(factions),
+        'behaviours': sorted(behaviours),
+        'formations': sorted(formations),
+        'stances': sorted(stances),
+        'speeds': sorted(speeds),
+        'lootingBehaviours': sorted(looting_behaviours),
+    }
+
+
+def _normalize_option_values(values):
+    """Normalize option list values into unique strings while preserving order."""
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        s = str(value).strip()
+        if s and s not in seen:
+            normalized.append(s)
+            seen.add(s)
+    return normalized
+
+
+def extract_ai_patrol_override_defaults_from_patrols(patrols):
+    """Infer default override values from patrols (most common non-empty value per field)."""
+    defaults = {}
+    for field in AI_PATROL_OVERRIDE_FIELDS:
+        counts = {}
+        for patrol in patrols:
+            if not isinstance(patrol, dict):
+                continue
+            raw = patrol.get(field)
+            if raw is None:
+                continue
+            value = str(raw).strip()
+            if not value:
+                continue
+            counts[value] = counts.get(value, 0) + 1
+        if not counts:
+            defaults[field] = '-1.0'
+            continue
+        defaults[field] = max(counts.items(), key=lambda item: item[1])[0]
+    return defaults
+
+
+def _normalize_override_defaults(values):
+    """Normalize override defaults into a complete string map keyed by override field name."""
+    source = values if isinstance(values, dict) else {}
+    normalized = {}
+    for field in AI_PATROL_OVERRIDE_FIELDS:
+        raw = source.get(field)
+        value = '' if raw is None else str(raw).strip()
+        normalized[field] = value if value else '-1.0'
+    return normalized
+
+
+def load_or_init_ai_patrol_option_catalog(settings_file_path, patrols):
+    """
+    Load app-local AI patrol option catalog.
+    If missing/invalid, bootstrap from current patrol settings and write the file.
+    """
+    catalog_path = get_ai_patrol_options_catalog_path()
+    keys = ['factions', 'behaviours', 'formations', 'stances', 'speeds', 'lootingBehaviours']
+    inferred_override_defaults = extract_ai_patrol_override_defaults_from_patrols(patrols)
+
+    if catalog_path.exists():
+        try:
+            with open(catalog_path, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            source = raw.get('options', raw) if isinstance(raw, dict) else {}
+            options = {k: _normalize_option_values(source.get(k, [])) for k in keys}
+            source_override_defaults = source.get('overrideDefaults', {}) if isinstance(source, dict) else {}
+            override_defaults = _normalize_override_defaults(source_override_defaults)
+            needs_write = False
+            # Backfill/update catalog defaults if any keys are missing.
+            for field in AI_PATROL_OVERRIDE_FIELDS:
+                if field not in source_override_defaults:
+                    override_defaults[field] = inferred_override_defaults.get(field, '-1.0')
+                    needs_write = True
+            options['overrideDefaults'] = override_defaults
+            if needs_write:
+                if not isinstance(raw, dict):
+                    raw = {}
+                raw['generatedFrom'] = str(settings_file_path)
+                raw['options'] = {**options}
+                with open(catalog_path, 'w', encoding='utf-8') as f:
+                    json.dump(raw, f, indent=4, ensure_ascii=False)
+            return options
+        except Exception as e:
+            print(f"AI patrol option catalog is invalid, recreating: {e}")
+
+    options = extract_ai_patrol_options_from_patrols(patrols)
+    options['overrideDefaults'] = _normalize_override_defaults(inferred_override_defaults)
+    try:
+        with open(catalog_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'generatedFrom': str(settings_file_path),
+                'options': options
+            }, f, indent=4, ensure_ascii=False)
+        print(f"Created AI patrol option catalog: {catalog_path}")
+    except Exception as e:
+        print(f"Failed to write AI patrol option catalog '{catalog_path}': {e}")
+    return options
+
+
 def load_ai_patrol_settings(settings_file_path, loadout_names=None):
     """
     Load AI patrol settings from AIPatrolSettings.json.
@@ -588,11 +756,12 @@ def load_ai_patrol_settings(settings_file_path, loadout_names=None):
             'patrols': [],
             'options': {
                 'factions': [],
-                'loadouts': [],
                 'behaviours': [],
+                'formations': [],
                 'stances': [],
                 'speeds': [],
-                'lootingBehaviours': []
+                'lootingBehaviours': [],
+                'overrideDefaults': _normalize_override_defaults({})
             }
         }
     
@@ -604,50 +773,19 @@ def load_ai_patrol_settings(settings_file_path, loadout_names=None):
         if not isinstance(patrols, list):
             patrols = []
         
-        # Collect distinct option values from existing patrols
-        factions = set()
-        loadouts = set()
-        behaviours = set()
-        stances = set()
-        speeds = set()
-        looting_behaviours = set()
-        
-        for p in patrols:
-            if not isinstance(p, dict):
-                continue
-            faction = p.get('Faction')
-            if faction:
-                factions.add(faction)
-            loadout = p.get('Loadout')
-            if loadout:
-                loadouts.add(loadout)
-            behaviour = p.get('Behaviour')
-            if behaviour:
-                behaviours.add(behaviour)
-            stance = p.get('DefaultStance')
-            if stance:
-                stances.add(stance)
-            speed = p.get('Speed')
-            if speed:
-                speeds.add(speed)
-            utspeed = p.get('UnderThreatSpeed')
-            if utspeed:
-                speeds.add(utspeed)
-            loot = p.get('LootingBehaviour')
-            if loot is not None:
-                looting_behaviours.add(loot)
-        
+        # Use app-local option catalog for canonical lists. On first run this
+        # catalog is bootstrapped from current patrol settings.
+        catalog_options = load_or_init_ai_patrol_option_catalog(settings_file_path, patrols)
         options = {
-            'factions': sorted(factions),
-            'loadouts': sorted(loadouts),
-            'behaviours': sorted(behaviours),
-            'stances': sorted(stances),
-            'speeds': sorted(speeds),
-            'lootingBehaviours': sorted(looting_behaviours),
+            'factions': list(catalog_options.get('factions', [])),
+            'loadouts': list(loadout_names) if loadout_names is not None else [],
+            'behaviours': list(catalog_options.get('behaviours', [])),
+            'formations': list(catalog_options.get('formations', [])),
+            'stances': list(catalog_options.get('stances', [])),
+            'speeds': list(catalog_options.get('speeds', [])),
+            'lootingBehaviours': list(catalog_options.get('lootingBehaviours', [])),
+            'overrideDefaults': _normalize_override_defaults(catalog_options.get('overrideDefaults', {})),
         }
-        # If a loadouts directory was supplied, it defines valid loadouts.
-        if loadout_names is not None:
-            options['loadouts'] = list(loadout_names)
         
         # Return patrols as-is; frontend will decide which fields to expose/edit
         return {
@@ -664,9 +802,11 @@ def load_ai_patrol_settings(settings_file_path, loadout_names=None):
                 'factions': [],
                 'loadouts': [],
                 'behaviours': [],
+                'formations': [],
                 'stances': [],
                 'speeds': [],
-                'lootingBehaviours': []
+                'lootingBehaviours': [],
+                'overrideDefaults': _normalize_override_defaults({})
             }
         }
 
