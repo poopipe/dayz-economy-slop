@@ -546,7 +546,38 @@ def load_effect_areas(effect_area_file_path):
         return []
 
 
-def load_ai_patrol_settings(settings_file_path):
+def guess_profile_dir_from_mission_dir(mission_dir):
+    """Guess profile directory from mission directory."""
+    try:
+        mission_path = Path(mission_dir)
+        # mission_dir: <server>/mpmissions/<mission_name>
+        # profile_dir: <server>/profile
+        if mission_path.parent and mission_path.parent.parent:
+            return str(mission_path.parent.parent / 'profile')
+    except Exception:
+        pass
+    return ''
+
+
+def list_loadout_names(profile_dir):
+    """Return loadout names (filenames without extension) from profile/ExpansionMod/Loadouts."""
+    if not profile_dir:
+        return None
+    try:
+        loadouts_path = Path(profile_dir) / 'ExpansionMod' / 'Loadouts'
+        if not loadouts_path.exists() or not loadouts_path.is_dir():
+            return None
+        names = sorted({
+            p.stem for p in loadouts_path.iterdir()
+            if p.is_file() and p.stem
+        })
+        return names
+    except Exception as e:
+        print(f"Error listing loadouts from profile folder '{profile_dir}': {e}")
+        return None
+
+
+def load_ai_patrol_settings(settings_file_path, loadout_names=None):
     """
     Load AI patrol settings from AIPatrolSettings.json.
     Returns a dict with global options and patrol list.
@@ -614,6 +645,9 @@ def load_ai_patrol_settings(settings_file_path):
             'speeds': sorted(speeds),
             'lootingBehaviours': sorted(looting_behaviours),
         }
+        # If a loadouts directory was supplied, it defines valid loadouts.
+        if loadout_names is not None:
+            options['loadouts'] = list(loadout_names)
         
         # Return patrols as-is; frontend will decide which fields to expose/edit
         return {
@@ -713,13 +747,18 @@ def get_ai_patrols():
             }), 404
         
         settings_path = mission_path / 'expansion' / 'settings' / 'AIPatrolSettings.json'
+        profile_dir = request.args.get('profile_dir', '').strip()
+        if not profile_dir:
+            profile_dir = guess_profile_dir_from_mission_dir(mission_dir)
+        loadout_names = list_loadout_names(profile_dir)
         print(f"Loading AI patrol settings from: {settings_path}")
-        result = load_ai_patrol_settings(str(settings_path))
+        result = load_ai_patrol_settings(str(settings_path), loadout_names=loadout_names)
         
         return jsonify({
             'success': True,
             'patrols': result['patrols'],
-            'options': result['options']
+            'options': result['options'],
+            'profile_dir': profile_dir
         })
     except Exception as e:
         import traceback

@@ -53,6 +53,7 @@ let territoryTypeZones = {}; // Map<territoryType, zoneArray>
 let territoryTypeZoneMaps = {}; // Map<territoryType, Map<flattenedZoneIndex, {territoryIndex, zoneIndex}>>
 let territoryTypeMarkerTypes = {}; // Map<territoryType, markerTypeConfig> - dynamically created marker types
 let missionDir = '';
+let profileDir = '';
 let viewOffsetX = 0;
 let viewOffsetY = 0;
 let viewScale = 1.0;
@@ -7236,9 +7237,23 @@ async function loadPlayerSpawnPoints() {
     }
 }
 
+function guessProfileDirFromMissionDir(missionPath) {
+    const raw = String(missionPath || '').trim();
+    if (!raw) return '';
+    const normalized = raw.replace(/[\\/]+$/, '');
+    const parts = normalized.split(/[\\/]+/);
+    // mission path should end with .../mpmissions/<missionName>
+    if (parts.length < 3) return '';
+    const sep = normalized.includes('\\') ? '\\' : '/';
+    const serverRootParts = parts.slice(0, -2);
+    if (serverRootParts.length === 0) return '';
+    return `${serverRootParts.join(sep)}${sep}profile`;
+}
+
 // Load groups from API
 async function loadGroups() {
     const dir = document.getElementById('missionDir').value.trim();
+    const profileInput = document.getElementById('profileDir');
     
     if (!dir) {
         updateStatus('Please enter a mission directory path', true);
@@ -7246,8 +7261,14 @@ async function loadGroups() {
     }
     
     missionDir = dir;
+    // Resolve profile directory: manual value takes precedence, otherwise guess from mission path.
+    profileDir = (profileInput?.value || '').trim() || guessProfileDirFromMissionDir(missionDir);
+    if (profileInput) {
+        profileInput.value = profileDir;
+    }
     // Save to localStorage
     localStorage.setItem('map_viewer_missionDir', missionDir);
+    localStorage.setItem('map_viewer_profileDir', profileDir);
     
     updateStatus('Loading markers...');
     
@@ -7509,7 +7530,12 @@ function deleteSelectedAiPatrol() {
 async function loadAiPatrols() {
     if (!missionDir) return;
     try {
-        const response = await fetch(`/api/ai-patrols?mission_dir=${encodeURIComponent(missionDir)}`);
+        const params = new URLSearchParams();
+        params.set('mission_dir', missionDir);
+        if (profileDir) {
+            params.set('profile_dir', profileDir);
+        }
+        const response = await fetch(`/api/ai-patrols?${params.toString()}`);
         const data = await response.json();
         if (!data.success) {
             aiPatrols = [];
@@ -7517,6 +7543,14 @@ async function loadAiPatrols() {
             return;
         }
         aiPatrols = Array.isArray(data.patrols) ? data.patrols : [];
+        if (typeof data.profile_dir === 'string' && data.profile_dir.trim()) {
+            profileDir = data.profile_dir.trim();
+            const profileInput = document.getElementById('profileDir');
+            if (profileInput) {
+                profileInput.value = profileDir;
+            }
+            localStorage.setItem('map_viewer_profileDir', profileDir);
+        }
         aiPatrolsOriginal = cloneAiPatrolData(aiPatrols);
         aiPatrolUndoStack = [];
         aiPatrolHasUnsavedChanges = false;
@@ -8967,6 +9001,16 @@ async function restoreSavedState() {
         missionDir = savedMissionDir;
         document.getElementById('missionDir').value = savedMissionDir;
     }
+    const savedProfileDir = localStorage.getItem('map_viewer_profileDir');
+    if (savedProfileDir) {
+        profileDir = savedProfileDir;
+    } else if (savedMissionDir) {
+        profileDir = guessProfileDirFromMissionDir(savedMissionDir);
+    }
+    const profileInput = document.getElementById('profileDir');
+    if (profileInput) {
+        profileInput.value = profileDir;
+    }
     
     // Restore display toggles
     const savedShowGrid = localStorage.getItem('map_viewer_showGrid');
@@ -9420,6 +9464,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await restoreSavedState();
     
     document.getElementById('loadDataBtn').addEventListener('click', loadGroups);
+    const profileDirInput = document.getElementById('profileDir');
+    if (profileDirInput) {
+        profileDirInput.addEventListener('blur', () => {
+            profileDir = profileDirInput.value.trim();
+            localStorage.setItem('map_viewer_profileDir', profileDir);
+        });
+    }
     document.getElementById('showGrid').addEventListener('change', (e) => {
         showGrid = e.target.checked;
         invalidateStaticMarkerCache();
@@ -9707,5 +9758,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             loadGroups();
         }
     });
+    if (profileDirInput) {
+        profileDirInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadGroups();
+            }
+        });
+    }
 });
 
