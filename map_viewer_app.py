@@ -1837,6 +1837,8 @@ def load_territories(mission_dir):
                     z_attr = zone.get('z')
                     r_attr = zone.get('r')  # Get radius parameter
                     y_attr = zone.get('y')
+                    dmin_attr = zone.get('dmin')
+                    dmax_attr = zone.get('dmax')
                     
                     if x_attr is None or z_attr is None:
                         print(f"Zone {zone_idx} missing x or z attribute, skipping")
@@ -1859,6 +1861,22 @@ def load_territories(mission_dir):
                             except (ValueError, TypeError):
                                 print(f"Zone {zone_idx} has invalid radius value ({r_attr}), using default 50.0")
                                 radius = 50.0
+
+                        dmin = None
+                        if dmin_attr is not None and str(dmin_attr).strip() != '':
+                            try:
+                                dmin = float(dmin_attr)
+                            except (ValueError, TypeError):
+                                print(f"Zone {zone_idx} has invalid dmin value ({dmin_attr}), ignoring")
+                                dmin = None
+
+                        dmax = None
+                        if dmax_attr is not None and str(dmax_attr).strip() != '':
+                            try:
+                                dmax = float(dmax_attr)
+                            except (ValueError, TypeError):
+                                print(f"Zone {zone_idx} has invalid dmax value ({dmax_attr}), ignoring")
+                                dmax = None
                         
                         # Skip if position is invalid (both zeros)
                         if x == 0.0 and z == 0.0:
@@ -1879,6 +1897,8 @@ def load_territories(mission_dir):
                             'z': z,
                             'hasY': has_y,
                             'radius': radius,  # Store radius with zone
+                            'dmin': dmin,
+                            'dmax': dmax,
                             'xml': zone_xml
                         })
                     except (ValueError, TypeError) as e:
@@ -2195,6 +2215,20 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
                         # Update name if provided
                         if 'name' in zone_data:
                             zone_elem.set('name', zone_data['name'])
+
+                        # Update dmin/dmax if provided; remove attribute when null/blank.
+                        if 'dmin' in zone_data:
+                            dmin = zone_data.get('dmin')
+                            if dmin is None or str(dmin).strip() == '':
+                                zone_elem.attrib.pop('dmin', None)
+                            else:
+                                zone_elem.set('dmin', str(round(float(dmin), 2)))
+                        if 'dmax' in zone_data:
+                            dmax = zone_data.get('dmax')
+                            if dmax is None or str(dmax).strip() == '':
+                                zone_elem.attrib.pop('dmax', None)
+                            else:
+                                zone_elem.set('dmax', str(round(float(dmax), 2)))
                         
                         updated_count += 1
                 
@@ -2213,6 +2247,13 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
                     
                     if 'name' in zone_data:
                         new_zone.set('name', zone_data['name'])
+
+                    dmin = zone_data.get('dmin')
+                    if dmin is not None and str(dmin).strip() != '':
+                        new_zone.set('dmin', str(round(float(dmin), 2)))
+                    dmax = zone_data.get('dmax')
+                    if dmax is not None and str(dmax).strip() != '':
+                        new_zone.set('dmax', str(round(float(dmax), 2)))
                     
                     added_count += 1
                 
