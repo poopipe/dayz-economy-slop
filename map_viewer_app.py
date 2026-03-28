@@ -1977,6 +1977,44 @@ def get_territories():
         }), 500
 
 
+# Attribute order for <zone> in env *.xml (matches DayZ / project style).
+ZONE_XML_ATTR_ORDER = (
+    'name',
+    'smin',
+    'smax',
+    'dmin',
+    'dmax',
+    'x',
+    'z',
+    'r',
+)
+
+
+def reorder_zone_element_attributes(zone_elem):
+    """Rewrite zone_elem.attrib so keys follow ZONE_XML_ATTR_ORDER; unknown keys follow alphabetically."""
+    raw = dict(zone_elem.attrib)
+    ordered = {}
+    for key in ZONE_XML_ATTR_ORDER:
+        if key in raw:
+            ordered[key] = raw[key]
+    extras = sorted(set(raw) - set(ordered))
+    for key in extras:
+        ordered[key] = raw[key]
+    zone_elem.attrib.clear()
+    for key, val in ordered.items():
+        zone_elem.set(key, val)
+
+
+def reorder_all_zone_elements_in_tree(root):
+    """Apply canonical attribute order to every <zone> under root (all territories in the file)."""
+    for territory_el in root.iter('territory'):
+        zone_elements = territory_el.findall('zone')
+        if len(zone_elements) == 0:
+            zone_elements = territory_el.findall('.//zone')
+        for zone_el in zone_elements:
+            reorder_zone_element_attributes(zone_el)
+
+
 def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=None):
     """
     Save territory zones to XML files in mpmissions/env directory.
@@ -2262,6 +2300,8 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
                 print(f"  Updated: {updated_count} zones")
                 print(f"  Added: {len(updates['new_zones'])} zones")
                 print(f"  Deleted: {len(updates['deleted_zone_indices'])} zones")
+                
+                reorder_all_zone_elements_in_tree(root)
                 
                 # Format XML with proper indentation
                 ET.indent(tree, space='    ')
