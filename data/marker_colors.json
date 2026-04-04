@@ -17,7 +17,8 @@
     "territoryType_sheep_goat_territories": "hsl(236, 79%, 50%)",
     "territoryType_wild_horse_territories": "hsl(356, 78%, 56%)",
     "territoryType_wildboar_territories": "hsl(67, 68%, 50%)",
-    "territoryType_wolf_territories": "hsl(145, 76%, 57%)"
+    "territoryType_wolf_territories": "hsl(145, 76%, 57%)",
+    "groupMarkers": "hsl(323, 68%, 55%)"
   },
   "territoryTypes": {
     "bear_territories": "#5E81AC",

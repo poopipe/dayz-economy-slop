@@ -391,6 +391,127 @@ def get_groups():
         return api_error(str(e), 500)
 
 
+def save_groups(mapgrouppos_file_path, groups_data):
+    """
+    Save group markers to mapgrouppos.xml.
+    groups_data is a list of {name, x, y, z, hasY, usage, xml, isDeleted, ...} objects.
+    """
+    if not mapgrouppos_file_path or not Path(mapgrouppos_file_path).exists():
+        return {'success': False, 'error': f'File does not exist: {mapgrouppos_file_path}'}
+
+    try:
+        tree = ET.parse(mapgrouppos_file_path)
+        root = tree.getroot()
+
+        # Remove every existing <group> node from the document before rebuilding.
+        for parent in root.iter():
+            for child in list(parent):
+                if child.tag == 'group':
+                    parent.remove(child)
+
+        kept_count = 0
+        deleted_count = 0
+
+        for idx, marker in enumerate(groups_data or []):
+            if marker.get('isDeleted', False):
+                deleted_count += 1
+                continue
+
+            name = str(marker.get('name') or '').strip() or f'Group_{idx}'
+            usage = str(marker.get('usage') or '').strip()
+            has_y = bool(marker.get('hasY', True))
+
+            x = round(float(marker.get('x', 0)), 2)
+            y = round(float(marker.get('y', 0)), 2)
+            z = round(float(marker.get('z', 0)), 2)
+
+            xml_string = marker.get('xml')
+            group_elem = None
+            if isinstance(xml_string, str) and xml_string.strip():
+                try:
+                    parsed = ET.fromstring(xml_string)
+                    if parsed.tag == 'group':
+                        group_elem = parsed
+                except Exception:
+                    group_elem = None
+            if group_elem is None:
+                group_elem = ET.Element('group')
+
+            group_elem.set('name', name)
+
+            # Keep position data in a <pos> child and normalize any legacy attrs.
+            group_elem.attrib.pop('pos', None)
+            group_elem.attrib.pop('position', None)
+            pos_elem = group_elem.find('pos')
+            if pos_elem is None:
+                pos_elem = ET.SubElement(group_elem, 'pos')
+            pos_elem.text = f"{x} {y} {z}" if has_y else f"{x} {z}"
+
+            usage_elem = group_elem.find('usage')
+            if usage:
+                if usage_elem is None:
+                    usage_elem = ET.SubElement(group_elem, 'usage')
+                usage_elem.text = usage
+            elif usage_elem is not None:
+                group_elem.remove(usage_elem)
+
+            root.append(group_elem)
+            kept_count += 1
+
+        ET.indent(tree, space='    ')
+        tree.write(mapgrouppos_file_path, encoding='utf-8', xml_declaration=True)
+        return {
+            'success': True,
+            'count': kept_count,
+            'updated': kept_count,
+            'deleted': deleted_count
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/groups/save', methods=['POST'])
+def save_groups_endpoint():
+    """Save group marker edits to mapgrouppos.xml."""
+    try:
+        data = parse_json_body()
+        if not data:
+            return api_error('No data provided', 400)
+
+        mission_dir = data.get('mission_dir')
+        if not mission_dir:
+            return api_error('No mission directory specified', 400)
+
+        mission_path = Path(mission_dir)
+        if not mission_path.exists():
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
+
+        groups_data = data.get('markers', [])
+        if groups_data is None:
+            return api_error('No group marker data provided', 400)
+
+        mapgrouppos_file = mission_path / 'mapgrouppos.xml'
+        if not mapgrouppos_file.exists():
+            return api_error(f'mapgrouppos.xml not found at: {mapgrouppos_file}', 404)
+
+        result = save_groups(str(mapgrouppos_file), groups_data)
+        if not result.get('success'):
+            return api_error(result.get('error', 'Unknown error'), 500)
+
+        return api_ok(
+            count=result.get('count', 0),
+            updated=result.get('updated', 0),
+            deleted=result.get('deleted', 0),
+            message=f"Saved groups: {result.get('updated', 0)} updated, {result.get('deleted', 0)} deleted"
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return api_error(str(e), 500)
+
+
 
 
 @app.route('/api/upload-background-image', methods=['POST'])

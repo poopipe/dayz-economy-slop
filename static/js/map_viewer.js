@@ -46,6 +46,7 @@ let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
 let showGrid = true;
 let showMarkers = true;
+let allowMoveSavedGroupMarkers = false;
 let showEventSpawns = true;
 let showEffectAreas = true;
 let showBackgroundImage = true;
@@ -464,6 +465,103 @@ function getMarkerTypeKeys() {
 
 // Generic marker editing system
 const markerTypes = {
+    groupMarkers: {
+        baseColor: MARKER_TYPE_COLORS.markers.baseColor,
+        getArray: () => markers,
+        setArray: (arr) => { markers = arr; },
+        // Only expose as editable marker layer while group marker editing is active.
+        getShowFlag: () => showMarkers && !!editingEnabled.groupMarkers,
+        canEditRadius: false,
+        canEditDimensions: false,
+        saveEndpoint: '/api/groups/save',
+        getDisplayName: () => 'Group Markers',
+        getEditControlsId: () => 'groupMarkerEditControls',
+        getEditCheckboxId: () => 'editGroupMarkers',
+        getMarker: (index) => markers[index],
+        isDeleted: (index) => markerTypes.groupMarkers.deleted.has(index),
+        getScreenPos: (marker) => worldToScreen(marker.x, marker.z),
+        isPointOnMarker: (marker, screenX, screenY, screenPos) => {
+            const dx = screenPos.x - screenX;
+            const dy = screenPos.y - screenY;
+            return Math.sqrt(dx * dx + dy * dy) < MARKER_INTERACTION_THRESHOLD;
+        },
+        createNew: (x, y, z) => ({
+            id: markers.length,
+            name: 'NewGroup',
+            x,
+            y: y ?? 0,
+            z,
+            hasY: true,
+            usage: '',
+            xml: `<group name="NewGroup"><pos>${x} ${y ?? 0} ${z}</pos></group>`,
+            sourceId: null
+        }),
+        getOriginalData: (marker) => ({
+            name: marker.name,
+            x: marker.x,
+            y: marker.y,
+            z: marker.z,
+            hasY: marker.hasY !== false,
+            usage: marker.usage || ''
+        }),
+        restoreOriginal: (marker, original) => {
+            marker.name = original.name;
+            marker.x = original.x;
+            marker.y = original.y;
+            marker.z = original.z;
+            marker.hasY = original.hasY !== false;
+            marker.usage = original.usage || '';
+        },
+        prepareSaveData: (marker, index) => ({
+            index,
+            name: marker.name || `Group_${index}`,
+            x: marker.x != null ? marker.x : 0,
+            y: marker.y != null ? marker.y : 0,
+            z: marker.z != null ? marker.z : 0,
+            hasY: marker.hasY !== false,
+            usage: marker.usage || '',
+            sourceId: marker.sourceId || null,
+            xml: marker.xml || '',
+            isNew: markerTypes.groupMarkers.new.has(index),
+            isDeleted: markerTypes.groupMarkers.deleted.has(index)
+        }),
+        getTooltipLines: (marker) => {
+            const lines = [];
+            lines.push(marker.name || '(Unnamed Group)');
+            lines.push('');
+            if (marker.x !== undefined && marker.y !== undefined && marker.z !== undefined) {
+                lines.push(`X: ${marker.x.toFixed(2)} m`);
+                lines.push(`Y: ${marker.y.toFixed(2)} m`);
+                lines.push(`Z: ${marker.z.toFixed(2)} m`);
+            }
+            if (marker.usage) {
+                lines.push('');
+                lines.push(`Usage: ${marker.usage}`);
+            }
+            return lines;
+        },
+        selected: new Set(),
+        deleted: new Set(),
+        new: new Set(),
+        originalPositions: new Map(),
+        uiConfig: {
+            showDiscardButton: true,
+            customControls: [
+                {
+                    type: 'checkbox',
+                    id: 'allowMoveSavedGroupMarkers',
+                    label: 'Enable moving saved group markers',
+                    getValue: () => allowMoveSavedGroupMarkers,
+                    onChange: (value) => {
+                        allowMoveSavedGroupMarkers = !!value;
+                        try {
+                            localStorage.setItem('map_viewer_allowMoveSavedGroupMarkers', allowMoveSavedGroupMarkers ? 'true' : 'false');
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+            ]
+        }
+    },
     eventSpawns: {
         // Base (non-editing) color for this marker type
         baseColor: MARKER_TYPE_COLORS.eventSpawns.baseColor,
@@ -2084,6 +2182,8 @@ class EditControlsManager extends BaseControlsManager {
         switch (controlConfig.type) {
             case 'select':
                 return this.createSelectControl(controlConfig);
+            case 'checkbox':
+                return this.createCheckboxControl(controlConfig);
             case 'listboxes':
                 return this.createListBoxesControl(controlConfig);
             case 'territoryZoneParams':
@@ -2224,6 +2324,37 @@ class EditControlsManager extends BaseControlsManager {
         container.appendChild(applyBtn);
 
         refreshTerritoryZoneParamsInputsFromSelection();
+        return container;
+    }
+
+    createCheckboxControl(config) {
+        const container = document.createElement('div');
+        container.style.marginBottom = '10px';
+
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '8px';
+        label.style.fontSize = '12px';
+        label.style.color = 'var(--nord4)';
+        label.style.cursor = 'pointer';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        if (config.id) checkbox.id = config.id;
+        checkbox.checked = !!(typeof config.getValue === 'function' ? config.getValue() : config.value);
+        checkbox.addEventListener('change', (e) => {
+            if (typeof config.onChange === 'function') {
+                config.onChange(!!e.target.checked);
+            }
+        });
+
+        const text = document.createElement('span');
+        text.textContent = config.label || 'Enabled';
+
+        label.appendChild(checkbox);
+        label.appendChild(text);
+        container.appendChild(label);
         return container;
     }
     
@@ -3705,6 +3836,11 @@ function drawEffectAreas() {
 // Draw markers
 function drawMarkers() {
     if (!showMarkers) return;
+
+    if (editingEnabled.groupMarkers) {
+        drawMarkerType('groupMarkers');
+        return;
+    }
     
     // Use the centralized marker color system for the base (non-editing) appearance.
     const baseColor = getConfiguredMarkerTypeColor('markers', MARKER_TYPE_COLORS.markers.baseColor);
@@ -5241,6 +5377,13 @@ function isMarkerVisible(markerType, index) {
         }
         return true;
     }
+    if (markerType === 'groupMarkers') {
+        if (!showMarkers) return false;
+        if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) {
+            return false;
+        }
+        return true;
+    }
     if (markerType === 'effectAreas') {
         if (!showEffectAreas) return false;
         if (visibleEffectAreas.size > 0 && !visibleEffectAreas.has(index)) {
@@ -5562,6 +5705,12 @@ function tryStartDragForType(markerType, screenX, screenY) {
     if (!typeConfig || !editingEnabled[markerType] || !typeConfig.getShowFlag()) {
         return false;
     }
+
+    const canMoveGroupMarkerIndex = (index) => {
+        if (markerType !== 'groupMarkers') return true;
+        if (allowMoveSavedGroupMarkers) return true;
+        return typeConfig.new.has(index);
+    };
     
     const array = typeConfig.getArray();
     const selected = typeConfig.selected;
@@ -5576,8 +5725,16 @@ function tryStartDragForType(markerType, screenX, screenY) {
             const screenPos = typeConfig.getScreenPos(marker);
             
             if (typeConfig.isPointOnMarker(marker, screenX, screenY, screenPos)) {
+                if (!canMoveGroupMarkerIndex(index)) {
+                    updateStatus('Saved group markers are movement-locked. Tick "Enable moving saved group markers" to move them.', true);
+                    return false;
+                }
                 // Save original positions for all selected markers if not already saved
                 for (const selectedIndex of selected) {
+                    if (!canMoveGroupMarkerIndex(selectedIndex)) {
+                        updateStatus('Saved group markers are movement-locked. Tick "Enable moving saved group markers" to move them.', true);
+                        return false;
+                    }
                     if (!typeConfig.originalPositions.has(selectedIndex)) {
                         const m = typeConfig.getMarker(selectedIndex);
                         typeConfig.originalPositions.set(selectedIndex, typeConfig.getOriginalData(m));
@@ -5628,6 +5785,10 @@ function tryStartDragForType(markerType, screenX, screenY) {
             const screenPos = typeConfig.getScreenPos(marker);
             
             if (typeConfig.isPointOnMarker(marker, screenX, screenY, screenPos)) {
+                if (!canMoveGroupMarkerIndex(index)) {
+                    updateStatus('Saved group markers are movement-locked. Tick "Enable moving saved group markers" to move them.', true);
+                    return false;
+                }
                 // Save original position if not already saved
                 if (!typeConfig.originalPositions.has(index)) {
                     typeConfig.originalPositions.set(index, typeConfig.getOriginalData(marker));
@@ -8394,6 +8555,12 @@ async function loadGroups() {
         
         markers = data.groups || [];
         getRegularSelectionSet().clear();
+        if (markerTypes.groupMarkers) {
+            markerTypes.groupMarkers.selected.clear();
+            markerTypes.groupMarkers.deleted.clear();
+            markerTypes.groupMarkers.new.clear();
+            markerTypes.groupMarkers.originalPositions.clear();
+        }
         
         // Load effect areas, event spawns, territories, and player spawn points after loading markers
         await loadEffectAreas();
@@ -10439,6 +10606,13 @@ async function restoreSavedState() {
         showMarkers = savedShowMarkers === 'true';
         const checkbox = document.getElementById('showMarkers');
         if (checkbox) checkbox.checked = showMarkers;
+    }
+
+    const savedAllowMoveSavedGroupMarkers = localStorage.getItem('map_viewer_allowMoveSavedGroupMarkers');
+    if (savedAllowMoveSavedGroupMarkers !== null) {
+        allowMoveSavedGroupMarkers = savedAllowMoveSavedGroupMarkers === 'true';
+        const checkbox = document.getElementById('allowMoveSavedGroupMarkers');
+        if (checkbox) checkbox.checked = allowMoveSavedGroupMarkers;
     }
     
     const savedShowEventSpawns = localStorage.getItem('map_viewer_showEventSpawns');
