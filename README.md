@@ -423,6 +423,28 @@ The editing system uses a unified architecture:
 - **Event System**: Publishes events for marker changes (created, deleted, moved, resized, selected)
 - **Selection Manager**: Centralized selection logic that enforces visibility and edit mode restrictions
 - **Interaction Handlers**: Unified system for handling clicks, drags, and radius editing
+- **Marker Type Registry**: Contract-based registry (`static/js/map_viewer_registry.js`) that validates marker type capabilities and allows plugin-style marker onboarding
+
+### Adding a New Editable Marker Type
+
+Use this checklist to add a new marker source (XML or JSON) with minimal cross-cutting changes:
+
+1. **Backend data adapter**
+   - Add/extend normalization in `map_data_adapters.py`.
+   - Ensure loaded entities include a stable `sourceId`.
+   - Expose load/save endpoints in `map_viewer_app.py` with standard success/error envelopes.
+2. **Frontend marker config**
+   - Define a `markerTypes.<newType>` configuration in `static/js/map_viewer.js` that satisfies the registry contract (`getArray`, `createNew`, `prepareSaveData`, etc.).
+   - Include `sourceId` in `prepareSaveData` so save paths can match entities without relying only on mutable indices.
+3. **Registry wiring**
+   - Register built-in or dynamic types through `registerMarkerTypeConfig(...)`.
+   - For dynamic territory-like types, register on creation and unregister when removed.
+4. **Edit + filter integration**
+   - Add display toggles/filter facets and ensure `isMarkerVisible(...)` covers new type semantics.
+   - Reuse shared interaction/selection flows rather than adding parallel handlers.
+5. **Regression checks**
+   - Verify load, edit, save, discard, delete, and filter behavior for the new type.
+   - Add or update tests under `tests/`.
 
 ### File Structure
 

@@ -11,6 +11,14 @@ import shutil
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request, send_file
 from werkzeug.utils import secure_filename
+from map_data_adapters import (
+    GROUPS_ADAPTER,
+    EVENT_SPAWNS_ADAPTER,
+    EFFECT_AREAS_ADAPTER,
+    TERRITORY_ZONES_ADAPTER,
+    PLAYER_SPAWNS_ADAPTER,
+    indexed_identity_parts,
+)
 
 app = Flask(__name__)
 
@@ -28,6 +36,34 @@ DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyh
 UPLOAD_FOLDER = Path('uploads/background_images')
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'}
+
+
+def api_ok(**payload):
+    """Standard success envelope for map-viewer API responses."""
+    return jsonify({'success': True, **payload})
+
+
+def api_error(message, status=400, **payload):
+    """Standard error envelope for map-viewer API responses."""
+    return jsonify({'success': False, 'error': message, **payload}), status
+
+
+def parse_json_body():
+    """Safely parse request JSON body."""
+    try:
+        return request.get_json(silent=True) or {}
+    except Exception:
+        return {}
+
+
+def resolve_mission_path(mission_dir):
+    """Validate mission directory and return Path or (error_response, None)."""
+    if not mission_dir:
+        return api_error('No mission directory specified', 400), None
+    mission_path = Path(mission_dir)
+    if not mission_path.exists():
+        return api_error(f'Mission directory does not exist: {mission_dir}', 404), None
+    return None, mission_path
 
 def allowed_file(filename):
     """Check if file extension is allowed."""
@@ -195,6 +231,10 @@ def load_groups_from_xml(xml_file_path, proto_file_path=None):
                 'usage': usage,
                 'xml': xml_string  # Store original XML element from mapgrouppos.xml
             }
+            GROUPS_ADAPTER.add_source_id(
+                group_data,
+                *indexed_identity_parts(name, x, y, z, index_chain=(len(groups),))
+            )
             
             # Try to find matching proto group and store its data
             if name in proto_groups:
@@ -232,24 +272,14 @@ def get_groups():
     """Get group data from mapgrouppos.xml."""
     try:
         mission_dir = request.args.get('mission_dir', DEFAULT_MISSION_DIR)
-        
-        if not mission_dir:
-            return jsonify({'error': 'No mission directory specified'}), 400
-        
-        mission_path = Path(mission_dir)
-        if not mission_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Mission directory does not exist: {mission_dir}'
-            }), 404
+        err_response, mission_path = resolve_mission_path(mission_dir)
+        if err_response:
+            return err_response
         
         # Look for mapgrouppos.xml
         mapgrouppos_file = mission_path / 'mapgrouppos.xml'
         if not mapgrouppos_file.exists():
-            return jsonify({
-                'success': False,
-                'error': f'mapgrouppos.xml not found at: {mapgrouppos_file}'
-            }), 404
+            return api_error(f'mapgrouppos.xml not found at: {mapgrouppos_file}', 404)
         
         # Look for mapgroupproto.xml (optional)
         mapgroupproto_file = mission_path / 'mapgroupproto.xml'
@@ -264,25 +294,17 @@ def get_groups():
         groups = load_groups_from_xml(str(mapgrouppos_file), proto_file_path)
         
         if len(groups) == 0:
-            return jsonify({
-                'success': True,
-                'groups': [],
-                'count': 0,
-                'warning': 'No groups found in XML file. Check XML structure.'
-            })
+            return api_ok(
+                groups=[],
+                count=0,
+                warning='No groups found in XML file. Check XML structure.'
+            )
         
-        return jsonify({
-            'success': True,
-            'groups': groups,
-            'count': len(groups)
-        })
+        return api_ok(groups=groups, count=len(groups))
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 
@@ -292,23 +314,14 @@ def upload_background_image():
     """Upload and save background image to server."""
     try:
         if 'image' not in request.files:
-            return jsonify({
-                'success': False,
-                'error': 'No image file provided'
-            }), 400
+            return api_error('No image file provided', 400)
         
         file = request.files['image']
         if file.filename == '':
-            return jsonify({
-                'success': False,
-                'error': 'No file selected'
-            }), 400
+            return api_error('No file selected', 400)
         
         if not allowed_file(file.filename):
-            return jsonify({
-                'success': False,
-                'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'
-            }), 400
+            return api_error(f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}', 400)
         
         # Generate unique filename
         file_ext = file.filename.rsplit('.', 1)[1].lower()
@@ -320,18 +333,11 @@ def upload_background_image():
         
         print(f"Background image saved: {file_path}")
         
-        return jsonify({
-            'success': True,
-            'image_id': unique_filename,
-            'message': 'Image uploaded successfully'
-        })
+        return api_ok(image_id=unique_filename, message='Image uploaded successfully')
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/background-image/<image_id>')
@@ -411,16 +417,16 @@ def export_map():
     """Save exported map PNG to a path (default: mission folder)."""
     import base64
     try:
-        data = request.get_json()
+        data = parse_json_body()
         if not data:
-            return jsonify({'success': False, 'error': 'No JSON data'}), 400
+            return api_error('No JSON data', 400)
         mission_dir = data.get('mission_dir') or ''
         path_input = (data.get('path') or '').strip()
         image_b64 = data.get('image') or ''
         if not image_b64:
-            return jsonify({'success': False, 'error': 'No image data'}), 400
+            return api_error('No image data', 400)
         if not mission_dir:
-            return jsonify({'success': False, 'error': 'Mission directory required'}), 400
+            return api_error('Mission directory required', 400)
         mission_path = Path(mission_dir)
         if not mission_path.exists():
             mission_path.mkdir(parents=True, exist_ok=True)
@@ -441,15 +447,11 @@ def export_map():
             image_b64 = image_b64.split(',', 1)[-1]
         raw = base64.b64decode(image_b64)
         path_obj.write_bytes(raw)
-        return jsonify({
-            'success': True,
-            'path': str(path_obj),
-            'message': f'Saved to {path_obj}'
-        })
+        return api_ok(path=str(path_obj), message=f'Saved to {path_obj}')
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 def load_effect_areas(effect_area_file_path):
@@ -532,6 +534,10 @@ def load_effect_areas(effect_area_file_path):
                     'hasY': has_y,
                     'radius': radius
                 }
+                EFFECT_AREAS_ADAPTER.add_source_id(
+                    area_info,
+                    *indexed_identity_parts(area_name, x, y, z, radius, index_chain=(idx,))
+                )
                 print(f"Added effect area: {area_info}")
                 areas.append(area_info)
         else:
@@ -955,25 +961,25 @@ def get_ai_patrols():
 def save_ai_patrols():
     """Save Patrols array to AIPatrolSettings.json."""
     try:
-        data = request.get_json()
+        data = parse_json_body()
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return api_error('No data provided', 400)
         mission_dir = data.get('mission_dir')
         if not mission_dir:
-            return jsonify({'success': False, 'error': 'No mission directory specified'}), 400
+            return api_error('No mission directory specified', 400)
         mission_path = Path(mission_dir)
         if not mission_path.exists():
-            return jsonify({'success': False, 'error': f'Mission directory does not exist: {mission_dir}'}), 404
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
         settings_path = mission_path / 'expansion' / 'settings' / 'AIPatrolSettings.json'
         patrols = data.get('patrols', [])
         result = save_ai_patrol_settings(str(settings_path), patrols)
         if not result.get('success'):
-            return jsonify({'success': False, 'error': result.get('error', 'Save failed')}), 500
-        return jsonify({'success': True, 'count': result.get('count', 0), 'message': f"Saved {result.get('count', 0)} patrols"})
+            return api_error(result.get('error', 'Save failed'), 500)
+        return api_ok(count=result.get('count', 0), message=f"Saved {result.get('count', 0)} patrols")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 def save_effect_areas(effect_area_file_path, effect_areas_data, deleted_indices=None, new_indices=None):
@@ -1102,25 +1108,22 @@ def save_effect_areas(effect_area_file_path, effect_areas_data, deleted_indices=
 def save_effect_areas_endpoint():
     """Save effect area data to cfgeffectarea.json."""
     try:
-        data = request.get_json()
+        data = parse_json_body()
         
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return api_error('No data provided', 400)
         
         mission_dir = data.get('mission_dir')
         if not mission_dir:
-            return jsonify({'error': 'No mission directory specified'}), 400
+            return api_error('No mission directory specified', 400)
         
         mission_path = Path(mission_dir)
         if not mission_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Mission directory does not exist: {mission_dir}'
-            }), 404
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
         
         effect_areas_data = data.get('effect_areas', [])
         if not effect_areas_data:
-            return jsonify({'success': False, 'error': 'No effect areas data provided'}), 400
+            return api_error('No effect areas data provided', 400)
         
         deleted_indices = data.get('deleted_indices', [])
         new_indices = data.get('new_indices', [])
@@ -1128,10 +1131,7 @@ def save_effect_areas_endpoint():
         # Look for cfgeffectarea.json
         effect_area_file = mission_path / 'cfgeffectarea.json'
         if not effect_area_file.exists():
-            return jsonify({
-                'success': False,
-                'error': f'cfgeffectarea.json not found at: {effect_area_file}'
-            }), 404
+            return api_error(f'cfgeffectarea.json not found at: {effect_area_file}', 404)
         
         print(f"Saving effect areas to: {effect_area_file}")
         result = save_effect_areas(str(effect_area_file), effect_areas_data, deleted_indices, new_indices)
@@ -1146,24 +1146,14 @@ def save_effect_areas_endpoint():
                 message_parts.append(f"{result['deleted']} deleted")
             message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
             
-            return jsonify({
-                'success': True,
-                'count': result['count'],
-                'message': message
-            })
+            return api_ok(count=result['count'], message=message)
         else:
-            return jsonify({
-                'success': False,
-                'error': result.get('error', 'Unknown error')
-            }), 500
+            return api_error(result.get('error', 'Unknown error'), 500)
             
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 def load_type_categories(economycore_file_path):
@@ -1342,6 +1332,10 @@ def load_event_spawns(event_spawns_file_path, economycore_file_path):
                     'categories': categories,
                     'xml': pos_xml_string  # Store just the pos element XML
                 }
+                EVENT_SPAWNS_ADAPTER.add_source_id(
+                    event_data,
+                    *indexed_identity_parts(event_name, x, y, z, a, index_chain=(event_idx, pos_idx))
+                )
                 
                 event_spawns.append(event_data)
         
@@ -1381,10 +1375,31 @@ def save_event_spawns(event_spawns_file_path, event_spawns_data, deleted_indices
         
         # Build a mapping from (eventIndex, posIndex) -> pos element (by document order within each event)
         pos_map = {}
+        source_id_key_map = {}
         for event_idx, event_elem in enumerate(event_elements):
+            event_name = event_elem.get('name', '')
             pos_elems = [p for p in event_elem.iter() if _strip_ns(p.tag).lower() == 'pos']
             for pos_idx, pos_elem in enumerate(pos_elems):
                 pos_map[(event_idx, pos_idx)] = (event_elem, pos_elem)
+                try:
+                    x_raw = pos_elem.get('x')
+                    z_raw = pos_elem.get('z')
+                    if x_raw is None or z_raw is None:
+                        continue
+                    y_raw = pos_elem.get('y')
+                    a_raw = pos_elem.get('a')
+                    x_val = float(x_raw)
+                    y_val = float(y_raw) if y_raw is not None else 0.0
+                    z_val = float(z_raw)
+                    a_val = float(a_raw) if a_raw is not None else 0.0
+                    payload = {'name': event_name, 'x': x_val, 'y': y_val, 'z': z_val, 'a': a_val}
+                    EVENT_SPAWNS_ADAPTER.add_source_id(
+                        payload,
+                        *indexed_identity_parts(event_name, x_val, y_val, z_val, a_val, index_chain=(event_idx, pos_idx))
+                    )
+                    source_id_key_map[payload['sourceId']] = (event_idx, pos_idx)
+                except Exception:
+                    continue
         
         deleted_set = set(deleted_indices)
         new_set = set(new_indices)
@@ -1403,8 +1418,12 @@ def save_event_spawns(event_spawns_file_path, event_spawns_data, deleted_indices
             event_idx = spawn_data.get('eventIndex')
             pos_idx = spawn_data.get('posIndex')
             if event_idx is None or pos_idx is None:
-                # Without stable identifiers, skip (cannot reliably preserve grouping)
-                continue
+                source_id = spawn_data.get('sourceId')
+                key_from_source = source_id_key_map.get(source_id) if source_id else None
+                if key_from_source is None:
+                    # Without stable identifiers, skip (cannot reliably preserve grouping)
+                    continue
+                event_idx, pos_idx = key_from_source
             
             key = (int(event_idx), int(pos_idx))
             if key not in pos_map:
@@ -1437,7 +1456,11 @@ def save_event_spawns(event_spawns_file_path, event_spawns_data, deleted_indices
             event_idx = spawn_data.get('eventIndex')
             pos_idx = spawn_data.get('posIndex')
             if event_idx is None or pos_idx is None:
-                continue
+                source_id = spawn_data.get('sourceId')
+                key_from_source = source_id_key_map.get(source_id) if source_id else None
+                if key_from_source is None:
+                    continue
+                event_idx, pos_idx = key_from_source
             key = (int(event_idx), int(pos_idx))
             if key in pos_map:
                 event_elem, pos_elem = pos_map[key]
@@ -1508,28 +1531,28 @@ def save_event_spawns(event_spawns_file_path, event_spawns_data, deleted_indices
 def save_event_spawns_endpoint():
     """Save event spawn data back to cfgeventspawns.xml."""
     try:
-        data = request.get_json()
+        data = parse_json_body()
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return api_error('No data provided', 400)
         
         mission_dir = data.get('mission_dir')
         if not mission_dir:
-            return jsonify({'success': False, 'error': 'No mission directory specified'}), 400
+            return api_error('No mission directory specified', 400)
         
         mission_path = Path(mission_dir)
         if not mission_path.exists():
-            return jsonify({'success': False, 'error': f'Mission directory does not exist: {mission_dir}'}), 404
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
         
         event_spawns_data = data.get('event_spawns', [])
         if event_spawns_data is None:
-            return jsonify({'success': False, 'error': 'No event spawns data provided'}), 400
+            return api_error('No event spawns data provided', 400)
         
         deleted_indices = data.get('deleted_indices', [])
         new_indices = data.get('new_indices', [])
         
         event_spawns_file = mission_path / 'cfgeventspawns.xml'
         if not event_spawns_file.exists():
-            return jsonify({'success': False, 'error': f'cfgeventspawns.xml not found at: {event_spawns_file}'}), 404
+            return api_error(f'cfgeventspawns.xml not found at: {event_spawns_file}', 404)
         
         print(f"Saving event spawns to: {event_spawns_file}")
         result = save_event_spawns(str(event_spawns_file), event_spawns_data, deleted_indices, new_indices)
@@ -1544,13 +1567,13 @@ def save_event_spawns_endpoint():
                 message_parts.append(f"{result['deleted']} deleted")
             message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
             
-            return jsonify({'success': True, 'count': result.get('count', 0), 'message': message})
+            return api_ok(count=result.get('count', 0), message=message)
         
-        return jsonify({'success': False, 'error': result.get('error', 'Unknown error')}), 500
+        return api_error(result.get('error', 'Unknown error'), 500)
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/event-spawns')
@@ -1889,7 +1912,7 @@ def load_territories(mission_dir):
                         # Store zone data
                         zone_xml = ET.tostring(zone, encoding='unicode').strip()
                         zone_name = zone.get('name', f'Zone_{zone_idx}')
-                        zones.append({
+                        zone_payload = {
                             'id': len(zones),
                             'name': zone_name,
                             'x': x,
@@ -1900,7 +1923,21 @@ def load_territories(mission_dir):
                             'dmin': dmin,
                             'dmax': dmax,
                             'xml': zone_xml
-                        })
+                        }
+                        TERRITORY_ZONES_ADAPTER.add_source_id(
+                            zone_payload,
+                            *indexed_identity_parts(
+                                territory_type,
+                                territory_idx,
+                                zone_name,
+                                x,
+                                y,
+                                z,
+                                radius,
+                                index_chain=(zone_idx,)
+                            )
+                        )
+                        zones.append(zone_payload)
                     except (ValueError, TypeError) as e:
                         print(f"Invalid position in zone {zone_idx}: x='{x_attr}', z='{z_attr}', error: {e}")
                         continue
@@ -2343,25 +2380,22 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
 def save_territories_endpoint():
     """Save territory zone data to XML files in mpmissions/env directory."""
     try:
-        data = request.get_json()
+        data = parse_json_body()
         
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return api_error('No data provided', 400)
         
         mission_dir = data.get('mission_dir')
         if not mission_dir:
-            return jsonify({'error': 'No mission directory specified'}), 400
+            return api_error('No mission directory specified', 400)
         
         mission_path = Path(mission_dir)
         if not mission_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Mission directory does not exist: {mission_dir}'
-            }), 404
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
         
         zones_data = data.get('zones', [])
         if not zones_data:
-            return jsonify({'success': False, 'error': 'No zones data provided'}), 400
+            return api_error('No zones data provided', 400)
         
         deleted_indices = data.get('deleted_indices', [])
         new_indices = data.get('new_indices', [])
@@ -2379,24 +2413,14 @@ def save_territories_endpoint():
                 message_parts.append(f"{result['deleted']} deleted")
             message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
             
-            return jsonify({
-                'success': True,
-                'count': result['count'],
-                'message': message
-            })
+            return api_ok(count=result['count'], message=message)
         else:
-            return jsonify({
-                'success': False,
-                'error': result.get('error', 'Unknown error')
-            }), 500
+            return api_error(result.get('error', 'Unknown error'), 500)
             
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 def load_player_spawn_points(spawn_points_file_path):
@@ -2512,6 +2536,10 @@ def load_player_spawn_points(spawn_points_file_path):
                     'height': height,
                     'xml': pos_xml
                 }
+                PLAYER_SPAWNS_ADAPTER.add_source_id(
+                    spawn_point_data,
+                    *indexed_identity_parts(x, y, z, width, height, index_chain=(posbubble_idx, pos_idx))
+                )
                 
                 spawn_points.append(spawn_point_data)
         
@@ -2731,25 +2759,22 @@ def save_player_spawn_points(spawn_points_file_path, spawn_points_data, deleted_
 def save_player_spawn_points_endpoint():
     """Save player spawn point data to cfgplayerspawnpoints.xml."""
     try:
-        data = request.get_json()
+        data = parse_json_body()
         
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return api_error('No data provided', 400)
         
         mission_dir = data.get('mission_dir')
         if not mission_dir:
-            return jsonify({'error': 'No mission directory specified'}), 400
+            return api_error('No mission directory specified', 400)
         
         mission_path = Path(mission_dir)
         if not mission_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Mission directory does not exist: {mission_dir}'
-            }), 404
+            return api_error(f'Mission directory does not exist: {mission_dir}', 404)
         
         spawn_points_data = data.get('spawn_points', [])
         if not spawn_points_data:
-            return jsonify({'success': False, 'error': 'No spawn points data provided'}), 400
+            return api_error('No spawn points data provided', 400)
         
         deleted_indices = data.get('deleted_indices', [])
         new_indices = data.get('new_indices', [])
@@ -2757,10 +2782,7 @@ def save_player_spawn_points_endpoint():
         # Look for cfgplayerspawnpoints.xml
         spawn_points_file = mission_path / 'cfgplayerspawnpoints.xml'
         if not spawn_points_file.exists():
-            return jsonify({
-                'success': False,
-                'error': f'cfgplayerspawnpoints.xml not found at: {spawn_points_file}'
-            }), 404
+            return api_error(f'cfgplayerspawnpoints.xml not found at: {spawn_points_file}', 404)
         
         print(f"Saving player spawn points to: {spawn_points_file}")
         result = save_player_spawn_points(str(spawn_points_file), spawn_points_data, deleted_indices, new_indices)
@@ -2775,24 +2797,14 @@ def save_player_spawn_points_endpoint():
                 message_parts.append(f"{result['deleted']} deleted")
             message = f"Saved: {', '.join(message_parts)}" if message_parts else "No changes"
             
-            return jsonify({
-                'success': True,
-                'count': result['count'],
-                'message': message
-            })
+            return api_ok(count=result['count'], message=message)
         else:
-            return jsonify({
-                'success': False,
-                'error': result.get('error', 'Unknown error')
-            }), 500
+            return api_error(result.get('error', 'Unknown error'), 500)
             
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 if __name__ == '__main__':

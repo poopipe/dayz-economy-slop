@@ -3,7 +3,35 @@
 let canvas;
 let ctx;
 let markers = [];
-let selectedMarkers = new Set();
+const regularMarkerState = {
+    selected: new Set()
+};
+function getRegularSelectionSet() {
+    return regularMarkerState.selected;
+}
+function assertSelectionStateInvariant(context = 'unknown') {
+    if (!(typeof window !== 'undefined' && window.__DEBUG_MAP_VIEWER_STATE__ === true)) return;
+    const regularSelected = getRegularSelectionSet();
+    if (!(regularSelected instanceof Set)) {
+        console.error(`[StateInvariant:${context}] regular selection is not a Set`, regularSelected);
+    }
+    for (const markerType of Object.keys(markerTypes || {})) {
+        const cfg = markerTypes[markerType];
+        if (!cfg) continue;
+        if (!(cfg.selected instanceof Set)) {
+            console.error(`[StateInvariant:${context}] markerTypes.${markerType}.selected is not a Set`, cfg.selected);
+        }
+        if (!(cfg.deleted instanceof Set)) {
+            console.error(`[StateInvariant:${context}] markerTypes.${markerType}.deleted is not a Set`, cfg.deleted);
+        }
+        if (!(cfg.new instanceof Set)) {
+            console.error(`[StateInvariant:${context}] markerTypes.${markerType}.new is not a Set`, cfg.new);
+        }
+        if (!(cfg.originalPositions instanceof Map)) {
+            console.error(`[StateInvariant:${context}] markerTypes.${markerType}.originalPositions is not a Map`, cfg.originalPositions);
+        }
+    }
+}
 // Legacy variable removed - now using markerTypes[type].selected
 let visibleMarkers = new Set(); // For filtering
 let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName', criteria: 'isOneOf', values: ['name1', 'name2'] }
@@ -262,6 +290,30 @@ let radiusEditMarkerType = null;
 let radiusEditIndex = -1;
 let radiusEditStartRadius = 0;
 let radiusEditSelectedMarkers = new Set(); // Store all selected markers for multi-marker radius editing
+const markerTypeRegistry = window.MapViewerCore?.markerTypeRegistry || null;
+
+function registerMarkerTypeConfig(markerType, config) {
+    if (!markerType || !config) return config;
+    if (markerTypeRegistry) {
+        try {
+            return markerTypeRegistry.register(markerType, config);
+        } catch (err) {
+            console.warn(`Registry rejected marker type '${markerType}', using local config only.`, err);
+        }
+    }
+    return config;
+}
+
+function unregisterMarkerTypeConfig(markerType) {
+    if (markerTypeRegistry) {
+        markerTypeRegistry.unregister(markerType);
+    }
+}
+
+function getMarkerTypeKeys() {
+    if (markerTypeRegistry) return markerTypeRegistry.keys();
+    return Object.keys(markerTypes);
+}
 
 // Generic marker editing system
 const markerTypes = {
@@ -334,6 +386,7 @@ const markerTypes = {
             a: marker.a != null ? marker.a : 0.0,
             eventIndex: marker.eventIndex != null ? marker.eventIndex : null,
             posIndex: marker.posIndex != null ? marker.posIndex : null,
+            sourceId: marker.sourceId || null,
             xml: marker.xml || `<pos x="${marker.x != null ? marker.x : 0}" z="${marker.z != null ? marker.z : 0}" a="${marker.a != null ? marker.a : 0.0}" />`,
             isNew: markerTypes.eventSpawns.new.has(index),
             isDeleted: markerTypes.eventSpawns.deleted.has(index)
@@ -428,6 +481,7 @@ const markerTypes = {
             z: marker.z != null ? marker.z : 0,
             width: marker.width != null ? marker.width : 100,
             height: marker.height != null ? marker.height : 100,
+            sourceId: marker.sourceId || null,
             xml: marker.xml || `<pos x="${marker.x != null ? marker.x : 0}" z="${marker.z != null ? marker.z : 0}"/>`,
             isNew: markerTypes.playerSpawnPoints.new.has(index),
             isDeleted: markerTypes.playerSpawnPoints.deleted.has(index)
@@ -507,6 +561,7 @@ const markerTypes = {
             y: marker.y != null ? marker.y : 0,
             z: marker.z != null ? marker.z : 0,
             radius: marker.radius != null ? marker.radius : 50,
+            sourceId: marker.sourceId || null,
             isNew: markerTypes.effectAreas.new.has(index),
             isDeleted: markerTypes.effectAreas.deleted.has(index)
         }),
@@ -687,6 +742,7 @@ const markerTypes = {
                 radius: marker.radius != null ? marker.radius : 50.0,
                 dmin: marker.dmin != null ? marker.dmin : null,
                 dmax: marker.dmax != null ? marker.dmax : null,
+                sourceId: marker.sourceId || null,
                 isNew: markerTypes.zombieTerritoryZones.new.has(index),
                 isDeleted: markerTypes.zombieTerritoryZones.deleted.has(index)
             };
@@ -950,7 +1006,10 @@ function linkMarkerTypeState(markerType) {
     });
 }
 
-Object.keys(markerTypes).forEach(linkMarkerTypeState);
+Object.keys(markerTypes).forEach((markerType) => {
+    markerTypes[markerType] = registerMarkerTypeConfig(markerType, markerTypes[markerType]);
+    linkMarkerTypeState(markerType);
+});
 
 function isStateLinkDebugEnabled() {
     return typeof window !== 'undefined' && window.__DEBUG_MARKER_STATE_LINKS__ === true;
@@ -1522,18 +1581,19 @@ class SelectionManager {
         if (markerType === 'regular') {
             if (altKey) {
                 // Toggle selection
-                if (selectedMarkers.has(index)) {
-                    selectedMarkers.delete(index);
+                if (getRegularSelectionSet().has(index)) {
+                    getRegularSelectionSet().delete(index);
                 } else {
-                    selectedMarkers.add(index);
+                    getRegularSelectionSet().add(index);
                 }
             } else {
                 // Replace selection
                 if (clearOthers) {
                     this.clearAllSelections();
                 }
-                selectedMarkers.add(index);
+                getRegularSelectionSet().add(index);
             }
+            assertSelectionStateInvariant('SelectionManager.selectMarker:regular');
             return true;
         }
         
@@ -1555,6 +1615,7 @@ class SelectionManager {
             }
             typeConfig.selected.add(index);
         }
+        assertSelectionStateInvariant(`SelectionManager.selectMarker:${markerType}`);
         
         return true;
     }
@@ -1562,7 +1623,7 @@ class SelectionManager {
     // Clear all selections
     clearAllSelections() {
         // Clear regular markers
-        selectedMarkers.clear();
+        getRegularSelectionSet().clear();
         
         // Clear all editable marker types
         for (const markerType of Object.keys(markerTypes)) {
@@ -1571,12 +1632,13 @@ class SelectionManager {
         for (const markerType of Object.keys(markerTypes)) {
             pruneUnchangedOriginalSnapshotsForType(markerTypes[markerType]);
         }
+        assertSelectionStateInvariant('SelectionManager.clearAllSelections');
     }
     
     // Clear selections for a specific type
     clearSelectionsForType(markerType) {
         if (markerType === 'regular') {
-            selectedMarkers.clear();
+            getRegularSelectionSet().clear();
         } else {
             const typeConfig = markerTypes[markerType];
             if (typeConfig) {
@@ -1590,12 +1652,13 @@ class SelectionManager {
     cleanupHiddenSelections() {
         // Regular markers
         const visibleSelected = new Set();
-        selectedMarkers.forEach(index => {
+        getRegularSelectionSet().forEach(index => {
             if (visibleMarkers.size === 0 || visibleMarkers.has(index)) {
                 visibleSelected.add(index);
             }
         });
-        selectedMarkers = visibleSelected;
+        getRegularSelectionSet().clear();
+        visibleSelected.forEach(index => getRegularSelectionSet().add(index));
         
         // Editable marker types
         for (const markerType of Object.keys(markerTypes)) {
@@ -1673,7 +1736,7 @@ class SelectionManager {
         } else {
             // Not in editing mode - work with regular markers
             if (addToSelection) {
-                selectedMarkers.clear();
+                getRegularSelectionSet().clear();
             }
             
             markers.forEach((marker, index) => {
@@ -1682,9 +1745,9 @@ class SelectionManager {
                 if (marker.x >= minX && marker.x <= maxX &&
                     marker.z >= minZ && marker.z <= maxZ) {
                     if (addToSelection) {
-                        selectedMarkers.add(index);
+                        getRegularSelectionSet().add(index);
                     } else {
-                        selectedMarkers.delete(index);
+                        getRegularSelectionSet().delete(index);
                     }
                 }
             });
@@ -2902,11 +2965,6 @@ function initCanvas() {
             return;
         }
         
-        // Handle dragging or radius editing
-        if (isDragging || isEditingRadius) {
-            handleDrag(x, y);
-        }
-        
         if (isDragging || isEditingRadius) {
             // Update marker position or radius during drag
             handleDrag(x, y);
@@ -3560,7 +3618,7 @@ function drawMarkers() {
         }
         
         const screenPos = worldToScreen(marker.x, marker.z);
-        const isSelected = selectedMarkers.has(index);
+        const isSelected = getRegularSelectionSet().has(index);
         const isHovered = hoveredMarkerIndex === index;
         
         // Draw marker - same radius for all markers
@@ -4146,8 +4204,8 @@ function drawDynamicHighlightsOnOverlay() {
     if (!shouldUseStaticMarkerCache()) return;
     
     // Selected regular markers
-    if (showMarkers && selectedMarkers.size > 0) {
-        selectedMarkers.forEach(index => {
+    if (showMarkers && getRegularSelectionSet().size > 0) {
+        getRegularSelectionSet().forEach(index => {
             const marker = markers[index];
             if (!marker) return;
             if (visibleMarkers.size > 0 && !visibleMarkers.has(index)) return;
@@ -7249,7 +7307,7 @@ function updateSelectedCount() {
     // Clean up hidden selections before counting
     selectionManager.cleanupHiddenSelections();
     
-    let count = selectedMarkers.size;
+    let count = getRegularSelectionSet().size;
     // Add counts from all editable marker types
     for (const markerType of Object.keys(markerTypes)) {
         if (editingEnabled[markerType]) {
@@ -7272,14 +7330,14 @@ function clearSelection() {
 
 // Copy selected markers XML to clipboard
 async function copySelectedXml() {
-    if (selectedMarkers.size === 0) {
+    if (getRegularSelectionSet().size === 0) {
         updateStatus('No markers selected', true);
         return;
     }
     
     // Collect XML from selected markers only
     const xmlLines = [];
-    const selectedIndices = Array.from(selectedMarkers); // Convert Set to Array for clarity
+    const selectedIndices = Array.from(getRegularSelectionSet()); // Convert Set to Array for clarity
     
     // Verify we're only processing selected markers
     for (const index of selectedIndices) {
@@ -7470,6 +7528,7 @@ function createTerritoryTypeMarkerType(territoryType) {
                 radius: marker.radius != null ? marker.radius : 50.0,
                 dmin: marker.dmin != null ? marker.dmin : null,
                 dmax: marker.dmax != null ? marker.dmax : null,
+                sourceId: marker.sourceId || null,
                 isNew: markerType.new.has(index),
                 isDeleted: markerType.deleted.has(index)
             };
@@ -7583,6 +7642,7 @@ function flattenTerritoryZones() {
     // Remove any previously generated territory type marker types to avoid stale/duplicate UI entries
     Object.keys(markerTypes).forEach((key) => {
         if (key.startsWith('territoryType_')) {
+            unregisterMarkerTypeConfig(key);
             delete markerTypes[key];
         }
     });
@@ -7612,7 +7672,7 @@ function flattenTerritoryZones() {
         const markerType = createTerritoryTypeMarkerType(territoryType);
         const typeKey = `territoryType_${territoryType}`;
         territoryTypeMarkerTypes[territoryType] = markerType;
-        markerTypes[typeKey] = markerType;
+        markerTypes[typeKey] = registerMarkerTypeConfig(typeKey, markerType);
         linkMarkerTypeState(typeKey);
     });
 
@@ -8132,7 +8192,7 @@ async function loadGroups() {
         }
         
         markers = data.groups || [];
-        selectedMarkers.clear();
+        getRegularSelectionSet().clear();
         
         // Load effect areas, event spawns, territories, and player spawn points after loading markers
         await loadEffectAreas();
