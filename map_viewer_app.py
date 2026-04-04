@@ -2015,6 +2015,21 @@ def reorder_all_zone_elements_in_tree(root):
             reorder_zone_element_attributes(zone_el)
 
 
+def _is_zombie_territory_xml_stem(stem):
+    """Align with map_viewer.js isZombieTerritoryType — env/*.xml stems like infected / zombie."""
+    t = (stem or '').lower()
+    return t in ('infected', 'zombie') or 'zombie' in t or 'infected' in t
+
+
+def _format_zone_dmin_dmax_attr(value, territory_file):
+    """Zombie territory XML expects integer dmin/dmax; other territory files keep two decimal places."""
+    n = float(value)
+    stem = territory_file.stem if isinstance(territory_file, Path) else Path(territory_file).stem
+    if _is_zombie_territory_xml_stem(stem):
+        return str(int(round(n)))
+    return str(round(n, 2))
+
+
 def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=None):
     """
     Save territory zones to XML files in mpmissions/env directory.
@@ -2260,13 +2275,13 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
                             if dmin is None or str(dmin).strip() == '':
                                 zone_elem.attrib.pop('dmin', None)
                             else:
-                                zone_elem.set('dmin', str(round(float(dmin), 2)))
+                                zone_elem.set('dmin', _format_zone_dmin_dmax_attr(dmin, territory_file))
                         if 'dmax' in zone_data:
                             dmax = zone_data.get('dmax')
                             if dmax is None or str(dmax).strip() == '':
                                 zone_elem.attrib.pop('dmax', None)
                             else:
-                                zone_elem.set('dmax', str(round(float(dmax), 2)))
+                                zone_elem.set('dmax', _format_zone_dmin_dmax_attr(dmax, territory_file))
                         
                         updated_count += 1
                 
@@ -2288,10 +2303,10 @@ def save_territories(mission_dir, zones_data, deleted_indices=None, new_indices=
 
                     dmin = zone_data.get('dmin')
                     if dmin is not None and str(dmin).strip() != '':
-                        new_zone.set('dmin', str(round(float(dmin), 2)))
+                        new_zone.set('dmin', _format_zone_dmin_dmax_attr(dmin, territory_file))
                     dmax = zone_data.get('dmax')
                     if dmax is not None and str(dmax).strip() != '':
-                        new_zone.set('dmax', str(round(float(dmax), 2)))
+                        new_zone.set('dmax', _format_zone_dmin_dmax_attr(dmax, territory_file))
                     
                     added_count += 1
                 

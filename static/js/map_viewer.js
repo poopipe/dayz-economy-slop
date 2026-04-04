@@ -204,6 +204,55 @@ let overlayCanvas = null;
 let overlayCtx = null;
 let animationFrameId = null;
 let isPanning = false;
+
+/** Shift or Alt: toggle / add to selection (marquee additive when held during drag). */
+function isSelectionAdditiveModifier(e) {
+    return !!(e && (e.shiftKey || e.altKey));
+}
+
+/** Shallow compare of marker snapshots from getOriginalData (floats use epsilon). */
+function markerOriginalDataSnapshotsEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const k of keys) {
+        const va = a[k];
+        const vb = b[k];
+        if (va == null && vb == null) continue;
+        if (typeof va === 'number' && typeof vb === 'number' &&
+            Number.isFinite(va) && Number.isFinite(vb)) {
+            if (Math.abs(va - vb) > 1e-5) return false;
+        } else if (va !== vb) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function pruneOriginalSnapshotIfUnchanged(typeConfig, index) {
+    if (!typeConfig || !typeConfig.originalPositions || !typeConfig.originalPositions.has(index)) return;
+    const marker = typeConfig.getMarker(index);
+    if (!marker) return;
+    const orig = typeConfig.originalPositions.get(index);
+    const cur = typeConfig.getOriginalData(marker);
+    if (markerOriginalDataSnapshotsEqual(cur, orig)) {
+        typeConfig.originalPositions.delete(index);
+    }
+}
+
+function markerTypeIndexHasDirtyOriginalSnapshot(typeConfig, index) {
+    if (!typeConfig || !typeConfig.originalPositions || !typeConfig.originalPositions.has(index)) return false;
+    const marker = typeConfig.getMarker(index);
+    if (!marker) return false;
+    return !markerOriginalDataSnapshotsEqual(typeConfig.getOriginalData(marker), typeConfig.originalPositions.get(index));
+}
+
+function pruneUnchangedOriginalSnapshotsForType(typeConfig) {
+    if (!typeConfig || !typeConfig.originalPositions || typeConfig.originalPositions.size === 0) return;
+    for (const index of Array.from(typeConfig.originalPositions.keys())) {
+        pruneOriginalSnapshotIfUnchanged(typeConfig, index);
+    }
+}
 let isZooming = false;
 let needsRedraw = false;
 
@@ -1164,10 +1213,11 @@ class MarkerInteractionHandler {
         if (clicked) {
             const { index, marker } = clicked;
             
-            if (modifiers.altKey) {
-                // Alt+Click - toggle selection
+            if (modifiers.altKey || modifiers.shiftKey) {
+                // Shift+Click or Alt+Click — toggle selection
                 if (this.typeConfig.selected.has(index)) {
                     this.typeConfig.selected.delete(index);
+                    pruneOriginalSnapshotIfUnchanged(this.typeConfig, index);
                 } else {
                     this.typeConfig.selected.add(index);
                 }
@@ -1494,6 +1544,7 @@ class SelectionManager {
             // Toggle selection
             if (typeConfig.selected.has(index)) {
                 typeConfig.selected.delete(index);
+                pruneOriginalSnapshotIfUnchanged(typeConfig, index);
             } else {
                 typeConfig.selected.add(index);
             }
@@ -1517,6 +1568,9 @@ class SelectionManager {
         for (const markerType of Object.keys(markerTypes)) {
             markerTypes[markerType].selected.clear();
         }
+        for (const markerType of Object.keys(markerTypes)) {
+            pruneUnchangedOriginalSnapshotsForType(markerTypes[markerType]);
+        }
     }
     
     // Clear selections for a specific type
@@ -1527,6 +1581,7 @@ class SelectionManager {
             const typeConfig = markerTypes[markerType];
             if (typeConfig) {
                 typeConfig.selected.clear();
+                pruneUnchangedOriginalSnapshotsForType(typeConfig);
             }
         }
     }
@@ -1633,6 +1688,13 @@ class SelectionManager {
                     }
                 }
             });
+        }
+
+        if (markerSectionEditingActive('territories')) {
+            const tTypes = Object.keys(markerTypes).filter(mt => isTerritoryMarkerType(mt) && editingEnabled[mt]);
+            tTypes.forEach(mt => pruneUnchangedOriginalSnapshotsForType(markerTypes[mt]));
+        } else if (activeType !== null) {
+            pruneUnchangedOriginalSnapshotsForType(markerTypes[activeType]);
         }
         
         this.cleanupHiddenSelections();
@@ -2263,7 +2325,8 @@ class EditControlsManager extends BaseControlsManager {
         const canEditDimensions = typeConfig.canEditDimensions;
         
         const instructions = [
-            { label: 'Add', text: 'Ctrl+Click (Cmd+Click on Mac) to add marker at cursor' }
+            { label: 'Add', text: 'Ctrl+Click (Cmd+Click on Mac) to add marker at cursor' },
+            { label: 'Multi-select', text: 'Shift+Click or Alt+Click marker to add/remove from selection; same modifiers + marquee add to selection' }
         ];
         
         if (canEditRadius) {
@@ -2709,7 +2772,7 @@ function initCanvas() {
     // Set canvas size
     resizeCanvas();
     
-    // Pan with middle mouse button or space + drag
+    // Pan with middle mouse button only (Shift+LMB is reserved for multi-select)
     let panStartX = 0;
     let panStartY = 0;
     let panStartOffsetX = 0;
@@ -2733,8 +2796,8 @@ function initCanvas() {
             // Default right click - copy location
             handleRightClick(x, y);
             e.preventDefault();
-        } else if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
-            // Pan mode
+        } else if (e.button === 1) {
+            // Pan mode (middle mouse)
             isPanning = true;
             panStartX = x;
             panStartY = y;
@@ -2781,10 +2844,11 @@ function initCanvas() {
                 const clickedMarker = getMarkerAtPoint(markerType, x, y);
                 if (clickedMarker !== null) {
                     const typeCfg = markerTypes[markerType];
-                    if (e.altKey) {
-                        // Alt+Click - toggle selection
+                    if (isSelectionAdditiveModifier(e)) {
+                        // Shift+Click or Alt+Click — toggle selection
                         if (typeCfg.selected.has(clickedMarker.index)) {
                             typeCfg.selected.delete(clickedMarker.index);
+                            pruneOriginalSnapshotIfUnchanged(typeCfg, clickedMarker.index);
                         } else {
                             typeCfg.selected.add(clickedMarker.index);
                         }
@@ -2807,7 +2871,7 @@ function initCanvas() {
             }
             
             // Check for drag on non-radius-editable types
-            if (!e.altKey && tryStartDrag(x, y)) {
+            if (!isSelectionAdditiveModifier(e) && tryStartDrag(x, y)) {
                 e.preventDefault();
                 return;
             }
@@ -2874,7 +2938,7 @@ function initCanvas() {
             handleDragEnd();
             e.preventDefault();
             return;
-        } else if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+        } else if (e.button === 1) {
             isPanning = false;
             // Force a full redraw after panning ends
             draw();
@@ -3448,7 +3512,7 @@ function drawMarkerType(markerType) {
         }
         
         const isSelected = typeConfig.selected.has(index);
-        const hasUnsavedChanges = typeConfig.originalPositions.has(index);
+        const hasUnsavedChanges = markerTypeIndexHasDirtyOriginalSnapshot(typeConfig, index);
         const isNew = typeConfig.new.has(index);
         const isBeingDragged = isDraggingThisType && (draggedMarkerIndex === index || (draggedSelectedMarkers.get(markerType) && draggedSelectedMarkers.get(markerType).has(index)));
         const isEditingRadius = radiusEditMarkerType === markerType && radiusEditIndex === index;
@@ -4350,7 +4414,7 @@ function renderAiPatrolEditingInstructions() {
     if (!container) return;
     const instructions = [
         { label: 'Add', text: 'Ctrl+Click map to add waypoint at cursor' },
-        { label: 'Select', text: 'Alt+Click waypoint marker to toggle selection' },
+        { label: 'Select', text: 'Shift+Click or Alt+Click waypoint to add/remove from selection' },
         { label: 'Move', text: 'Click and drag selected waypoint marker(s)' },
         { label: 'Resize', text: 'Click and drag ring edge or white handle' },
         { label: 'Delete', text: 'Right-click selected waypoint marker(s) to delete' }
@@ -4754,7 +4818,7 @@ function handleMouseDown(e) {
     
     if (e.button === 0) { // Left click
         // Check for marker click first using selection manager
-        if (selectionManager.selectAtPoint(x, y, { altKey: e.altKey })) {
+        if (selectionManager.selectAtPoint(x, y, { altKey: isSelectionAdditiveModifier(e) })) {
             // Marker was selected
             syncAiPatrolSelectionFromWaypointSet();
             updateSelectedCount();
@@ -4789,7 +4853,7 @@ function handleMouseUp(e) {
         if (rectWidth > 5 && rectHeight > 5) {
             // Valid marquee - select markers using selection manager
             selectionManager.selectInRectangle(rectX, rectY, rectWidth, rectHeight, {
-                altKey: e.altKey
+                altKey: isSelectionAdditiveModifier(e)
             });
             syncAiPatrolSelectionFromWaypointSet();
         } else {
@@ -5057,6 +5121,7 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
                 // Alt key pressed - toggle selection (only if visible)
                 if (typeConfig.selected.has(index)) {
                     typeConfig.selected.delete(index);
+                    pruneOriginalSnapshotIfUnchanged(typeConfig, index);
                 } else {
                     // Only add if still visible
                     if (isMarkerVisible(markerType, index)) {
@@ -5066,6 +5131,7 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
             } else {
                 // Normal mode - select this one (clear others of same type and other types)
                 typeConfig.selected.clear();
+                pruneUnchangedOriginalSnapshotsForType(typeConfig);
                 // Only add if visible
                 if (isMarkerVisible(markerType, index)) {
                     typeConfig.selected.add(index);
@@ -5074,6 +5140,7 @@ function selectAtPointForType(markerType, screenX, screenY, altKey = false) {
                 for (const otherType of Object.keys(markerTypes)) {
                     if (otherType !== markerType && editingEnabled[otherType]) {
                         markerTypes[otherType].selected.clear();
+                        pruneUnchangedOriginalSnapshotsForType(markerTypes[otherType]);
                     }
                 }
             }
@@ -5529,6 +5596,9 @@ function handleDragEnd() {
                         syncTerritoryZoneMarkerToTerritories(radiusEditMarkerType, selectedIndex);
                     }
                 }
+                for (const selectedIndex of radiusEditSelectedMarkers) {
+                    pruneOriginalSnapshotIfUnchanged(typeConfig, selectedIndex);
+                }
             }
         }
         isEditingRadius = false;
@@ -5595,6 +5665,13 @@ function handleDragEnd() {
                 syncTerritoryZoneMarkerToTerritories(draggedMarkerType, index);
             });
         }
+    }
+
+    const pruneOffsets = draggedSelectedMarkers.get(draggedMarkerType);
+    if (pruneOffsets && pruneOffsets.size > 0) {
+        pruneOffsets.forEach((_, index) => pruneOriginalSnapshotIfUnchanged(typeConfig, index));
+    } else if (draggedMarkerIndex >= 0) {
+        pruneOriginalSnapshotIfUnchanged(typeConfig, draggedMarkerIndex);
     }
     
     isDragging = false;
@@ -10355,6 +10432,7 @@ function initializeEditMarkersUI() {
     territoryInstructions.style.marginTop = '0';
     territoryInstructions.style.marginBottom = '10px';
     territoryInstructions.innerHTML = '<strong>Add:</strong> Ctrl+Click (Cmd+Click on Mac) to add a zone at cursor<br>' +
+        '<strong>Multi-select:</strong> Shift+Click or Alt+Click zone (or Shift/Alt + marquee to add)<br>' +
         '<strong>Move:</strong> Click and drag zone center<br>' +
         '<strong>Resize:</strong> Drag ring edge or white handle<br>' +
         '<strong>Delete:</strong> Select zone(s) and press Delete/Backspace';
