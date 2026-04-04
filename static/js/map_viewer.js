@@ -118,7 +118,8 @@ let aiPatrolRadiusEditReferencePatrolIndex = -1;
 let aiPatrolInferredDefaults = {};
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
-let activeEditCategory = null; // 'markers' | 'eventSpawns' | 'effectAreas' | 'territories' | 'aiPatrols' | null
+let aiPatrolTypeFilter = 'all'; // all | waypoints | group
+let activeEditCategory = null; // 'markers' | 'eventSpawns' | 'effectAreas' | 'playerSpawns' | 'territories' | 'aiPatrols' | null
 
 const AI_PATROL_SIMPLE_TEXT_FIELDS = ['NumberOfAI', 'NumberOfAIMax', 'Chance'];
 const AI_PATROL_UNLIMITED_RELOAD_OPTIONS = [
@@ -4538,6 +4539,10 @@ function canEditAiPatrolOnMap() {
 }
 
 function updateAiPatrolEditingUI() {
+    const editToolsContainer = document.getElementById('aiPatrolEditToolsContainer');
+    if (editToolsContainer) {
+        editToolsContainer.style.display = aiPatrolEditingEnabled ? 'block' : 'none';
+    }
     const mixedSelection = isAiPatrolMixedWaypointSelection();
     const geometryFieldIds = ['aiPatrolMinSpreadRadius', 'aiPatrolMaxSpreadRadius'];
     const nonGeometryFieldIds = [
@@ -4584,6 +4589,14 @@ function renderAiPatrolEditingInstructions() {
 
 function isWaypointPatrol(patrol) {
     return !!(patrol && Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0);
+}
+
+function getAiPatrolTypeKey(patrol) {
+    return isWaypointPatrol(patrol) ? 'waypoints' : 'group';
+}
+
+function patrolMatchesTypeFilter(patrol) {
+    return aiPatrolTypeFilter === 'all' || getAiPatrolTypeKey(patrol) === aiPatrolTypeFilter;
 }
 
 function getAiPatrolFactionHue(faction) {
@@ -4709,10 +4722,12 @@ function drawAiPatrolOverlayOnMap() {
     if (showSelectedAiPatrolOnly) {
         const patrol = getSelectedAiPatrol();
         if (!patrol) return;
+        if (!patrolMatchesTypeFilter(patrol)) return;
         drawSingleAiPatrolOverlay(patrol, selectedAiPatrolIndex, selectedAiPatrolIndex);
         return;
     }
     aiPatrols.forEach((patrol, idx) => {
+        if (!patrolMatchesTypeFilter(patrol)) return;
         drawSingleAiPatrolOverlay(patrol, idx, selectedAiPatrolIndex);
     });
 }
@@ -5237,6 +5252,8 @@ function isMarkerVisible(markerType, index) {
         if (!showAiPatrolMarkers) return false;
         const ref = getAiPatrolWaypointRefByFlatIndex(index);
         if (!ref) return false;
+        const patrol = aiPatrols[ref.patrolIndex];
+        if (!patrolMatchesTypeFilter(patrol)) return false;
         if (showSelectedAiPatrolOnly && ref.patrolIndex !== selectedAiPatrolIndex) return false;
         return true;
     }
@@ -7119,7 +7136,8 @@ function isMarkerTypeInSection(markerType, section) {
     if (section === 'territories') return isTerritoryMarkerType(markerType);
     if (section === 'eventSpawns') return markerType === 'eventSpawns';
     if (section === 'effectAreas') return markerType === 'effectAreas';
-    if (section === 'markers') return !isTerritoryMarkerType(markerType) && markerType !== 'effectAreas' && markerType !== 'eventSpawns';
+    if (section === 'playerSpawns') return markerType === 'playerSpawnPoints';
+    if (section === 'markers') return !isTerritoryMarkerType(markerType) && markerType !== 'effectAreas' && markerType !== 'eventSpawns' && markerType !== 'playerSpawnPoints';
     return false;
 }
 
@@ -7226,6 +7244,26 @@ async function setEffectAreaEditingEnabled(enabled) {
     await handleEditingToggle('effectAreas', true);
     showEditControlsForType('effectAreas');
     preferredEditTypeSection = 'effectAreas';
+    draw();
+}
+
+async function setPlayerSpawnEditingEnabled(enabled) {
+    const checkbox = document.getElementById('playerSpawnEditingEnabled');
+    if (!checkbox) return;
+    checkbox.checked = enabled;
+
+    if (!enabled) {
+        if (editingEnabled.playerSpawnPoints) {
+            await handleEditingToggle('playerSpawnPoints', false);
+        }
+        hideEditControlsForType('playerSpawnPoints');
+        draw();
+        return;
+    }
+
+    await handleEditingToggle('playerSpawnPoints', true);
+    showEditControlsForType('playerSpawnPoints');
+    preferredEditTypeSection = 'playerSpawns';
     draw();
 }
 
@@ -7341,6 +7379,23 @@ const EDIT_CATEGORY_ADAPTERS = {
         },
         discardChanges: () => {
             restoreMarkerPositions('effectAreas');
+        }
+    },
+    playerSpawns: {
+        label: 'Player spawn editing',
+        isActive: () => markerSectionEditingActive('playerSpawns'),
+        hasUnsavedChanges: () => markerTypeHasChanges('playerSpawnPoints'),
+        setActive: async (enabled) => setPlayerSpawnEditingEnabled(enabled),
+        saveChanges: async () => {
+            const result = await saveMarkerChanges('playerSpawnPoints');
+            if (!result || !result.success) {
+                updateStatus(result?.message || 'Failed to save player spawn changes', true);
+                return false;
+            }
+            return true;
+        },
+        discardChanges: () => {
+            restoreMarkerPositions('playerSpawnPoints');
         }
     },
     territories: {
@@ -8664,17 +8719,20 @@ function refreshAiPatrolSelect() {
     if (!select) return;
     const current = selectedAiPatrolIndex;
     select.innerHTML = '';
+    const visiblePatrolIndices = [];
     aiPatrols.forEach((p, idx) => {
+        if (!patrolMatchesTypeFilter(p)) return;
+        visiblePatrolIndices.push(idx);
         const opt = document.createElement('option');
         opt.value = String(idx);
         opt.textContent = p?.Name || `Patrol ${idx + 1}`;
         select.appendChild(opt);
     });
-    if (current >= 0 && current < aiPatrols.length) {
+    if (current >= 0 && current < aiPatrols.length && visiblePatrolIndices.includes(current)) {
         select.value = String(current);
-    } else if (aiPatrols.length > 0) {
-        selectedAiPatrolIndex = 0;
-        select.value = '0';
+    } else if (visiblePatrolIndices.length > 0) {
+        selectedAiPatrolIndex = visiblePatrolIndices[0];
+        select.value = String(selectedAiPatrolIndex);
     } else {
         selectedAiPatrolIndex = -1;
     }
@@ -8851,6 +8909,7 @@ function findNearestAiPatrolWaypoint(screenX, screenY, threshold = 12) {
     for (let pIdx = 0; pIdx < aiPatrols.length; pIdx++) {
         if (showSelectedAiPatrolOnly && pIdx !== selectedAiPatrolIndex) continue;
         const patrol = aiPatrols[pIdx];
+        if (!patrolMatchesTypeFilter(patrol)) continue;
         if (!isWaypointPatrol(patrol)) continue;
         patrol.Waypoints.forEach((wp, wIdx) => {
             if (!Array.isArray(wp) || wp.length < 3) return;
@@ -10194,6 +10253,7 @@ function saveFilterAndDisplaySettings() {
     localStorage.setItem('map_viewer_showPlayerSpawnPoints', showPlayerSpawnPoints.toString());
     localStorage.setItem('map_viewer_showAiPatrolMarkers', showAiPatrolMarkers.toString());
     localStorage.setItem('map_viewer_showSelectedAiPatrolOnly', showSelectedAiPatrolOnly.toString());
+    localStorage.setItem('map_viewer_aiPatrolTypeFilter', aiPatrolTypeFilter);
     localStorage.setItem('map_viewer_aiPatrolEditingEnabled', aiPatrolEditingEnabled.toString());
     localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
     localStorage.setItem('map_viewer_backgroundImageOpacity', backgroundImageOpacity.toString());
@@ -10216,6 +10276,7 @@ const SIDEBAR_SECTION_ORDER = [
     'editMarkers',
     'editEventSpawns',
     'editEffectAreas',
+    'editPlayerSpawns',
     'editTerritories',
     'aiPatrols',
     'info'
@@ -10337,6 +10398,7 @@ function initializeSidebarSections() {
         'editMarkers',
         'editEventSpawns',
         'editEffectAreas',
+        'editPlayerSpawns',
         'editTerritories'
     ]);
     ordered.forEach(el => {
@@ -10419,6 +10481,13 @@ async function restoreSavedState() {
         showSelectedAiPatrolOnly = savedShowSelectedAiPatrolOnly === 'true';
         const checkbox = document.getElementById('aiPatrolShowSelectedOnly');
         if (checkbox) checkbox.checked = showSelectedAiPatrolOnly;
+    }
+
+    const savedAiPatrolTypeFilter = localStorage.getItem('map_viewer_aiPatrolTypeFilter');
+    if (savedAiPatrolTypeFilter && ['all', 'waypoints', 'group'].includes(savedAiPatrolTypeFilter)) {
+        aiPatrolTypeFilter = savedAiPatrolTypeFilter;
+        const select = document.getElementById('aiPatrolTypeFilter');
+        if (select) select.value = aiPatrolTypeFilter;
     }
     
     const savedAiPatrolEditingEnabled = localStorage.getItem('map_viewer_aiPatrolEditingEnabled');
@@ -10683,8 +10752,9 @@ function initializeEditMarkersUI() {
     const markerContainer = document.getElementById('editMarkersContainer');
     const eventSpawnContainer = document.getElementById('editEventSpawnsContainer');
     const effectAreaContainer = document.getElementById('editEffectAreasContainer');
+    const playerSpawnContainer = document.getElementById('editPlayerSpawnsContainer');
     const territoryContainer = document.getElementById('editTerritoriesContainer');
-    if (!markerContainer || !eventSpawnContainer || !effectAreaContainer || !territoryContainer) {
+    if (!markerContainer || !eventSpawnContainer || !effectAreaContainer || !playerSpawnContainer || !territoryContainer) {
         console.error('Edit marker containers not found');
         return;
     }
@@ -10789,6 +10859,30 @@ function initializeEditMarkersUI() {
     const effectAreaControlsContainer = document.createElement('div');
     effectAreaControlsContainer.id = 'effectAreaEditControlsContainer';
     effectAreaContainer.appendChild(effectAreaControlsContainer);
+
+    const playerSpawnEditingToggleLabel = document.createElement('label');
+    playerSpawnEditingToggleLabel.style.display = 'flex';
+    playerSpawnEditingToggleLabel.style.alignItems = 'center';
+    playerSpawnEditingToggleLabel.style.gap = '8px';
+    playerSpawnEditingToggleLabel.style.marginBottom = '10px';
+    playerSpawnEditingToggleLabel.style.fontSize = '12px';
+    playerSpawnEditingToggleLabel.style.color = 'var(--nord4)';
+
+    const playerSpawnEditingToggleCheckbox = document.createElement('input');
+    playerSpawnEditingToggleCheckbox.type = 'checkbox';
+    playerSpawnEditingToggleCheckbox.id = 'playerSpawnEditingEnabled';
+    playerSpawnEditingToggleCheckbox.checked = markerSectionEditingActive('playerSpawns');
+
+    const playerSpawnEditingToggleText = document.createElement('span');
+    playerSpawnEditingToggleText.textContent = 'Player spawn editing';
+
+    playerSpawnEditingToggleLabel.appendChild(playerSpawnEditingToggleCheckbox);
+    playerSpawnEditingToggleLabel.appendChild(playerSpawnEditingToggleText);
+    playerSpawnContainer.appendChild(playerSpawnEditingToggleLabel);
+
+    const playerSpawnControlsContainer = document.createElement('div');
+    playerSpawnControlsContainer.id = 'playerSpawnEditControlsContainer';
+    playerSpawnContainer.appendChild(playerSpawnControlsContainer);
 
     const territoryLabel = document.createElement('label');
     territoryLabel.setAttribute('for', 'editTerritoryTypeSelect');
@@ -10902,6 +10996,9 @@ function initializeEditMarkersUI() {
         new EditControlsManager('effectAreaEditControlsContainer', {
             markerTypeFilter: (markerType) => isMarkerTypeInSection(markerType, 'effectAreas')
         }),
+        new EditControlsManager('playerSpawnEditControlsContainer', {
+            markerTypeFilter: (markerType) => isMarkerTypeInSection(markerType, 'playerSpawns')
+        }),
         new EditControlsManager('territoryEditControlsContainer', {
             markerTypeFilter: (markerType) =>
                 isMarkersCategoryType(markerType) &&
@@ -10938,6 +11035,14 @@ function initializeEditMarkersUI() {
         }
     });
 
+    playerSpawnEditingToggleCheckbox.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        const changed = await requestEditCategoryState('playerSpawns', enabled);
+        if (!changed) {
+            playerSpawnEditingToggleCheckbox.checked = !enabled;
+        }
+    });
+
     territoryEditingToggleCheckbox.addEventListener('change', async (e) => {
         const enabled = e.target.checked;
         const changed = await requestEditCategoryState('territories', enabled);
@@ -10967,6 +11072,9 @@ function updateTerritoryTypeEditUI() {
     }
     if (markerSectionEditingActive('effectAreas')) {
         showEditControlsForType('effectAreas');
+    }
+    if (markerSectionEditingActive('playerSpawns')) {
+        showEditControlsForType('playerSpawnPoints');
     }
     if (markerSectionEditingActive('territories')) {
         showEditControlsForType(getPrimaryTerritoryEditPanelMarkerType());
@@ -11162,6 +11270,30 @@ document.addEventListener('DOMContentLoaded', async () => {
             saveFilterAndDisplaySettings();
         });
     }
+
+    const aiPatrolTypeFilterSelect = document.getElementById('aiPatrolTypeFilter');
+    if (aiPatrolTypeFilterSelect) {
+        aiPatrolTypeFilterSelect.value = aiPatrolTypeFilter;
+        aiPatrolTypeFilterSelect.addEventListener('change', (e) => {
+            const nextFilter = String(e.target.value || 'all');
+            const previousFilter = aiPatrolTypeFilter;
+            if (!['all', 'waypoints', 'group'].includes(nextFilter)) {
+                e.target.value = previousFilter;
+                return;
+            }
+            if (aiPatrolHasUnsavedChanges && selectedAiPatrolIndex >= 0) {
+                e.target.value = previousFilter;
+                updateStatus('Unsaved AI patrol changes. Save or Discard before changing patrol filters.', true);
+                return;
+            }
+            aiPatrolTypeFilter = nextFilter;
+            refreshAiPatrolSelect();
+            applyAiPatrolToForm();
+            updateAiPatrolEditingUI();
+            requestDraw();
+            saveFilterAndDisplaySettings();
+        });
+    }
     
     const aiPatrolAddBtn = document.getElementById('aiPatrolAddBtn');
     if (aiPatrolAddBtn) {
@@ -11299,6 +11431,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         setAiPatrolEditingEnabled(false);
     } else if (markerSectionEditingActive('eventSpawns')) {
         activeEditCategory = 'eventSpawns';
+        setAiPatrolEditingEnabled(false);
+    } else if (markerSectionEditingActive('playerSpawns')) {
+        activeEditCategory = 'playerSpawns';
         setAiPatrolEditingEnabled(false);
     } else if (markerSectionEditingActive('effectAreas')) {
         activeEditCategory = 'effectAreas';

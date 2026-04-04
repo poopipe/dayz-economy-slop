@@ -140,6 +140,12 @@
                         </div>
                     </div>
 
+                    <div id="editPlayerSpawnsSection" class="sidebar-section-content" data-section-id="editPlayerSpawns" data-section-title="Player Spawns - Tools">
+                        <div id="editPlayerSpawnsContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
                     <div id="editTerritoriesSection" class="sidebar-section-content" data-section-id="editTerritories" data-section-title="Territories - Tools">
                         <div class="filter-section" id="territoryFilterSection" style="display: none;">
                             <div class="filter-builder">
@@ -171,10 +177,19 @@
                     <!-- AI Patrols -->
                     <div id="aiPatrolSection" class="sidebar-section-content" data-section-id="aiPatrols" data-section-title="AI patrols">
                         <div class="control-group">
+                            <label for="aiPatrolTypeFilter">Filter patrol type:</label>
+                            <select id="aiPatrolTypeFilter" class="filter-select">
+                                <option value="all">All patrols</option>
+                                <option value="waypoints">Waypoint patrols</option>
+                                <option value="group">Group patrols</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
                             <label>
                                 <input type="checkbox" id="aiPatrolEditingEnabled"> Patrol editing
                             </label>
                         </div>
+                        <div id="aiPatrolEditToolsContainer">
                         <div class="control-group">
                             <label for="aiPatrolSelect">Patrol:</label>
                             <select id="aiPatrolSelect" class="filter-select">
@@ -353,6 +368,7 @@
                         </div>
                         
                         <div class="control-group" id="aiPatrolFooterActionsContainer"></div>
+                        </div>
                     </div>
                     
                     <div id="locationSection" class="sidebar-section-content" data-section-id="location" data-section-title="Location">
