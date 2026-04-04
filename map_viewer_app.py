@@ -5,6 +5,7 @@ Flask application for displaying markers in 2D space from mapgrouppos.xml.
 
 import os
 import json
+import hashlib
 import xml.etree.ElementTree as ET
 import uuid
 import shutil
@@ -36,6 +37,12 @@ DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyh
 UPLOAD_FOLDER = Path('uploads/background_images')
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'}
+MARKER_COLOR_PALETTE = [
+    '#5E81AC', '#BF616A', '#A3BE8C', '#EBCB8B', '#B48EAD', '#88C0D0',
+    '#D08770', '#8FBCBB', '#81A1C1', '#E5E9F0', '#C06C84', '#6C5B7B',
+    '#355C7D', '#F8B195', '#99B898', '#FECEAB', '#FF847C', '#2A9D8F',
+    '#E76F51', '#264653'
+]
 
 
 def api_ok(**payload):
@@ -64,6 +71,83 @@ def resolve_mission_path(mission_dir):
     if not mission_path.exists():
         return api_error(f'Mission directory does not exist: {mission_dir}', 404), None
     return None, mission_path
+
+
+def _map_viewer_data_dir():
+    data_dir = Path(__file__).resolve().parent / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+def get_marker_color_config_path():
+    return _map_viewer_data_dir() / 'marker_colors.json'
+
+
+def _hash_to_color(key, salt='map-viewer'):
+    raw = f'{salt}|{key}'.encode('utf-8')
+    digest = hashlib.sha1(raw).hexdigest()
+    hue = int(digest[:4], 16) % 360
+    sat = 62 + (int(digest[4:6], 16) % 18)
+    light = 46 + (int(digest[6:8], 16) % 16)
+    return f'hsl({hue}, {sat}%, {light}%)'
+
+
+def _assign_missing_colors(names, target_map, *, unique_within=False, salt='map-viewer'):
+    normalized = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if unique_within:
+        used = {v for v in target_map.values() if isinstance(v, str) and v.strip()}
+        palette_iter = iter(MARKER_COLOR_PALETTE)
+    for name in sorted(set(normalized)):
+        existing = target_map.get(name)
+        if isinstance(existing, str) and existing.strip():
+            continue
+        if unique_within:
+            chosen = None
+            for _ in range(len(MARKER_COLOR_PALETTE)):
+                candidate = next(palette_iter, None)
+                if candidate is None:
+                    palette_iter = iter(MARKER_COLOR_PALETTE)
+                    candidate = next(palette_iter, None)
+                if candidate and candidate not in used:
+                    chosen = candidate
+                    break
+            if chosen is None:
+                chosen = _hash_to_color(name, salt=salt)
+            target_map[name] = chosen
+            used.add(chosen)
+        else:
+            target_map[name] = _hash_to_color(name, salt=salt)
+
+
+def load_marker_color_config():
+    config_path = get_marker_color_config_path()
+    default_config = {
+        'markerTypes': {},
+        'territoryTypes': {},
+        'eventSpawnTypes': {}
+    }
+    if not config_path.exists():
+        return default_config
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return default_config
+        cfg = {
+            'markerTypes': raw.get('markerTypes', {}) if isinstance(raw.get('markerTypes', {}), dict) else {},
+            'territoryTypes': raw.get('territoryTypes', {}) if isinstance(raw.get('territoryTypes', {}), dict) else {},
+            'eventSpawnTypes': raw.get('eventSpawnTypes', {}) if isinstance(raw.get('eventSpawnTypes', {}), dict) else {}
+        }
+        return cfg
+    except Exception as e:
+        print(f"Failed to load marker color config: {e}")
+        return default_config
+
+
+def save_marker_color_config(config):
+    config_path = get_marker_color_config_path()
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
 
 def allowed_file(filename):
     """Check if file extension is allowed."""
@@ -448,6 +532,44 @@ def export_map():
         raw = base64.b64decode(image_b64)
         path_obj.write_bytes(raw)
         return api_ok(path=str(path_obj), message=f'Saved to {path_obj}')
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return api_error(str(e), 500)
+
+
+@app.route('/api/marker-colors/sync', methods=['POST'])
+def sync_marker_colors():
+    """Sync marker color configuration based on currently available marker/event/territory types."""
+    try:
+        data = parse_json_body()
+        marker_type_keys = data.get('markerTypeKeys', []) if isinstance(data, dict) else []
+        territory_type_names = data.get('territoryTypeNames', []) if isinstance(data, dict) else []
+        event_spawn_type_names = data.get('eventSpawnTypeNames', []) if isinstance(data, dict) else []
+
+        config = load_marker_color_config()
+
+        _assign_missing_colors(
+            marker_type_keys,
+            config['markerTypes'],
+            unique_within=False,
+            salt='marker-type'
+        )
+        _assign_missing_colors(
+            event_spawn_type_names,
+            config['eventSpawnTypes'],
+            unique_within=False,
+            salt='event-spawn-type'
+        )
+        _assign_missing_colors(
+            territory_type_names,
+            config['territoryTypes'],
+            unique_within=True,
+            salt='territory-type'
+        )
+
+        save_marker_color_config(config)
+        return api_ok(config=config)
     except Exception as e:
         import traceback
         traceback.print_exc()

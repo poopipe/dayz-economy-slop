@@ -1,0 +1,50 @@
+{
+  "markerTypes": {
+    "markers": "#0066ff",
+    "effectAreas": "#ff8800",
+    "eventSpawns": "#c026d3",
+    "playerSpawnPoints": "#00ffff",
+    "zombieTerritoryZones": "#5E81AC",
+    "aiPatrolWaypoints": "#E76F51",
+    "territoryType_bear_territories": "hsl(25, 78%, 47%)",
+    "territoryType_cattle_territories": "hsl(290, 67%, 52%)",
+    "territoryType_fox_territories": "hsl(19, 79%, 58%)",
+    "territoryType_hare_territories": "hsl(33, 62%, 55%)",
+    "territoryType_hen_territories": "hsl(72, 75%, 48%)",
+    "territoryType_pig_territories": "hsl(22, 68%, 49%)",
+    "territoryType_red_deer_territories": "hsl(182, 71%, 46%)",
+    "territoryType_roe_deer_territories": "hsl(96, 79%, 61%)",
+    "territoryType_sheep_goat_territories": "hsl(236, 79%, 50%)",
+    "territoryType_wild_horse_territories": "hsl(356, 78%, 56%)",
+    "territoryType_wildboar_territories": "hsl(67, 68%, 50%)",
+    "territoryType_wolf_territories": "hsl(145, 76%, 57%)"
+  },
+  "territoryTypes": {
+    "bear_territories": "#5E81AC",
+    "cattle_territories": "#BF616A",
+    "fox_territories": "#A3BE8C",
+    "hare_territories": "#EBCB8B",
+    "hen_territories": "#B48EAD",
+    "pig_territories": "#88C0D0",
+    "red_deer_territories": "#D08770",
+    "roe_deer_territories": "#8FBCBB",
+    "sheep_goat_territories": "#81A1C1",
+    "wild_horse_territories": "#E5E9F0",
+    "wildboar_territories": "#C06C84",
+    "wolf_territories": "#6C5B7B",
+    "zombie_territories": "#355C7D"
+  },
+  "eventSpawnTypes": {
+    "ItemPlanks": "hsl(147, 64%, 58%)",
+    "StaticChristmasTree": "hsl(82, 72%, 56%)",
+    "StaticContaminatedArea": "hsl(111, 70%, 57%)",
+    "StaticHeliCrash": "hsl(19, 71%, 59%)",
+    "StaticMilitaryConvoy": "hsl(92, 64%, 53%)",
+    "VehicleBoat": "hsl(201, 67%, 53%)",
+    "VehicleCivilianSedan": "hsl(11, 62%, 61%)",
+    "VehicleHatchback02": "hsl(5, 67%, 54%)",
+    "VehicleOffroadHatchback": "hsl(93, 65%, 53%)",
+    "VehicleSedan02": "hsl(314, 71%, 46%)",
+    "VehicleTruck01": "hsl(123, 64%, 58%)"
+  }
+}

@@ -205,6 +205,17 @@ const MARKER_TYPE_COLORS = {
     playerSpawnPoints: { baseColor: '#00ffff' }, // cyan
     effectAreas: { baseColor: '#ff8800' }     // orange
 };
+const TERRITORY_COLOR_PALETTE = [
+    '#5E81AC', '#BF616A', '#A3BE8C', '#EBCB8B', '#B48EAD', '#88C0D0',
+    '#D08770', '#8FBCBB', '#81A1C1', '#E5E9F0', '#C06C84', '#6C5B7B',
+    '#355C7D', '#F8B195', '#99B898', '#FECEAB', '#FF847C', '#2A9D8F',
+    '#E76F51', '#264653'
+];
+let markerColorConfig = {
+    markerTypes: {},
+    territoryTypes: {},
+    eventSpawnTypes: {}
+};
 
 // Zoom-level LOD tuning (aim: preserve look, reduce draw cost when zoomed out)
 const RENDER_LOD = {
@@ -217,6 +228,139 @@ const RENDER_LOD = {
     // Minimum stroke width when we still stroke
     minStrokeWidth: 1
 };
+
+function hashStringToUInt32(value) {
+    const str = String(value || '');
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
+}
+
+function deterministicColorForKey(key, salt = 'map-viewer') {
+    const normalized = `${salt}|${String(key || '').trim()}`;
+    const hash = hashStringToUInt32(normalized);
+    const hue = hash % 360;
+    const saturation = 62 + (hash % 18); // 62-79%
+    const lightness = 46 + ((hash >>> 5) % 16); // 46-61%
+    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+function getConfiguredMarkerTypeColor(markerType, fallback = '#5E81AC') {
+    const key = String(markerType || '').trim();
+    const configured = key ? markerColorConfig?.markerTypes?.[key] : null;
+    return (typeof configured === 'string' && configured.trim())
+        ? configured
+        : fallback;
+}
+
+function getConfiguredEventSpawnTypeColor(typeName, fallback = null) {
+    const key = String(typeName || '').trim();
+    const configured = key ? markerColorConfig?.eventSpawnTypes?.[key] : null;
+    if (typeof configured === 'string' && configured.trim()) return configured;
+    if (fallback) return fallback;
+    return getConfiguredMarkerTypeColor('eventSpawns', MARKER_TYPE_COLORS.eventSpawns.baseColor);
+}
+
+function getConfiguredTerritoryTypeColor(typeName, fallback = null) {
+    const key = String(typeName || '').trim();
+    const configured = key ? markerColorConfig?.territoryTypes?.[key] : null;
+    if (typeof configured === 'string' && configured.trim()) return configured;
+    if (fallback) return fallback;
+    return deterministicColorForKey(key || 'territory', 'territory-type');
+}
+
+function ensureTerritoryColor(territoryType) {
+    const key = String(territoryType || '').trim();
+    if (!key) return TERRITORY_COLOR_PALETTE[0];
+    const current = markerColorConfig?.territoryTypes?.[key];
+    if (typeof current === 'string' && current.trim()) return current;
+    const used = new Set(Object.values(markerColorConfig?.territoryTypes || {}).filter(Boolean));
+    const available = TERRITORY_COLOR_PALETTE.find(c => !used.has(c));
+    const chosen = available || deterministicColorForKey(key, 'territory-type');
+    if (!markerColorConfig.territoryTypes) markerColorConfig.territoryTypes = {};
+    markerColorConfig.territoryTypes[key] = chosen;
+    return chosen;
+}
+
+function refreshMarkerTypeBaseColorsFromConfig() {
+    Object.keys(markerTypes).forEach((typeKey) => {
+        const cfg = markerTypes[typeKey];
+        if (!cfg || typeof cfg !== 'object') return;
+        if (!Object.prototype.hasOwnProperty.call(cfg, 'baseColor')) return;
+        cfg.baseColor = getConfiguredMarkerTypeColor(typeKey, cfg.baseColor);
+    });
+}
+
+function applyMarkerColorConfig(config) {
+    const normalized = (config && typeof config === 'object') ? config : {};
+    markerColorConfig = {
+        markerTypes: normalized.markerTypes && typeof normalized.markerTypes === 'object' ? { ...normalized.markerTypes } : {},
+        territoryTypes: normalized.territoryTypes && typeof normalized.territoryTypes === 'object' ? { ...normalized.territoryTypes } : {},
+        eventSpawnTypes: normalized.eventSpawnTypes && typeof normalized.eventSpawnTypes === 'object' ? { ...normalized.eventSpawnTypes } : {}
+    };
+    refreshMarkerTypeBaseColorsFromConfig();
+    territories.forEach((territory) => {
+        territory.color = ensureTerritoryColor(territory.territory_type);
+    });
+}
+
+function eventSpawnTypeToColor(typeName) {
+    const key = String(typeName || '').trim();
+    if (!key) return getConfiguredMarkerTypeColor('eventSpawns', MARKER_TYPE_COLORS.eventSpawns.baseColor);
+    const configured = markerColorConfig?.eventSpawnTypes?.[key];
+    if (typeof configured === 'string' && configured.trim()) return configured;
+    const hash = hashStringToUInt32(key);
+    const hue = hash % 360;
+    const saturation = 68 + (hash % 12); // 68-79%
+    const lightness = 48 + ((hash >>> 5) % 10); // 48-57%
+    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+function resolveMarkerCustomColor(markerType, marker) {
+    if (markerType === 'eventSpawns') {
+        return getConfiguredEventSpawnTypeColor(marker?.name, eventSpawnTypeToColor(marker?.name));
+    }
+    if (isTerritoryMarkerType(markerType)) {
+        const stem = marker?.territoryType || getTerritoryStemForFlatMarker(markerType, (markerTypes[markerType]?.getArray() || []).indexOf(marker));
+        return getConfiguredTerritoryTypeColor(stem, marker?.color || null);
+    }
+    if (marker && marker.color) {
+        return marker.color;
+    }
+    return null;
+}
+
+async function syncMarkerColorConfig() {
+    try {
+        const markerTypeKeys = ['markers', ...Object.keys(markerTypes)];
+        const eventSpawnTypeNames = getAllEventSpawnTypeNames();
+        const territoryTypeNames = getAllTerritoryTypeNames();
+        const response = await fetch('/api/marker-colors/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                markerTypeKeys,
+                eventSpawnTypeNames,
+                territoryTypeNames
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to sync marker colors');
+        }
+        applyMarkerColorConfig(data.config || {});
+    } catch (error) {
+        console.warn('Marker color config sync failed:', error.message);
+    }
+}
 
 // Consistent threshold for marker interaction (in screen pixels)
 const MARKER_INTERACTION_THRESHOLD = 5; // pixels, slightly larger than marker radius (4px)
@@ -662,7 +806,7 @@ const markerTypes = {
             let defaultDmin = null;
             let defaultDmax = null;
             let territoryType = 'infected'; // Default zombie territory type
-            let territoryColor = '#FF0000';
+            let territoryColor = ensureTerritoryColor(territoryType);
             let territoryIndex = -1;
             
             // Find first zombie territory
@@ -686,7 +830,7 @@ const markerTypes = {
             // If no zombie territory exists, create placeholder
             if (territoryIndex < 0) {
                 territoryIndex = 0; // Placeholder - will be created on save
-                territoryColor = '#FF0000';
+                territoryColor = ensureTerritoryColor(territoryType);
             }
             
             // Create new zone with default parameters
@@ -3586,8 +3730,7 @@ function drawMarkerType(markerType) {
             hasUnsavedChanges
         };
 
-        // Check if marker has custom color (for territory zones)
-        const customColor = marker.color || null;
+        const customColor = resolveMarkerCustomColor(markerType, marker);
         renderer.render(marker, index, renderState, customColor);
     });
 }
@@ -3604,7 +3747,7 @@ function drawMarkers() {
     if (!showMarkers) return;
     
     // Use the centralized marker color system for the base (non-editing) appearance.
-    const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+    const baseColor = getConfiguredMarkerTypeColor('markers', MARKER_TYPE_COLORS.markers.baseColor);
     const tmpRenderer = new MarkerRenderer({ baseColor }, ctx);
     
     markers.forEach((marker, index) => {
@@ -4049,7 +4192,7 @@ function shouldUseStaticMarkerCache() {
 function drawMarkersStatic(targetCtx) {
     if (!showMarkers) return;
     
-    const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+    const baseColor = getConfiguredMarkerTypeColor('markers', MARKER_TYPE_COLORS.markers.baseColor);
     const renderer = new MarkerRenderer({ baseColor }, targetCtx);
     const style = renderer.getRenderStyle({}, -1, {
         isSelected: false,
@@ -4091,7 +4234,7 @@ function drawMarkerTypeStatic(markerType, targetCtx) {
     array.forEach((marker, index) => {
         if (typeConfig.isDeleted(index)) return;
         if (!isMarkerVisible(markerType, index)) return;
-        const customColor = marker.color || null;
+        const customColor = resolveMarkerCustomColor(markerType, marker);
         renderer.render(marker, index, renderState, customColor);
     });
 }
@@ -4234,7 +4377,7 @@ function drawDynamicHighlightsOnOverlay() {
         if (!marker) return;
         if (!passesHeightFilter(marker)) return;
         const screenPos = worldToScreen(marker.x, marker.z);
-        const baseColor = MARKER_TYPE_COLORS.markers.baseColor;
+        const baseColor = getConfiguredMarkerTypeColor('markers', MARKER_TYPE_COLORS.markers.baseColor);
         const tmpRenderer = new MarkerRenderer({ baseColor }, overlayCtx);
         overlayCtx.save();
         overlayCtx.fillStyle = tmpRenderer.lightenColor(baseColor, 0.3);
@@ -5985,11 +6128,12 @@ function addMarkerAt(markerType, screenX, screenY) {
         
         // If no zombie territory exists, create placeholder
         if (targetTerritoryIndex < 0) {
+            const territoryColor = ensureTerritoryColor(selectedType);
             const newTerritory = {
                 id: territories.length,
                 name: `${selectedType}_0`,
                 territory_type: selectedType,
-                color: '#FF0000',
+                color: territoryColor,
                 zones: []
             };
             territories.push(newTerritory);
@@ -6036,15 +6180,7 @@ function addMarkerAt(markerType, screenX, screenY) {
         // If no territory of this type exists, we'll need to create one
         // For now, add the zone to a placeholder territory (will be created on save)
         if (targetTerritoryIndex < 0) {
-            // Create a placeholder territory entry
-            const colors = [
-                '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
-                '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
-                '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
-            ];
-            const typeNames = getAllTerritoryTypeNames();
-            const typeIndex = typeNames.indexOf(selectedType);
-            const color = colors[typeIndex % colors.length];
+            const color = ensureTerritoryColor(selectedType);
             
             // Create new territory entry
             const newTerritory = {
@@ -7447,7 +7583,7 @@ function createTerritoryTypeMarkerType(territoryType) {
             let defaultRadius = 50.0;
             let defaultDmin = null;
             let defaultDmax = null;
-            let territoryColor = '#FF0000';
+            let territoryColor = ensureTerritoryColor(territoryType);
             let territoryIndex = -1;
             
             // Find first territory of this type
@@ -7467,14 +7603,7 @@ function createTerritoryTypeMarkerType(territoryType) {
             // If no territory of this type exists, we'll create one when saving
             if (territoryIndex < 0) {
                 territoryIndex = 0; // Placeholder - will be created on save
-                const typeNames = getAllTerritoryTypeNames();
-                const typeIndex = typeNames.indexOf(territoryType);
-                const colors = [
-                    '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
-                    '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
-                    '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
-                ];
-                territoryColor = colors[typeIndex % colors.length];
+                territoryColor = ensureTerritoryColor(territoryType);
             }
             
             // Create new zone
@@ -7841,17 +7970,12 @@ function applyTargetTerritoryTypeToSelection(targetStem) {
     });
     let targetTi = territories.findIndex(t => t.territory_type === targetStem);
     if (targetTi < 0) {
-        const palette = [
-            '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
-            '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
-            '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
-        ];
         const n = territories.filter(t => t.territory_type === targetStem).length;
         territories.push({
             id: territories.length,
             name: `${targetStem}_${n}`,
             territory_type: targetStem,
-            color: palette[territories.length % palette.length],
+            color: ensureTerritoryColor(targetStem),
             zones: []
         });
         targetTi = territories.length - 1;
@@ -7879,17 +8003,12 @@ function createEmptyTerritoryShellForTargetStem() {
         updateStatus('Select a territory type first.', true);
         return;
     }
-    const palette = [
-        '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
-        '#FF8800', '#8800FF', '#00FF88', '#FF0088', '#88FF00', '#0088FF',
-        '#FF4444', '#44FF44', '#4444FF', '#FFFF44', '#FF44FF', '#44FFFF'
-    ];
     const n = territories.filter(t => t.territory_type === stem).length;
     territories.push({
         id: territories.length,
         name: `${stem}_${n}`,
         territory_type: stem,
-        color: palette[territories.length % palette.length],
+        color: ensureTerritoryColor(stem),
         zones: []
     });
     flattenTerritoryZones();
@@ -8031,6 +8150,9 @@ async function loadTerritories() {
         
         if (data.success) {
             territories = data.territories || [];
+            territories.forEach((territory) => {
+                territory.color = ensureTerritoryColor(territory.territory_type);
+            });
             // Flatten zones for editing (creates territory type-specific arrays)
             flattenTerritoryZones();
             // Update UI to include territory type-specific edit checkboxes
@@ -8200,6 +8322,7 @@ async function loadGroups() {
         await loadTerritories();
         await loadPlayerSpawnPoints();
         await loadAiPatrols();
+        await syncMarkerColorConfig();
         
         // Initialize height filter slider with max y-coordinate
         initializeHeightFilter();
