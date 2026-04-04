@@ -38,6 +38,7 @@ let activeFilters = []; // Array of filter objects: { type: 'usage'|'groupName',
 let effectAreas = []; // Effect areas from cfgeffectareas.json
 let eventSpawns = []; // Event spawns from cfgeventspawns.xml
 let visibleEventSpawns = new Set(); // For filtering event spawns
+let visibleEffectAreas = new Set(); // For filtering effect areas
 let playerSpawnPoints = []; // Player spawn points from cfgplayerspawnpoints.xml
 let showPlayerSpawnPoints = true;
 let backgroundImage = null;
@@ -50,6 +51,7 @@ let showEffectAreas = true;
 let showBackgroundImage = true;
 let backgroundImageOpacity = 1.0; // Opacity for background image (0.0 to 1.0)
 let activeEventSpawnFilters = []; // Separate filters for event spawns
+let activeEffectAreaFilters = []; // Separate filters for effect areas
 let territories = []; // Territories from env/*.xml files
 let visibleTerritories = new Set(); // For filtering territories
 let activeTerritoryFilters = []; // Separate filters for territories
@@ -116,7 +118,7 @@ let aiPatrolRadiusEditReferencePatrolIndex = -1;
 let aiPatrolInferredDefaults = {};
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
-let activeEditCategory = null; // 'markers' | 'territories' | 'aiPatrols' | null
+let activeEditCategory = null; // 'markers' | 'eventSpawns' | 'effectAreas' | 'territories' | 'aiPatrols' | null
 
 const AI_PATROL_SIMPLE_TEXT_FIELDS = ['NumberOfAI', 'NumberOfAIMax', 'Chance'];
 const AI_PATROL_UNLIMITED_RELOAD_OPTIONS = [
@@ -1606,7 +1608,7 @@ class MarkerInteractionHandler {
         } else {
             // Even without splicing, deleting can affect visibility in some filters (rare but safe).
             // Keep this lightweight by only reapplying when filters are active.
-            if (activeFilters.length > 0 || activeEventSpawnFilters.length > 0 || activeTerritoryFilters.length > 0) {
+            if (activeFilters.length > 0 || activeEventSpawnFilters.length > 0 || activeEffectAreaFilters.length > 0 || activeTerritoryFilters.length > 0) {
                 applyFilters();
             } else {
                 requestDraw();
@@ -2049,14 +2051,6 @@ class EditControlsManager extends BaseControlsManager {
         wrapper.style.display = 'none';
         wrapper.style.marginTop = '10px';
         
-        // Add "Show only this type" checkbox.
-        // For event spawns, place this above "Event Type for New Spawns" for better UX.
-        const shouldPlaceFilterBeforeCustomControls = markerType === 'eventSpawns';
-        if (shouldPlaceFilterBeforeCustomControls) {
-            const filterCheckbox = this.createFilterCheckbox(markerType);
-            wrapper.appendChild(filterCheckbox);
-        }
-        
         // Add custom controls (if any)
         if (config.customControls && config.customControls.length > 0) {
             const customContainer = document.createElement('div');
@@ -2070,12 +2064,6 @@ class EditControlsManager extends BaseControlsManager {
             wrapper.appendChild(customContainer);
         }
         
-        // Default placement for filter checkbox (most types)
-        if (!shouldPlaceFilterBeforeCustomControls) {
-            const filterCheckbox = this.createFilterCheckbox(markerType);
-            wrapper.appendChild(filterCheckbox);
-        }
-        
         // Add instructions
         const instructions = this.createInstructions(config.instructions);
         wrapper.appendChild(instructions);
@@ -2085,35 +2073,6 @@ class EditControlsManager extends BaseControlsManager {
         wrapper.appendChild(buttonContainer);
         
         return wrapper;
-    }
-    
-    createFilterCheckbox(markerType) {
-        const container = document.createElement('div');
-        container.style.marginBottom = '10px';
-        
-        const label = document.createElement('label');
-        label.style.display = 'flex';
-        label.style.alignItems = 'center';
-        label.style.cursor = 'pointer';
-        label.style.fontSize = '12px';
-        label.style.color = 'var(--nord4)';
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.id = `filterToType_${markerType}`;
-        checkbox.style.marginRight = '6px';
-        checkbox.style.cursor = 'pointer';
-        
-        checkbox.addEventListener('change', (e) => {
-            filterCheckboxEnabled = e.target.checked; // Update global preference
-            handleFilterToSingleType(markerType, e.target.checked);
-        });
-        
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode('Show only this marker type'));
-        
-        container.appendChild(label);
-        return container;
     }
     
     createInstructions(instructions) {
@@ -5267,6 +5226,13 @@ function isMarkerVisible(markerType, index) {
         }
         return true;
     }
+    if (markerType === 'effectAreas') {
+        if (!showEffectAreas) return false;
+        if (visibleEffectAreas.size > 0 && !visibleEffectAreas.has(index)) {
+            return false;
+        }
+        return true;
+    }
     if (markerType === 'aiPatrolWaypoints') {
         if (!showAiPatrolMarkers) return false;
         const ref = getAiPatrolWaypointRefByFlatIndex(index);
@@ -6234,6 +6200,7 @@ function addMarkerAt(markerType, screenX, screenY) {
     // can appear right away (instead of waiting for an edit-mode transition to re-run filters).
     if (
         (markerType === 'eventSpawns' && activeEventSpawnFilters.length > 0) ||
+        (markerType === 'effectAreas' && activeEffectAreaFilters.length > 0) ||
         ((markerType === 'zombieTerritoryZones' || markerType.startsWith('territoryType_')) && activeTerritoryFilters.length > 0)
     ) {
         applyFilters(); // also triggers redraw + cache invalidation
@@ -6929,12 +6896,6 @@ async function handleEditingToggle(markerType, enabled, options = {}) {
                 if (!skipEditControlsUI) {
                     hideEditControlsForType(otherType);
                 }
-                // Don't disable the filter when switching types - just update checkbox state
-                // The filter will be updated to the new type below
-                const otherFilterCheckbox = document.getElementById(`filterToType_${otherType}`);
-                if (otherFilterCheckbox) {
-                    otherFilterCheckbox.checked = false;
-                }
             }
         }
         // Also clear regular markers
@@ -6968,40 +6929,10 @@ async function handleEditingToggle(markerType, enabled, options = {}) {
     
     // Show/hide edit controls using EditControlsManager
     if (enabled && !skipEditControlsUI) {
-        // If filter is currently enabled for a different type, update it to this type
-        if (filterCheckboxEnabled && isFilteredToSingleType && filteredMarkerType !== markerType) {
-            // Update filter to new type without disabling it first
-            handleFilterToSingleType(markerType, true);
-        }
-        
         // Show controls for this type and hide all others
         showEditControlsForType(markerType);
-        
-        // Use setTimeout to ensure the controls are visible before accessing the checkbox
-        setTimeout(() => {
-            // Update filter checkbox state to reflect global preference
-            const filterCheckbox = document.getElementById(`filterToType_${markerType}`);
-            if (filterCheckbox) {
-                filterCheckbox.checked = filterCheckboxEnabled;
-                // If filter is enabled but not yet applied to this type, apply it
-                if (filterCheckboxEnabled && (!isFilteredToSingleType || filteredMarkerType !== markerType)) {
-                    handleFilterToSingleType(markerType, true);
-                }
-            }
-        }, 0);
     } else if (!enabled) {
         hideEditControlsForType(markerType);
-        // Only disable filter if user explicitly disabled editing AND filter is not enabled globally
-        // When switching types, we don't want to disable the filter
-        if (filteredMarkerType === markerType && isFilteredToSingleType && !filterCheckboxEnabled) {
-            // User explicitly unchecked the filter, so disable it
-            handleFilterToSingleType(markerType, false);
-        }
-        // Update checkbox state (uncheck it)
-        const filterCheckbox = document.getElementById(`filterToType_${markerType}`);
-        if (filterCheckbox) {
-            filterCheckbox.checked = false;
-        }
     }
     
     // Update canvas cursor style
@@ -7186,7 +7117,10 @@ function getEditableMarkerTypesInHitTestOrder() {
 function isMarkerTypeInSection(markerType, section) {
     if (!isMarkersCategoryType(markerType)) return false;
     if (section === 'territories') return isTerritoryMarkerType(markerType);
-    return !isTerritoryMarkerType(markerType);
+    if (section === 'eventSpawns') return markerType === 'eventSpawns';
+    if (section === 'effectAreas') return markerType === 'effectAreas';
+    if (section === 'markers') return !isTerritoryMarkerType(markerType) && markerType !== 'effectAreas' && markerType !== 'eventSpawns';
+    return false;
 }
 
 let preferredEditTypeSection = 'markers';
@@ -7252,6 +7186,46 @@ async function setMarkersEditingEnabled(enabled) {
         await handleEditingToggle(selectedType, true);
         preferredEditTypeSection = 'markers';
     }
+    draw();
+}
+
+async function setEventSpawnEditingEnabled(enabled) {
+    const checkbox = document.getElementById('eventSpawnEditingEnabled');
+    if (!checkbox) return;
+    checkbox.checked = enabled;
+
+    if (!enabled) {
+        if (editingEnabled.eventSpawns) {
+            await handleEditingToggle('eventSpawns', false);
+        }
+        hideEditControlsForType('eventSpawns');
+        draw();
+        return;
+    }
+
+    await handleEditingToggle('eventSpawns', true);
+    showEditControlsForType('eventSpawns');
+    preferredEditTypeSection = 'eventSpawns';
+    draw();
+}
+
+async function setEffectAreaEditingEnabled(enabled) {
+    const checkbox = document.getElementById('effectAreaEditingEnabled');
+    if (!checkbox) return;
+    checkbox.checked = enabled;
+
+    if (!enabled) {
+        if (editingEnabled.effectAreas) {
+            await handleEditingToggle('effectAreas', false);
+        }
+        hideEditControlsForType('effectAreas');
+        draw();
+        return;
+    }
+
+    await handleEditingToggle('effectAreas', true);
+    showEditControlsForType('effectAreas');
+    preferredEditTypeSection = 'effectAreas';
     draw();
 }
 
@@ -7333,6 +7307,40 @@ const EDIT_CATEGORY_ADAPTERS = {
         discardChanges: () => {
             const dirtyTypes = getDirtyMarkerTypesForSection('markers');
             dirtyTypes.forEach(markerType => restoreMarkerPositions(markerType));
+        }
+    },
+    eventSpawns: {
+        label: 'Event spawn editing',
+        isActive: () => markerSectionEditingActive('eventSpawns'),
+        hasUnsavedChanges: () => markerTypeHasChanges('eventSpawns'),
+        setActive: async (enabled) => setEventSpawnEditingEnabled(enabled),
+        saveChanges: async () => {
+            const result = await saveMarkerChanges('eventSpawns');
+            if (!result || !result.success) {
+                updateStatus(result?.message || 'Failed to save event spawn changes', true);
+                return false;
+            }
+            return true;
+        },
+        discardChanges: () => {
+            restoreMarkerPositions('eventSpawns');
+        }
+    },
+    effectAreas: {
+        label: 'Effect area editing',
+        isActive: () => markerSectionEditingActive('effectAreas'),
+        hasUnsavedChanges: () => markerTypeHasChanges('effectAreas'),
+        setActive: async (enabled) => setEffectAreaEditingEnabled(enabled),
+        saveChanges: async () => {
+            const result = await saveMarkerChanges('effectAreas');
+            if (!result || !result.success) {
+                updateStatus(result?.message || 'Failed to save effect area changes', true);
+                return false;
+            }
+            return true;
+        },
+        discardChanges: () => {
+            restoreMarkerPositions('effectAreas');
         }
     },
     territories: {
@@ -7531,13 +7539,29 @@ async function loadEffectAreas() {
         
         if (data.success) {
             effectAreas = data.areas || [];
+            const effectAreaFilterSection = document.getElementById('effectAreaFilterSection');
+            if (effectAreaFilterSection) {
+                effectAreaFilterSection.style.display = 'block';
+                populateFilterEffectAreaNameDropdown();
+            }
+            applyFilters();
             invalidateStaticMarkerCache();
             requestDraw(); // Redraw to show effect areas
         } else {
             effectAreas = [];
+            const effectAreaFilterSection = document.getElementById('effectAreaFilterSection');
+            if (effectAreaFilterSection) {
+                effectAreaFilterSection.style.display = 'block';
+                populateFilterEffectAreaNameDropdown();
+            }
         }
     } catch (error) {
         effectAreas = [];
+        const effectAreaFilterSection = document.getElementById('effectAreaFilterSection');
+        if (effectAreaFilterSection) {
+            effectAreaFilterSection.style.display = 'block';
+            populateFilterEffectAreaNameDropdown();
+        }
     }
 }
 
@@ -9495,6 +9519,28 @@ function getAllTerritoryNames() {
     return Array.from(names).sort();
 }
 
+function getAllEffectAreaNames() {
+    const names = new Set();
+    effectAreas.forEach((area) => {
+        const name = String(area?.name || '').trim();
+        if (name) names.add(name);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+
+function populateFilterEffectAreaNameDropdown() {
+    const select = document.getElementById('effectAreaFilterNameSelect');
+    if (!select) return;
+    select.innerHTML = '';
+    const names = getAllEffectAreaNames();
+    names.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    });
+}
+
 // Populate filter territory type dropdown
 function populateFilterTerritoryTypeDropdown() {
     const typeSelect = document.getElementById('territoryFilterTypeSelect');
@@ -9555,6 +9601,9 @@ function getFilterableValues(item, filterType) {
         return name ? [name] : [];
     } else if (filterType === 'eventSpawnType') {
         // For eventSpawnType, return array with single name
+        const name = item.name ? item.name.trim() : '';
+        return name ? [name] : [];
+    } else if (filterType === 'effectAreaName') {
         const name = item.name ? item.name.trim() : '';
         return name ? [name] : [];
     } else if (filterType === 'territoryType') {
@@ -9635,11 +9684,13 @@ function applyFiltersToCollection(collection, filters, visibleSet) {
 function applyFilters() {
     visibleMarkers.clear();
     visibleEventSpawns.clear();
+    visibleEffectAreas.clear();
     visibleTerritories.clear();
     
     // Apply filters using the generic function
     applyFiltersToCollection(markers, activeFilters, visibleMarkers);
     applyFiltersToCollection(eventSpawns, activeEventSpawnFilters, visibleEventSpawns);
+    applyFiltersToCollection(effectAreas, activeEffectAreaFilters, visibleEffectAreas);
     applyFiltersToCollection(territories, activeTerritoryFilters, visibleTerritories);
     
     // Filters change what is visible, so the static marker cache must be re-rendered.
@@ -9847,6 +9898,92 @@ function updateEventSpawnFilterUI() {
             <button class="btn-remove-filter" onclick="removeEventSpawnFilter(${index})" title="Remove filter">×</button>
         `;
         
+        filtersList.appendChild(filterDiv);
+    });
+}
+
+function addEffectAreaFilter() {
+    const select = document.getElementById('effectAreaFilterNameSelect');
+    if (!select) return;
+    const selectedOptions = Array.from(select.selectedOptions);
+    if (selectedOptions.length === 0) {
+        alert('Please select at least one effect area name');
+        return;
+    }
+
+    const values = selectedOptions.map(opt => opt.value);
+    select.selectedIndex = -1;
+
+    const exists = activeEffectAreaFilters.some(f =>
+        f.values.length === values.length &&
+        f.values.every(name => values.includes(name)) &&
+        values.every(name => f.values.includes(name))
+    );
+    if (exists) {
+        alert('This filter already exists');
+        return;
+    }
+
+    activeEffectAreaFilters.push({
+        type: 'effectAreaName',
+        criteria: 'isOneOf',
+        values,
+        inverted: false
+    });
+
+    updateEffectAreaFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+function removeEffectAreaFilter(index) {
+    activeEffectAreaFilters.splice(index, 1);
+    updateEffectAreaFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+function clearAllEffectAreaFilters() {
+    activeEffectAreaFilters = [];
+    updateEffectAreaFilterUI();
+    applyFilters();
+    saveFilterAndDisplaySettings();
+}
+
+function toggleEffectAreaFilterInvert(index) {
+    if (index >= 0 && index < activeEffectAreaFilters.length) {
+        activeEffectAreaFilters[index].inverted = !activeEffectAreaFilters[index].inverted;
+        updateEffectAreaFilterUI();
+        applyFilters();
+        saveFilterAndDisplaySettings();
+    }
+}
+
+function updateEffectAreaFilterUI() {
+    const filtersList = document.getElementById('activeEffectAreaFiltersList');
+    if (!filtersList) return;
+
+    filtersList.innerHTML = '';
+    if (activeEffectAreaFilters.length === 0) {
+        filtersList.innerHTML = '<p style="color: #666; font-size: 0.9em;">No active filters</p>';
+        return;
+    }
+
+    activeEffectAreaFilters.forEach((filter, index) => {
+        const filterDiv = document.createElement('div');
+        filterDiv.className = 'active-filter-item';
+        const criteriaText = filter.inverted ? 'Hide' : 'Display';
+        const valuesText = filter.values.join(', ');
+        filterDiv.innerHTML = `
+            <span class="filter-text">Effect Area Name ${criteriaText}: ${valuesText}</span>
+            <label class="filter-invert-checkbox">
+                <input type="checkbox" ${filter.inverted ? 'checked' : ''}
+                       onchange="toggleEffectAreaFilterInvert(${index})"
+                       title="Invert filter">
+                <span>Invert</span>
+            </label>
+            <button class="btn-remove-filter" onclick="removeEffectAreaFilter(${index})" title="Remove filter">×</button>
+        `;
         filtersList.appendChild(filterDiv);
     });
 }
@@ -10064,6 +10201,7 @@ function saveFilterAndDisplaySettings() {
     // Save filters
     localStorage.setItem('map_viewer_activeFilters', JSON.stringify(activeFilters));
     localStorage.setItem('map_viewer_activeEventSpawnFilters', JSON.stringify(activeEventSpawnFilters));
+    localStorage.setItem('map_viewer_activeEffectAreaFilters', JSON.stringify(activeEffectAreaFilters));
     localStorage.setItem('map_viewer_activeTerritoryFilters', JSON.stringify(activeTerritoryFilters));
 }
 
@@ -10076,10 +10214,10 @@ const SIDEBAR_SECTION_ORDER = [
     'location',
     'display',
     'editMarkers',
+    'editEventSpawns',
+    'editEffectAreas',
+    'editTerritories',
     'aiPatrols',
-    'markerFilters',
-    'eventSpawnFilters',
-    'territoryFilters',
     'info'
 ];
 
@@ -10193,7 +10331,14 @@ function initializeSidebarSections() {
     
     ordered.forEach(el => container.appendChild(el));
     
-    const defaultOpenIds = new Set(['mission', 'display', 'editMarkers']);
+    const defaultOpenIds = new Set([
+        'mission',
+        'display',
+        'editMarkers',
+        'editEventSpawns',
+        'editEffectAreas',
+        'editTerritories'
+    ]);
     ordered.forEach(el => {
         const id = el.dataset.sectionId;
         makeSidebarSectionCollapsible(el, defaultOpenIds.has(id));
@@ -10341,6 +10486,21 @@ async function restoreSavedState() {
             updateEventSpawnFilterUI();
         } catch (e) {
             console.error('Error restoring event spawn filters:', e);
+        }
+    }
+
+    const savedActiveEffectAreaFilters = localStorage.getItem('map_viewer_activeEffectAreaFilters');
+    if (savedActiveEffectAreaFilters) {
+        try {
+            activeEffectAreaFilters = JSON.parse(savedActiveEffectAreaFilters);
+            activeEffectAreaFilters.forEach(filter => {
+                if (filter.inverted === undefined) {
+                    filter.inverted = false;
+                }
+            });
+            updateEffectAreaFilterUI();
+        } catch (e) {
+            console.error('Error restoring effect area filters:', e);
         }
     }
     
@@ -10521,8 +10681,10 @@ async function handleEditTypeSelection(selectedType, section) {
 // Initialize edit markers UI (dropdown selector and controls)
 function initializeEditMarkersUI() {
     const markerContainer = document.getElementById('editMarkersContainer');
+    const eventSpawnContainer = document.getElementById('editEventSpawnsContainer');
+    const effectAreaContainer = document.getElementById('editEffectAreasContainer');
     const territoryContainer = document.getElementById('editTerritoriesContainer');
-    if (!markerContainer || !territoryContainer) {
+    if (!markerContainer || !eventSpawnContainer || !effectAreaContainer || !territoryContainer) {
         console.error('Edit marker containers not found');
         return;
     }
@@ -10579,6 +10741,54 @@ function initializeEditMarkersUI() {
     const markerControlsContainer = document.createElement('div');
     markerControlsContainer.id = 'editControlsContainer';
     markerContainer.appendChild(markerControlsContainer);
+
+    const eventSpawnEditingToggleLabel = document.createElement('label');
+    eventSpawnEditingToggleLabel.style.display = 'flex';
+    eventSpawnEditingToggleLabel.style.alignItems = 'center';
+    eventSpawnEditingToggleLabel.style.gap = '8px';
+    eventSpawnEditingToggleLabel.style.marginBottom = '10px';
+    eventSpawnEditingToggleLabel.style.fontSize = '12px';
+    eventSpawnEditingToggleLabel.style.color = 'var(--nord4)';
+
+    const eventSpawnEditingToggleCheckbox = document.createElement('input');
+    eventSpawnEditingToggleCheckbox.type = 'checkbox';
+    eventSpawnEditingToggleCheckbox.id = 'eventSpawnEditingEnabled';
+    eventSpawnEditingToggleCheckbox.checked = markerSectionEditingActive('eventSpawns');
+
+    const eventSpawnEditingToggleText = document.createElement('span');
+    eventSpawnEditingToggleText.textContent = 'Event spawn editing';
+
+    eventSpawnEditingToggleLabel.appendChild(eventSpawnEditingToggleCheckbox);
+    eventSpawnEditingToggleLabel.appendChild(eventSpawnEditingToggleText);
+    eventSpawnContainer.appendChild(eventSpawnEditingToggleLabel);
+
+    const eventSpawnControlsContainer = document.createElement('div');
+    eventSpawnControlsContainer.id = 'eventSpawnEditControlsContainer';
+    eventSpawnContainer.appendChild(eventSpawnControlsContainer);
+
+    const effectAreaEditingToggleLabel = document.createElement('label');
+    effectAreaEditingToggleLabel.style.display = 'flex';
+    effectAreaEditingToggleLabel.style.alignItems = 'center';
+    effectAreaEditingToggleLabel.style.gap = '8px';
+    effectAreaEditingToggleLabel.style.marginBottom = '10px';
+    effectAreaEditingToggleLabel.style.fontSize = '12px';
+    effectAreaEditingToggleLabel.style.color = 'var(--nord4)';
+
+    const effectAreaEditingToggleCheckbox = document.createElement('input');
+    effectAreaEditingToggleCheckbox.type = 'checkbox';
+    effectAreaEditingToggleCheckbox.id = 'effectAreaEditingEnabled';
+    effectAreaEditingToggleCheckbox.checked = markerSectionEditingActive('effectAreas');
+
+    const effectAreaEditingToggleText = document.createElement('span');
+    effectAreaEditingToggleText.textContent = 'Effect area editing';
+
+    effectAreaEditingToggleLabel.appendChild(effectAreaEditingToggleCheckbox);
+    effectAreaEditingToggleLabel.appendChild(effectAreaEditingToggleText);
+    effectAreaContainer.appendChild(effectAreaEditingToggleLabel);
+
+    const effectAreaControlsContainer = document.createElement('div');
+    effectAreaControlsContainer.id = 'effectAreaEditControlsContainer';
+    effectAreaContainer.appendChild(effectAreaControlsContainer);
 
     const territoryLabel = document.createElement('label');
     territoryLabel.setAttribute('for', 'editTerritoryTypeSelect');
@@ -10684,7 +10894,13 @@ function initializeEditMarkersUI() {
 
     editControlsManagers = [
         new EditControlsManager('editControlsContainer', {
-            markerTypeFilter: (markerType) => isMarkersCategoryType(markerType) && !isTerritoryMarkerType(markerType)
+            markerTypeFilter: (markerType) => isMarkerTypeInSection(markerType, 'markers')
+        }),
+        new EditControlsManager('eventSpawnEditControlsContainer', {
+            markerTypeFilter: (markerType) => isMarkerTypeInSection(markerType, 'eventSpawns')
+        }),
+        new EditControlsManager('effectAreaEditControlsContainer', {
+            markerTypeFilter: (markerType) => isMarkerTypeInSection(markerType, 'effectAreas')
         }),
         new EditControlsManager('territoryEditControlsContainer', {
             markerTypeFilter: (markerType) =>
@@ -10706,6 +10922,22 @@ function initializeEditMarkersUI() {
         }
     });
 
+    eventSpawnEditingToggleCheckbox.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        const changed = await requestEditCategoryState('eventSpawns', enabled);
+        if (!changed) {
+            eventSpawnEditingToggleCheckbox.checked = !enabled;
+        }
+    });
+
+    effectAreaEditingToggleCheckbox.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        const changed = await requestEditCategoryState('effectAreas', enabled);
+        if (!changed) {
+            effectAreaEditingToggleCheckbox.checked = !enabled;
+        }
+    });
+
     territoryEditingToggleCheckbox.addEventListener('change', async (e) => {
         const enabled = e.target.checked;
         const changed = await requestEditCategoryState('territories', enabled);
@@ -10720,7 +10952,7 @@ function initializeEditMarkersUI() {
 // Update the edit marker type dropdowns with current marker types
 function updateEditMarkerTypeDropdown() {
     const allTypes = getAllEditableMarkerTypes();
-    const markerTypesOnly = allTypes.filter(type => !isTerritoryMarkerType(type.key));
+    const markerTypesOnly = allTypes.filter(type => isMarkerTypeInSection(type.key, 'markers'));
     populateEditTypeSelect('editMarkerTypeSelect', markerTypesOnly);
     populateTerritoryTargetTypeSelect();
 }
@@ -10730,6 +10962,12 @@ function updateTerritoryTypeEditUI() {
     updateEditMarkerTypeDropdown();
     editControlsManagers.forEach(manager => manager.initialize());
 
+    if (markerSectionEditingActive('eventSpawns')) {
+        showEditControlsForType('eventSpawns');
+    }
+    if (markerSectionEditingActive('effectAreas')) {
+        showEditControlsForType('effectAreas');
+    }
     if (markerSectionEditingActive('territories')) {
         showEditControlsForType(getPrimaryTerritoryEditPanelMarkerType());
     }
@@ -11059,6 +11297,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (markerSectionEditingActive('territories')) {
         activeEditCategory = 'territories';
         setAiPatrolEditingEnabled(false);
+    } else if (markerSectionEditingActive('eventSpawns')) {
+        activeEditCategory = 'eventSpawns';
+        setAiPatrolEditingEnabled(false);
+    } else if (markerSectionEditingActive('effectAreas')) {
+        activeEditCategory = 'effectAreas';
+        setAiPatrolEditingEnabled(false);
     } else if (markerSectionEditingActive('markers')) {
         activeEditCategory = 'markers';
         setAiPatrolEditingEnabled(false);
@@ -11080,6 +11324,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Event spawn filter buttons
     document.getElementById('addEventSpawnFilterBtn').addEventListener('click', addEventSpawnFilter);
     document.getElementById('clearAllEventSpawnFiltersBtn').addEventListener('click', clearAllEventSpawnFilters);
+    document.getElementById('addEffectAreaFilterBtn').addEventListener('click', addEffectAreaFilter);
+    document.getElementById('clearAllEffectAreaFiltersBtn').addEventListener('click', clearAllEffectAreaFilters);
     document.getElementById('filterType').addEventListener('change', updateFilterTypeUI);
     document.getElementById('filterGroupNameInput').addEventListener('input', filterGroupNameDropdown);
     
