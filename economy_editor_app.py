@@ -12,6 +12,12 @@ from pathlib import Path
 from flask import Flask, render_template, jsonify, request
 from datetime import datetime
 from collections import defaultdict
+from active_project import (
+    get_active_project,
+    set_active_project,
+    get_db_path_for_mission,
+    guess_profile_dir,
+)
 
 app = Flask(__name__)
 
@@ -774,9 +780,112 @@ def index():
     return render_template('economy_editor.html')
 
 
+@app.route('/api/active-project', methods=['GET', 'POST'])
+def active_project():
+    """Get or set the shared active project used by both apps."""
+    try:
+        if request.method == 'GET':
+            project = get_active_project()
+            return jsonify({'success': True, 'project': project})
+
+        data = request.json or {}
+        mission_dir = (data.get('mission_dir') or '').strip()
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
+
+        project = set_active_project(
+            mission_dir,
+            db_file_path=(data.get('db_file_path') or '').strip() or None,
+            profile_dir=(data.get('profile_dir') or '').strip() or None,
+        )
+        return jsonify({'success': True, 'project': project})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/new-project', methods=['POST'])
+def new_project():
+    """Create a mission folder (optional) and a fresh Economy Editor database."""
+    global current_mission_dir
+    try:
+        data = request.json or {}
+        mission_dir = (data.get('mission_dir') or '').strip()
+        create_mission_dir = bool(data.get('create_mission_dir', False))
+        import_xml = bool(data.get('import_xml', True))
+        overwrite_db = bool(data.get('overwrite_db', False))
+        profile_dir = (data.get('profile_dir') or '').strip() or None
+
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
+
+        mission_path = Path(mission_dir)
+        created_mission_dir = False
+
+        if not mission_path.exists():
+            if not create_mission_dir:
+                return jsonify({
+                    'success': False,
+                    'error': f'Mission directory does not exist: {mission_dir}. Point New Project at an existing mission folder.'
+                }), 404
+            mission_path.mkdir(parents=True, exist_ok=True)
+            created_mission_dir = True
+        elif not mission_path.is_dir():
+            return jsonify({
+                'success': False,
+                'error': f'Path exists but is not a directory: {mission_dir}'
+            }), 400
+
+        mission_dir = str(mission_path.resolve())
+        db_file = Path(get_db_path_for_mission(mission_dir))
+        created_db = False
+
+        if db_file.exists():
+            if not overwrite_db:
+                return jsonify({
+                    'success': False,
+                    'error': 'Database already exists for this mission. Enable overwrite to replace it.',
+                    'db_file_path': str(db_file)
+                }), 409
+            db_file.unlink()
+
+        current_mission_dir = mission_dir
+        init_database(mission_dir)
+        created_db = True
+
+        import_result = {'file_count': 0, 'element_count': 0}
+        if import_xml:
+            import_result = load_xml_to_database(mission_dir, 'type')
+
+        if profile_dir is None:
+            profile_dir = guess_profile_dir(mission_dir)
+
+        project = set_active_project(
+            mission_dir,
+            db_file_path=str(db_file),
+            profile_dir=profile_dir,
+        )
+
+        return jsonify({
+            'success': True,
+            'mission_dir': project['mission_dir'],
+            'db_file_path': project['db_file_path'],
+            'profile_dir': project['profile_dir'],
+            'created_mission_dir': created_mission_dir,
+            'created_db': created_db,
+            'imported_xml': import_xml,
+            'file_count': import_result.get('file_count', 0),
+            'element_count': import_result.get('element_count', 0),
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/load', methods=['POST'])
 def load_data():
     """Load XML data into the database."""
+    global current_mission_dir
     try:
         data = request.json
         mission_dir = data.get('mission_dir', current_mission_dir)
@@ -784,14 +893,19 @@ def load_data():
         
         # Initialize database
         init_database(mission_dir)
+        current_mission_dir = mission_dir
+        db_file_path = str(get_db_path(mission_dir))
         
         # Load XML data
         result = load_xml_to_database(mission_dir, element_type)
+        project = set_active_project(mission_dir, db_file_path=db_file_path)
         
         return jsonify({
             'success': True,
             'file_count': result['file_count'],
-            'element_count': result['element_count']
+            'element_count': result['element_count'],
+            'db_file_path': db_file_path,
+            'project': project,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -803,6 +917,7 @@ def load_database():
     try:
         data = request.json
         db_file_path = data.get('db_file_path', '').strip()
+        mission_dir = (data.get('mission_dir') or '').strip()
         
         if not db_file_path:
             return jsonify({'success': False, 'error': 'Database file path is required'}), 400
@@ -826,8 +941,12 @@ def load_database():
                 conn.close()
         except Exception as e:
             return jsonify({'success': False, 'error': f'Invalid database file: {str(e)}'}), 400
+
+        project = None
+        if mission_dir:
+            project = set_active_project(mission_dir, db_file_path=db_file_path)
         
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'project': project})
     except Exception as e:
         import traceback
         traceback.print_exc()

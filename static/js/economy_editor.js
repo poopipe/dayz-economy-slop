@@ -20,12 +20,11 @@ let selectedRows = new Set(); // Set of selected element keys for bulk operation
 let lastClickedRowIndexInDisplay = null; // For shift-click range selection (index in visible rows)
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     updateStatus('Ready');
     loadFilters();
-    loadDbFilePath();
     setupEventListeners();
-    loadMissionDir();
+    await restoreProjectPaths();
     
     // Auto-load database if path is remembered
     if (currentDbFilePath) {
@@ -48,6 +47,22 @@ function setupEventListeners() {
         });
     } else {
         console.error('Add New Item button not found');
+    }
+    const newProjectBtn = document.getElementById('newProjectBtn');
+    if (newProjectBtn) {
+        newProjectBtn.addEventListener('click', openNewProjectModal);
+    }
+    const createNewProjectBtn = document.getElementById('createNewProjectBtn');
+    if (createNewProjectBtn) {
+        createNewProjectBtn.addEventListener('click', createNewProject);
+    }
+    const cancelNewProjectBtn = document.getElementById('cancelNewProjectBtn');
+    if (cancelNewProjectBtn) {
+        cancelNewProjectBtn.addEventListener('click', closeNewProjectModal);
+    }
+    const closeNewProjectModalBtn = document.getElementById('closeNewProjectModal');
+    if (closeNewProjectModalBtn) {
+        closeNewProjectModalBtn.addEventListener('click', closeNewProjectModal);
     }
     document.getElementById('loadDataBtn').addEventListener('click', loadXMLData);
     document.getElementById('exportBtn').addEventListener('click', exportToXML);
@@ -396,6 +411,107 @@ function loadDbFilePath() {
     }
 }
 
+function applyProjectPaths(missionDir, dbFilePath) {
+    if (missionDir) {
+        currentMissionDir = missionDir;
+        const missionDirInput = document.getElementById('missionDir');
+        if (missionDirInput) missionDirInput.value = missionDir;
+        localStorage.setItem('editorV2MissionDir', missionDir);
+    }
+    if (dbFilePath) {
+        currentDbFilePath = dbFilePath;
+        const dbFilePathInput = document.getElementById('dbFilePath');
+        if (dbFilePathInput) dbFilePathInput.value = dbFilePath;
+        saveDbFilePath();
+    }
+}
+
+async function restoreProjectPaths() {
+    loadDbFilePath();
+    loadMissionDir();
+
+    try {
+        const response = await fetch('/api/active-project');
+        const data = await response.json();
+        if (data.success && data.project && data.project.mission_dir) {
+            applyProjectPaths(data.project.mission_dir, data.project.db_file_path);
+        }
+    } catch (error) {
+        console.warn('Could not load shared active project:', error);
+    }
+}
+
+function openNewProjectModal() {
+    const modal = document.getElementById('newProjectModal');
+    const input = document.getElementById('newProjectMissionDir');
+    if (input) {
+        input.value = (document.getElementById('missionDir')?.value || '').trim();
+    }
+    if (modal) {
+        modal.style.display = 'block';
+    }
+}
+
+function closeNewProjectModal() {
+    const modal = document.getElementById('newProjectModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function createNewProject() {
+    const missionDir = (document.getElementById('newProjectMissionDir')?.value || '').trim();
+    if (!missionDir) {
+        alert('Please enter a mission directory path');
+        return;
+    }
+
+    const importXml = document.getElementById('newProjectImportXml')?.checked ?? true;
+    const overwriteDb = document.getElementById('newProjectOverwriteDb')?.checked ?? false;
+
+    try {
+        updateStatus('Creating new project...');
+        const response = await fetch('/api/new-project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                create_mission_dir: false,
+                import_xml: importXml,
+                overwrite_db: overwriteDb,
+            })
+        });
+
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to create project');
+        }
+
+        applyProjectPaths(data.mission_dir, data.db_file_path);
+        closeNewProjectModal();
+
+        await loadReferenceData();
+        await loadElements();
+        populateFilterColumns();
+        updateFilterUI();
+
+        const parts = [];
+        if (data.created_db) parts.push('created database');
+        if (data.imported_xml) {
+            parts.push(`imported ${data.element_count || 0} elements from ${data.file_count || 0} files`);
+        }
+        updateStatus(`Project ready (${parts.join(', ') || 'configured'})`);
+        alert(
+            `Project created.\n\nMission: ${data.mission_dir}\nDatabase: ${data.db_file_path}\n\n` +
+            `Map Viewer will pick this up as the active project on refresh/load.`
+        );
+    } catch (error) {
+        console.error('Error creating project:', error);
+        alert(`Error creating project: ${error.message}`);
+        updateStatus('Failed to create project');
+    }
+}
+
 function saveDbFilePath() {
     if (currentDbFilePath) {
         localStorage.setItem('editorV2DbFilePath', currentDbFilePath);
@@ -422,7 +538,8 @@ async function loadDatabase() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                db_file_path: dbFilePath
+                db_file_path: dbFilePath,
+                mission_dir: (document.getElementById('missionDir')?.value || '').trim()
             })
         });
         
@@ -509,6 +626,9 @@ async function loadXMLData() {
         const data = await response.json();
         
         if (data.success) {
+            if (data.db_file_path) {
+                applyProjectPaths(missionDir, data.db_file_path);
+            }
             updateStatus(`Loaded ${data.element_count} elements from ${data.file_count} files`);
             loadReferenceData();
             loadElements();

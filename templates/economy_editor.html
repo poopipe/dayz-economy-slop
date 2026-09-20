@@ -15,6 +15,7 @@
         
         <div class="controls">
             <div class="control-group">
+                <button id="newProjectBtn" class="btn btn-success">New Project</button>
                 <button id="addNewItemBtn" class="btn btn-success">+ Add New Item</button>
             </div>
             <div class="control-group">
@@ -93,6 +94,35 @@
         <div class="main-content">
             <div class="table-container" id="tableContainer">
                 <p class="no-data">Load XML data to begin</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- New Project Modal -->
+    <div id="newProjectModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeNewProjectModal">&times;</span>
+            <h2>New Project</h2>
+            <p class="modal-help">Point at an existing mission folder on the new server. Creates a fresh Economy Editor database under that mission and shares the project with Map Viewer.</p>
+            <div class="control-group" style="flex-direction: column; align-items: stretch;">
+                <label for="newProjectMissionDir">Mission Directory:</label>
+                <input type="text" id="newProjectMissionDir" class="mission-dir-input" placeholder="e.g. E:\DayZ_Servers\MyServer\mpmissions\dayzOffline.chernarusplus">
+            </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="newProjectImportXml" checked>
+                    Import types XML into the new database
+                </label>
+            </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="newProjectOverwriteDb">
+                    Overwrite existing database for this mission
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button id="createNewProjectBtn" class="btn btn-success">Create Project</button>
+                <button id="cancelNewProjectBtn" class="btn">Cancel</button>
             </div>
         </div>
     </div>

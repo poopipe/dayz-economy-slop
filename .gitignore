@@ -46,3 +46,6 @@ desktop.ini
 *.tar.gz
 dist/
 build/
+
+# Per-machine active project (shared across apps)
+data/active_project.json

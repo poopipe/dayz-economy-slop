@@ -18,7 +18,9 @@
     "territoryType_wild_horse_territories": "hsl(356, 78%, 56%)",
     "territoryType_wildboar_territories": "hsl(67, 68%, 50%)",
     "territoryType_wolf_territories": "hsl(145, 76%, 57%)",
-    "groupMarkers": "hsl(323, 68%, 55%)"
+    "groupMarkers": "hsl(323, 68%, 55%)",
+    "territoryType_domestic_animals_territories": "hsl(29, 65%, 60%)",
+    "territoryType_wild_boar_territories": "hsl(268, 75%, 54%)"
   },
   "territoryTypes": {
     "bear_territories": "#5E81AC",
@@ -33,7 +35,9 @@
     "wild_horse_territories": "#E5E9F0",
     "wildboar_territories": "#C06C84",
     "wolf_territories": "#6C5B7B",
-    "zombie_territories": "#355C7D"
+    "zombie_territories": "#355C7D",
+    "domestic_animals_territories": "#F8B195",
+    "wild_boar_territories": "#99B898"
   },
   "eventSpawnTypes": {
     "ItemPlanks": "hsl(147, 64%, 58%)",
@@ -46,6 +50,13 @@
     "VehicleHatchback02": "hsl(5, 67%, 54%)",
     "VehicleOffroadHatchback": "hsl(93, 65%, 53%)",
     "VehicleSedan02": "hsl(314, 71%, 46%)",
-    "VehicleTruck01": "hsl(123, 64%, 58%)"
+    "VehicleTruck01": "hsl(123, 64%, 58%)",
+    "StaticAirplaneCrate": "hsl(32, 75%, 48%)",
+    "StaticBonfire": "hsl(92, 72%, 49%)",
+    "StaticPoliceCar": "hsl(216, 79%, 60%)",
+    "StaticPoliceSituation": "hsl(238, 78%, 59%)",
+    "StaticSantaCrash": "hsl(151, 77%, 47%)",
+    "StaticTrain": "hsl(240, 75%, 59%)",
+    "VehicleOffroad02": "hsl(255, 79%, 56%)"
   }
 }
