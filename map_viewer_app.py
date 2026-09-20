@@ -6,6 +6,7 @@ Flask application for displaying markers in 2D space from mapgrouppos.xml.
 import os
 import json
 import hashlib
+import copy
 import xml.etree.ElementTree as ET
 import uuid
 import shutil
@@ -19,6 +20,12 @@ from map_data_adapters import (
     TERRITORY_ZONES_ADAPTER,
     PLAYER_SPAWNS_ADAPTER,
     indexed_identity_parts,
+)
+from active_project import (
+    get_active_project,
+    set_active_project,
+    get_db_path_for_mission,
+    guess_profile_dir,
 )
 
 app = Flask(__name__)
@@ -351,6 +358,76 @@ def index():
     return render_template('map_viewer.html')
 
 
+@app.route('/api/active-project', methods=['GET', 'POST'])
+def active_project():
+    """Get or set the shared active project used by both apps."""
+    try:
+        if request.method == 'GET':
+            project = get_active_project()
+            return api_ok(project=project)
+
+        data = request.json or {}
+        mission_dir = (data.get('mission_dir') or '').strip()
+        if not mission_dir:
+            return api_error('Mission directory is required', 400)
+
+        project = set_active_project(
+            mission_dir,
+            db_file_path=(data.get('db_file_path') or '').strip() or None,
+            profile_dir=(data.get('profile_dir') or '').strip() or None,
+        )
+        return api_ok(project=project)
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@app.route('/api/new-project', methods=['POST'])
+def new_project():
+    """Create a mission folder (optional) and register it as the active project."""
+    try:
+        data = request.json or {}
+        mission_dir = (data.get('mission_dir') or '').strip()
+        create_mission_dir = bool(data.get('create_mission_dir', False))
+        profile_dir = (data.get('profile_dir') or '').strip() or None
+
+        if not mission_dir:
+            return api_error('Mission directory is required', 400)
+
+        mission_path = Path(mission_dir)
+        created_mission_dir = False
+
+        if not mission_path.exists():
+            if not create_mission_dir:
+                return api_error(
+                    f'Mission directory does not exist: {mission_dir}. Point New Project at an existing mission folder.',
+                    404,
+                )
+            mission_path.mkdir(parents=True, exist_ok=True)
+            created_mission_dir = True
+        elif not mission_path.is_dir():
+            return api_error(f'Path exists but is not a directory: {mission_dir}', 400)
+
+        mission_dir = str(mission_path.resolve())
+        if not profile_dir:
+            profile_dir = guess_profile_dir(mission_dir)
+
+        project = set_active_project(
+            mission_dir,
+            db_file_path=get_db_path_for_mission(mission_dir),
+            profile_dir=profile_dir,
+        )
+
+        return api_ok(
+            mission_dir=project['mission_dir'],
+            db_file_path=project['db_file_path'],
+            profile_dir=project['profile_dir'],
+            created_mission_dir=created_mission_dir,
+            note='Mission folder is ready. Create/import the Economy Editor database from the Economy Editor New Project dialog if needed.',
+        )
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
 @app.route('/api/groups')
 def get_groups():
     """Get group data from mapgrouppos.xml."""
@@ -359,6 +436,12 @@ def get_groups():
         err_response, mission_path = resolve_mission_path(mission_dir)
         if err_response:
             return err_response
+
+        # Keep Map Viewer and Economy Editor pointed at the same mission.
+        try:
+            set_active_project(str(mission_path))
+        except Exception:
+            pass
         
         # Look for mapgrouppos.xml
         mapgrouppos_file = mission_path / 'mapgrouppos.xml'
@@ -391,7 +474,7 @@ def get_groups():
         return api_error(str(e), 500)
 
 
-def save_groups(mapgrouppos_file_path, groups_data):
+def save_groups(mapgrouppos_file_path, groups_data, deleted_indices=None, new_indices=None):
     """
     Save group markers to mapgrouppos.xml.
     groups_data is a list of {name, x, y, z, hasY, usage, xml, isDeleted, ...} objects.
@@ -399,72 +482,161 @@ def save_groups(mapgrouppos_file_path, groups_data):
     if not mapgrouppos_file_path or not Path(mapgrouppos_file_path).exists():
         return {'success': False, 'error': f'File does not exist: {mapgrouppos_file_path}'}
 
+    if deleted_indices is None:
+        deleted_indices = []
+    if new_indices is None:
+        new_indices = []
+
+    def _to_float(value, fallback=0.0):
+        try:
+            return round(float(value), 2)
+        except Exception:
+            return fallback
+
+    def _collect_group_nodes(root_elem):
+        nodes = []
+        for parent in root_elem.iter():
+            for child in list(parent):
+                if child.tag == 'group':
+                    nodes.append((parent, child))
+        return nodes
+
+    def _detect_position_style(group_elem):
+        if group_elem.find('pos') is not None:
+            return 'child'
+        if group_elem.get('pos') is not None:
+            return 'pos_attr'
+        if group_elem.get('position') is not None:
+            return 'position_attr'
+        return 'child'
+
+    def _set_position(group_elem, pos_text, preferred_style):
+        # Update whichever position representation already exists first.
+        pos_elem = group_elem.find('pos')
+        if pos_elem is not None:
+            pos_elem.text = pos_text
+            return
+        if group_elem.get('pos') is not None:
+            group_elem.set('pos', pos_text)
+            return
+        if group_elem.get('position') is not None:
+            group_elem.set('position', pos_text)
+            return
+
+        # For new groups, follow the discovered file style.
+        if preferred_style == 'pos_attr':
+            group_elem.set('pos', pos_text)
+        elif preferred_style == 'position_attr':
+            group_elem.set('position', pos_text)
+        else:
+            new_pos = ET.SubElement(group_elem, 'pos')
+            new_pos.text = pos_text
+
+    def _set_usage(group_elem, usage_text, prefer_attr=False):
+        usage_elem = group_elem.find('usage')
+        if usage_elem is not None:
+            usage_elem.text = usage_text
+            return
+
+        if group_elem.get('usage') is not None or prefer_attr:
+            group_elem.set('usage', usage_text)
+            return
+
+        new_usage = ET.SubElement(group_elem, 'usage')
+        new_usage.text = usage_text
+
+    def _apply_group_updates(group_elem, marker, idx, preferred_pos_style, prefer_usage_attr=False):
+        name = str(marker.get('name') or '').strip() or f'Group_{idx}'
+        usage = str(marker.get('usage') or '').strip()
+        has_y = bool(marker.get('hasY', True))
+        x = _to_float(marker.get('x', 0), 0.0)
+        y = _to_float(marker.get('y', 0), 0.0)
+        z = _to_float(marker.get('z', 0), 0.0)
+        pos_text = f"{x} {y} {z}" if has_y else f"{x} {z}"
+
+        group_elem.set('name', name)
+        _set_position(group_elem, pos_text, preferred_pos_style)
+
+        # Keep existing usage representation if present; only add when value is provided.
+        if usage:
+            _set_usage(group_elem, usage, prefer_attr=prefer_usage_attr)
+        else:
+            usage_elem = group_elem.find('usage')
+            if usage_elem is not None:
+                usage_elem.text = ''
+            elif group_elem.get('usage') is not None:
+                group_elem.set('usage', '')
+
     try:
         tree = ET.parse(mapgrouppos_file_path)
         root = tree.getroot()
+        existing_nodes = _collect_group_nodes(root)
 
-        # Remove every existing <group> node from the document before rebuilding.
-        for parent in root.iter():
-            for child in list(parent):
-                if child.tag == 'group':
-                    parent.remove(child)
+        existing_count = len(existing_nodes)
+        if existing_count == 0 and (groups_data or []):
+            return {
+                'success': False,
+                'error': 'No <group> elements found in mapgrouppos.xml to preserve format from.'
+            }
 
-        kept_count = 0
-        deleted_count = 0
+        deleted_set = set(int(i) for i in (deleted_indices or []))
+        new_set = set(int(i) for i in (new_indices or []))
 
         for idx, marker in enumerate(groups_data or []):
             if marker.get('isDeleted', False):
-                deleted_count += 1
+                deleted_set.add(idx)
+            if marker.get('isNew', False):
+                new_set.add(idx)
+
+        # Infer preferred formatting/style from the first existing group element.
+        primary_parent = existing_nodes[0][0] if existing_nodes else root
+        template_group = copy.deepcopy(existing_nodes[0][1]) if existing_nodes else ET.Element('group')
+        preferred_pos_style = _detect_position_style(template_group)
+        prefer_usage_attr = template_group.get('usage') is not None and template_group.find('usage') is None
+
+        updated_count = 0
+        added_count = 0
+
+        # Update existing group nodes in place (by original index).
+        for idx, marker in enumerate(groups_data or []):
+            if idx >= existing_count:
                 continue
+            if idx in deleted_set:
+                continue
+            if idx in new_set:
+                continue
+            group_elem = existing_nodes[idx][1]
+            _apply_group_updates(group_elem, marker, idx, preferred_pos_style, prefer_usage_attr=prefer_usage_attr)
+            updated_count += 1
 
-            name = str(marker.get('name') or '').strip() or f'Group_{idx}'
-            usage = str(marker.get('usage') or '').strip()
-            has_y = bool(marker.get('hasY', True))
+        # Remove deleted original groups from their original parents.
+        for idx in sorted([i for i in deleted_set if 0 <= i < existing_count], reverse=True):
+            parent, group_elem = existing_nodes[idx]
+            try:
+                parent.remove(group_elem)
+            except ValueError:
+                pass
 
-            x = round(float(marker.get('x', 0)), 2)
-            y = round(float(marker.get('y', 0)), 2)
-            z = round(float(marker.get('z', 0)), 2)
+        # Add new groups by cloning an existing group template.
+        for idx in sorted(new_set):
+            if idx < 0 or idx >= len(groups_data or []):
+                continue
+            marker = groups_data[idx]
+            if marker.get('isDeleted', False):
+                continue
+            new_group_elem = copy.deepcopy(template_group)
+            _apply_group_updates(new_group_elem, marker, idx, preferred_pos_style, prefer_usage_attr=prefer_usage_attr)
+            primary_parent.append(new_group_elem)
+            added_count += 1
 
-            xml_string = marker.get('xml')
-            group_elem = None
-            if isinstance(xml_string, str) and xml_string.strip():
-                try:
-                    parsed = ET.fromstring(xml_string)
-                    if parsed.tag == 'group':
-                        group_elem = parsed
-                except Exception:
-                    group_elem = None
-            if group_elem is None:
-                group_elem = ET.Element('group')
-
-            group_elem.set('name', name)
-
-            # Keep position data in a <pos> child and normalize any legacy attrs.
-            group_elem.attrib.pop('pos', None)
-            group_elem.attrib.pop('position', None)
-            pos_elem = group_elem.find('pos')
-            if pos_elem is None:
-                pos_elem = ET.SubElement(group_elem, 'pos')
-            pos_elem.text = f"{x} {y} {z}" if has_y else f"{x} {z}"
-
-            usage_elem = group_elem.find('usage')
-            if usage:
-                if usage_elem is None:
-                    usage_elem = ET.SubElement(group_elem, 'usage')
-                usage_elem.text = usage
-            elif usage_elem is not None:
-                group_elem.remove(usage_elem)
-
-            root.append(group_elem)
-            kept_count += 1
-
-        ET.indent(tree, space='    ')
+        # Do not re-indent; preserve existing file layout as much as possible.
         tree.write(mapgrouppos_file_path, encoding='utf-8', xml_declaration=True)
         return {
             'success': True,
-            'count': kept_count,
-            'updated': kept_count,
-            'deleted': deleted_count
+            'count': updated_count + added_count + len([i for i in deleted_set if 0 <= i < existing_count]),
+            'updated': updated_count,
+            'added': added_count,
+            'deleted': len([i for i in deleted_set if 0 <= i < existing_count])
         }
     except Exception as e:
         import traceback
@@ -491,20 +663,23 @@ def save_groups_endpoint():
         groups_data = data.get('markers', [])
         if groups_data is None:
             return api_error('No group marker data provided', 400)
+        deleted_indices = data.get('deleted_indices', [])
+        new_indices = data.get('new_indices', [])
 
         mapgrouppos_file = mission_path / 'mapgrouppos.xml'
         if not mapgrouppos_file.exists():
             return api_error(f'mapgrouppos.xml not found at: {mapgrouppos_file}', 404)
 
-        result = save_groups(str(mapgrouppos_file), groups_data)
+        result = save_groups(str(mapgrouppos_file), groups_data, deleted_indices, new_indices)
         if not result.get('success'):
             return api_error(result.get('error', 'Unknown error'), 500)
 
         return api_ok(
             count=result.get('count', 0),
             updated=result.get('updated', 0),
+            added=result.get('added', 0),
             deleted=result.get('deleted', 0),
-            message=f"Saved groups: {result.get('updated', 0)} updated, {result.get('deleted', 0)} deleted"
+            message=f"Saved groups: {result.get('updated', 0)} updated, {result.get('added', 0)} added, {result.get('deleted', 0)} deleted"
         )
     except Exception as e:
         import traceback
@@ -797,15 +972,7 @@ def load_effect_areas(effect_area_file_path):
 
 def guess_profile_dir_from_mission_dir(mission_dir):
     """Guess profile directory from mission directory."""
-    try:
-        mission_path = Path(mission_dir)
-        # mission_dir: <server>/mpmissions/<mission_name>
-        # profile_dir: <server>/profile
-        if mission_path.parent and mission_path.parent.parent:
-            return str(mission_path.parent.parent / 'profile')
-    except Exception:
-        pass
-    return ''
+    return guess_profile_dir(mission_dir)
 
 
 def list_loadout_names(profile_dir):
@@ -1105,14 +1272,67 @@ def load_ai_patrol_settings(settings_file_path, loadout_names=None):
         }
 
 
+def _dict_with_key_order(template_keys, values):
+    """Build a dict using template_keys order; any extra keys keep their relative order."""
+    if not isinstance(values, dict):
+        return values
+    ordered = {}
+    seen = set()
+    for key in template_keys or []:
+        if key in values:
+            ordered[key] = values[key]
+            seen.add(key)
+    for key, value in values.items():
+        if key not in seen:
+            ordered[key] = value
+    return ordered
+
+
+def _ai_patrol_key_templates(original_patrols):
+    """Collect key-order templates from existing patrols (by name, and a default)."""
+    by_name = {}
+    default_keys = []
+    for patrol in original_patrols or []:
+        if not isinstance(patrol, dict):
+            continue
+        keys = list(patrol.keys())
+        if not default_keys or len(keys) > len(default_keys):
+            default_keys = keys
+        name = patrol.get('Name')
+        if name is not None:
+            name_key = str(name)
+            if name_key not in by_name:
+                by_name[name_key] = keys
+    return default_keys, by_name
+
+
 def save_ai_patrol_settings(settings_file_path, patrols):
-    """Save Patrols array back to AIPatrolSettings.json (preserve all non-Patrols keys)."""
+    """Save Patrols array back to AIPatrolSettings.json (preserve non-Patrols keys and patrol key order)."""
     if not settings_file_path or not Path(settings_file_path).exists():
         return {'success': False, 'error': f'File does not exist: {settings_file_path}'}
     try:
         with open(settings_file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        data['Patrols'] = patrols if isinstance(patrols, list) else []
+        original_patrols = data.get('Patrols', [])
+        if not isinstance(original_patrols, list):
+            original_patrols = []
+        default_keys, keys_by_name = _ai_patrol_key_templates(original_patrols)
+
+        incoming = patrols if isinstance(patrols, list) else []
+        ordered_patrols = []
+        for i, patrol in enumerate(incoming):
+            if not isinstance(patrol, dict):
+                ordered_patrols.append(patrol)
+                continue
+            template_keys = default_keys
+            name = patrol.get('Name')
+            if name is not None and str(name) in keys_by_name:
+                template_keys = keys_by_name[str(name)]
+            elif i < len(original_patrols) and isinstance(original_patrols[i], dict):
+                template_keys = list(original_patrols[i].keys())
+            ordered_patrols.append(_dict_with_key_order(template_keys, patrol))
+
+        data['Patrols'] = ordered_patrols
         with open(settings_file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         return {'success': True, 'count': len(data['Patrols'])}

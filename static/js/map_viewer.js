@@ -117,6 +117,7 @@ let aiPatrolRadiusEditPatrolIndices = [];
 let aiPatrolRadiusEditStartValues = new Map(); // Map<patrolIndex,{ min, max }>
 let aiPatrolRadiusEditReferencePatrolIndex = -1;
 let aiPatrolInferredDefaults = {};
+let aiPatrolKeyOrder = []; // Key order from loaded AIPatrolSettings.json
 let showAiPatrolMarkers = true;
 let showSelectedAiPatrolOnly = false;
 let aiPatrolTypeFilter = 'all'; // all | waypoints | group
@@ -189,11 +190,11 @@ const AI_PATROL_REQUIRED_EXPORT_DEFAULTS = {
     MaxSpreadRadius: 20,
     MinDistRadius: -1,
     MinSpreadRadius: 5,
-    Name: 'heli-west',
+    Name: '',
     NoiseInvestigationDistanceLimit: -1,
     NumberOfAI: 1,
     NumberOfAIMax: 3,
-    ObjectClassName: 'Wreck_UH1Y',
+    ObjectClassName: '',
     Persist: 0,
     RespawnTime: -2,
     SniperProneDistanceThreshold: 0,
@@ -4727,12 +4728,25 @@ function isWaypointPatrol(patrol) {
     return !!(patrol && Array.isArray(patrol.Waypoints) && patrol.Waypoints.length > 0);
 }
 
+function hasAiPatrolObjectClassName(patrol) {
+    return !!(patrol && String(patrol.ObjectClassName || '').trim());
+}
+
 function getAiPatrolTypeKey(patrol) {
-    return isWaypointPatrol(patrol) ? 'waypoints' : 'group';
+    if (isWaypointPatrol(patrol)) return 'waypoints';
+    if (hasAiPatrolObjectClassName(patrol)) return 'group';
+    return Array.isArray(patrol?.Waypoints) ? 'waypoints' : 'group';
 }
 
 function patrolMatchesTypeFilter(patrol) {
-    return aiPatrolTypeFilter === 'all' || getAiPatrolTypeKey(patrol) === aiPatrolTypeFilter;
+    if (aiPatrolTypeFilter === 'all') return true;
+    if (aiPatrolTypeFilter === 'waypoints') {
+        return Array.isArray(patrol?.Waypoints);
+    }
+    if (aiPatrolTypeFilter === 'group') {
+        return hasAiPatrolObjectClassName(patrol);
+    }
+    return true;
 }
 
 function getAiPatrolFactionHue(faction) {
@@ -6210,11 +6224,6 @@ function addMarkerAt(markerType, screenX, screenY) {
         if (!canEditAiPatrolOnMap()) return;
         const patrol = getSelectedAiPatrol();
         if (!patrol) return;
-        const patrolType = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
-        if (patrolType !== 'waypoints') {
-            updateStatus('Cannot place waypoints for group-based patrols. Switch patrol type to Waypoint first.', true);
-            return;
-        }
         if (!Array.isArray(patrol.Waypoints)) patrol.Waypoints = [];
         pushAiPatrolUndoState();
         const worldPos = screenToWorld(screenX, screenY);
@@ -8521,6 +8530,74 @@ function guessProfileDirFromMissionDir(missionPath) {
     return `${serverRootParts.join(sep)}${sep}profile`;
 }
 
+function openNewProjectModal() {
+    const modal = document.getElementById('newProjectModal');
+    const input = document.getElementById('newProjectMissionDir');
+    if (input) {
+        input.value = (document.getElementById('missionDir')?.value || missionDir || '').trim();
+    }
+    if (modal) {
+        modal.style.display = 'block';
+    }
+}
+
+function closeNewProjectModal() {
+    const modal = document.getElementById('newProjectModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function createNewProject() {
+    const dir = (document.getElementById('newProjectMissionDir')?.value || '').trim();
+    if (!dir) {
+        updateStatus('Please enter a mission directory path', true);
+        return;
+    }
+
+    const createMissionDir = false;
+    const guessedProfile = guessProfileDirFromMissionDir(dir);
+
+    try {
+        updateStatus('Setting active project...');
+        const response = await fetch('/api/new-project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mission_dir: dir,
+                create_mission_dir: createMissionDir,
+                profile_dir: guessedProfile || undefined,
+            })
+        });
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to create project');
+        }
+
+        missionDir = data.mission_dir;
+        profileDir = data.profile_dir || guessedProfile;
+        document.getElementById('missionDir').value = missionDir;
+        const profileInput = document.getElementById('profileDir');
+        if (profileInput) {
+            profileInput.value = profileDir;
+        }
+        localStorage.setItem('map_viewer_missionDir', missionDir);
+        localStorage.setItem('map_viewer_profileDir', profileDir || '');
+        closeNewProjectModal();
+
+        updateStatus(`Active project set: ${missionDir}`);
+        alert(
+            `Project ready.\n\nMission: ${missionDir}\n\n` +
+            `To create the Economy Editor database, open Economy Editor → New Project ` +
+            `(or Load XML Data) using this same mission path.`
+        );
+    } catch (error) {
+        console.error('Error creating project:', error);
+        updateStatus(`Error creating project: ${error.message}`, true);
+        alert(`Error creating project: ${error.message}`);
+    }
+}
+
 // Load groups from API
 async function loadGroups() {
     const dir = document.getElementById('missionDir').value.trim();
@@ -8729,9 +8806,37 @@ function aiPatrolCoerceToDefaultType(value, defaultValue) {
     return value ?? defaultValue;
 }
 
+function captureAiPatrolKeyOrder(patrols) {
+    aiPatrolKeyOrder = [];
+    if (!Array.isArray(patrols)) return;
+    let best = null;
+    patrols.forEach(patrol => {
+        if (!patrol || typeof patrol !== 'object' || Array.isArray(patrol)) return;
+        const keys = Object.keys(patrol);
+        if (!best || keys.length > best.length) best = keys;
+    });
+    aiPatrolKeyOrder = best || [];
+}
+
+function orderAiPatrolKeys(patrol) {
+    if (!patrol || typeof patrol !== 'object' || Array.isArray(patrol)) return patrol;
+    if (!Array.isArray(aiPatrolKeyOrder) || aiPatrolKeyOrder.length === 0) return patrol;
+    const ordered = {};
+    const used = new Set();
+    aiPatrolKeyOrder.forEach(key => {
+        if (Object.prototype.hasOwnProperty.call(patrol, key)) {
+            ordered[key] = patrol[key];
+            used.add(key);
+        }
+    });
+    Object.keys(patrol).forEach(key => {
+        if (!used.has(key)) ordered[key] = patrol[key];
+    });
+    return ordered;
+}
+
 function normalizeAiPatrolForExport(patrol) {
     const normalized = { ...(patrol || {}) };
-    const hasWaypointsArray = Array.isArray(normalized.Waypoints);
     Object.entries(AI_PATROL_REQUIRED_EXPORT_DEFAULTS).forEach(([field, defaultValue]) => {
         const raw = normalized[field];
         const isEmptyString = typeof raw === 'string' && raw.trim() === '';
@@ -8741,12 +8846,9 @@ function normalizeAiPatrolForExport(patrol) {
         }
         normalized[field] = aiPatrolCoerceToDefaultType(raw, defaultValue);
     });
-    if (hasWaypointsArray) {
-        normalized.ObjectClassName = '';
-    } else if (!String(normalized.ObjectClassName ?? '').trim()) {
-        normalized.ObjectClassName = AI_PATROL_REQUIRED_EXPORT_DEFAULTS.ObjectClassName;
-    }
-    return normalized;
+    // ObjectClassName and Waypoints can coexist: when ObjectClassName is set,
+    // waypoint positions are relative to matching map objects.
+    return orderAiPatrolKeys(normalized);
 }
 
 function normalizeAiPatrolOverrideDefaults(source) {
@@ -8778,12 +8880,11 @@ function updateAiPatrolOverrideInputEnablement() {
 }
 
 function updateAiPatrolTypeUI() {
-    const patrolTypeEl = document.querySelector('input[name="aiPatrolType"]:checked');
-    const type = patrolTypeEl ? patrolTypeEl.value : 'waypoints';
     const wpSection = document.getElementById('aiPatrolWaypointsSection');
     const groupSection = document.getElementById('aiPatrolGroupSection');
-    if (wpSection) wpSection.style.display = type === 'waypoints' ? 'block' : 'none';
-    if (groupSection) groupSection.style.display = type === 'group' ? 'block' : 'none';
+    // Both can be used together (ObjectClassName + relative Waypoints).
+    if (wpSection) wpSection.style.display = 'block';
+    if (groupSection) groupSection.style.display = 'block';
 }
 
 function syncSelectedAiPatrolFromForm() {
@@ -8832,15 +8933,11 @@ function syncSelectedAiPatrolFromForm() {
     const nextObjectClassName = v('aiPatrolObjectClassName')?.value || '';
     patrol.MinSpreadRadius = nextMinRadius;
     patrol.MaxSpreadRadius = nextMaxRadius;
+    // ObjectClassName and Waypoints are independent: both may be set at once.
+    patrol.ObjectClassName = nextObjectClassName;
     const type = document.querySelector('input[name="aiPatrolType"]:checked')?.value || 'waypoints';
-    if (type === 'group') {
-        delete patrol.Waypoints;
-        patrol.ObjectClassName = nextObjectClassName;
-    } else {
-        if (!Array.isArray(patrol.Waypoints)) {
-            patrol.Waypoints = [];
-        }
-        patrol.ObjectClassName = '';
+    if (type === 'waypoints' && !Array.isArray(patrol.Waypoints)) {
+        patrol.Waypoints = [];
     }
 }
 
@@ -8874,7 +8971,9 @@ function applyAiPatrolToForm() {
     if (v('aiPatrolObjectClassName')) v('aiPatrolObjectClassName').value = patrol.ObjectClassName || '';
     if (v('aiPatrolMinSpreadRadius')) v('aiPatrolMinSpreadRadius').value = String(Math.max(0, Number(patrol.MinSpreadRadius) || 0));
     if (v('aiPatrolMaxSpreadRadius')) v('aiPatrolMaxSpreadRadius').value = String(Math.max(0, Number(patrol.MaxSpreadRadius) || 0));
-    const inferredType = Array.isArray(patrol.Waypoints) ? 'waypoints' : 'group';
+    const hasObjectClass = hasAiPatrolObjectClassName(patrol);
+    const hasWaypointsKey = Array.isArray(patrol.Waypoints);
+    const inferredType = hasObjectClass && !hasWaypointsKey ? 'group' : 'waypoints';
     const typeRadio = document.querySelector(`input[name="aiPatrolType"][value="${inferredType}"]`);
     if (typeRadio) typeRadio.checked = true;
     updateAiPatrolTypeUI();
@@ -8952,7 +9051,7 @@ function createDefaultAiPatrol() {
     AI_PATROL_OVERRIDE_FIELDS.forEach(field => {
         patrol[field] = aiPatrolCoerceTextValue(getAiPatrolInferredDefault(field));
     });
-    return patrol;
+    return orderAiPatrolKeys(patrol);
 }
 
 function addAiPatrol() {
@@ -9033,11 +9132,13 @@ async function loadAiPatrols() {
         const data = await response.json();
         if (!data.success) {
             aiPatrols = [];
+            captureAiPatrolKeyOrder([]);
             aiPatrolInferredDefaults = normalizeAiPatrolOverrideDefaults({});
             aiPatrolOptions = { factions: [], loadouts: [], behaviours: [], stances: [], speeds: [], lootingBehaviours: [], overrideDefaults: {} };
             return;
         }
         aiPatrols = Array.isArray(data.patrols) ? data.patrols : [];
+        captureAiPatrolKeyOrder(aiPatrols);
         aiPatrolInferredDefaults = normalizeAiPatrolOverrideDefaults(data.options?.overrideDefaults || {});
         if (typeof data.profile_dir === 'string' && data.profile_dir.trim()) {
             profileDir = data.profile_dir.trim();
@@ -10576,13 +10677,28 @@ function initializeSidebarSections() {
 
 // Restore saved state from localStorage
 async function restoreSavedState() {
-    // Restore mission directory
-    const savedMissionDir = localStorage.getItem('map_viewer_missionDir');
+    // Prefer shared active project (written by either app), then localStorage.
+    let savedMissionDir = localStorage.getItem('map_viewer_missionDir');
+    let savedProfileDir = localStorage.getItem('map_viewer_profileDir');
+
+    try {
+        const response = await fetch('/api/active-project');
+        const data = await response.json();
+        if (data.success && data.project && data.project.mission_dir) {
+            savedMissionDir = data.project.mission_dir;
+            if (data.project.profile_dir) {
+                savedProfileDir = data.project.profile_dir;
+            }
+        }
+    } catch (error) {
+        console.warn('Could not load shared active project:', error);
+    }
+
     if (savedMissionDir) {
         missionDir = savedMissionDir;
         document.getElementById('missionDir').value = savedMissionDir;
+        localStorage.setItem('map_viewer_missionDir', savedMissionDir);
     }
-    const savedProfileDir = localStorage.getItem('map_viewer_profileDir');
     if (savedProfileDir) {
         profileDir = savedProfileDir;
     } else if (savedMissionDir) {
@@ -10591,6 +10707,9 @@ async function restoreSavedState() {
     const profileInput = document.getElementById('profileDir');
     if (profileInput) {
         profileInput.value = profileDir;
+    }
+    if (profileDir) {
+        localStorage.setItem('map_viewer_profileDir', profileDir);
     }
     
     // Restore display toggles
@@ -11293,6 +11412,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     await restoreSavedState();
     
     document.getElementById('loadDataBtn').addEventListener('click', loadGroups);
+    const newProjectBtn = document.getElementById('newProjectBtn');
+    if (newProjectBtn) {
+        newProjectBtn.addEventListener('click', openNewProjectModal);
+    }
+    const createNewProjectBtn = document.getElementById('createNewProjectBtn');
+    if (createNewProjectBtn) {
+        createNewProjectBtn.addEventListener('click', createNewProject);
+    }
+    const cancelNewProjectBtn = document.getElementById('cancelNewProjectBtn');
+    if (cancelNewProjectBtn) {
+        cancelNewProjectBtn.addEventListener('click', closeNewProjectModal);
+    }
+    const closeNewProjectModalBtn = document.getElementById('closeNewProjectModal');
+    if (closeNewProjectModalBtn) {
+        closeNewProjectModalBtn.addEventListener('click', closeNewProjectModal);
+    }
     const profileDirInput = document.getElementById('profileDir');
     if (profileDirInput) {
         profileDirInput.addEventListener('blur', () => {

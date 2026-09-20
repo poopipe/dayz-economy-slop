@@ -19,12 +19,12 @@
                     <div id="missionSection" class="sidebar-section-content" data-section-id="mission" data-section-title="Mission">
                         <div class="control-group">
                             <label for="missionDir">Mission Directory:</label>
-                            <input type="text" id="missionDir" placeholder="Enter mission directory path..." 
-                                   class="mission-dir-input" 
-                                   value="E:\DayZ_Servers\Nyheim_Server\mpmissions\dayzOffline.nyheim">
+                            <input type="text" id="missionDir" placeholder="Enter mission directory path..."
+                                   class="mission-dir-input" value="">
                             <label for="profileDir" style="margin-top: 8px;">Profile Directory:</label>
                             <input type="text" id="profileDir" placeholder="Auto-detected from mission directory (editable)" 
                                    class="mission-dir-input">
+                            <button id="newProjectBtn" class="btn btn-success">New Project</button>
                             <button id="loadDataBtn" class="btn btn-primary">Load Markers</button>
                         </div>
                     </div>
@@ -331,11 +331,11 @@
                             <label>Patrol type:</label>
                             <label style="display: block; margin-top: 4px;">
                                 <input type="radio" name="aiPatrolType" value="waypoints" checked>
-                                Waypoint patrol (ordered list of waypoints)
+                                Waypoint list (world coords, or relative when ObjectClassName is set)
                             </label>
                             <label style="display: block; margin-top: 4px;">
                                 <input type="radio" name="aiPatrolType" value="group">
-                                Group-based patrol (uses ObjectClassName)
+                                Object-class focus (ObjectClassName; Waypoints optional / relative)
                             </label>
                         </div>
                         
@@ -354,16 +354,16 @@
                         </div>
                         
                         <div class="control-group" id="aiPatrolWaypointsSection">
-                            <label>Waypoints (waypoint patrols):</label>
+                            <label>Waypoints:</label>
                             <div id="aiPatrolInstructions"></div>
                             <div id="aiPatrolWaypointActionsContainer"></div>
                         </div>
                         
                         <div class="control-group" id="aiPatrolGroupSection">
-                            <label for="aiPatrolObjectClassName">ObjectClassName (group-based patrols):</label>
+                            <label for="aiPatrolObjectClassName">ObjectClassName:</label>
                             <input type="text" id="aiPatrolObjectClassName" class="mission-dir-input" placeholder="Enter ObjectClassName...">
                             <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
-                                For now this is a free-text value taken from AIPatrolSettings.json.
+                                Optional. When set, Waypoints are relative to each matching object (not world coordinates).
                             </p>
                         </div>
                         
@@ -433,6 +433,22 @@
                 <canvas id="backgroundCanvas" style="position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; width: 100%; height: 100%;"></canvas>
                 <canvas id="markerCanvas" style="position: absolute; top: 0; left: 0; z-index: 2; pointer-events: auto; width: 100%; height: 100%;"></canvas>
                 <canvas id="overlayCanvas" style="position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; width: 100%; height: 100%;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="newProjectModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeNewProjectModal">&times;</span>
+            <h2>New Project</h2>
+            <p class="modal-help">Point at an existing mission folder on the new server. This becomes the shared active project for Map Viewer and Economy Editor. Use Economy Editor → New Project to create the database and import types XML.</p>
+            <div class="control-group" style="flex-direction: column; align-items: stretch;">
+                <label for="newProjectMissionDir">Mission Directory:</label>
+                <input type="text" id="newProjectMissionDir" class="mission-dir-input" placeholder="e.g. E:\DayZ_Servers\MyServer\mpmissions\dayzOffline.chernarusplus">
+            </div>
+            <div class="modal-actions">
+                <button id="createNewProjectBtn" class="btn btn-success">Use Mission</button>
+                <button id="cancelNewProjectBtn" class="btn">Cancel</button>
             </div>
         </div>
     </div>
