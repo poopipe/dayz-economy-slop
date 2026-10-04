@@ -19,6 +19,11 @@ let activeFilters = []; // Array of filter objects: {column, criteria, value, in
 let selectedRows = new Set(); // Set of selected element keys for bulk operations
 let lastClickedRowIndexInDisplay = null; // For shift-click range selection (index in visible rows)
 
+function clearRowSelection() {
+    selectedRows.clear();
+    lastClickedRowIndexInDisplay = null;
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
     updateStatus('Ready');
@@ -1048,30 +1053,30 @@ function displayTable() {
     if (selectAllCheckbox) {
         selectAllCheckbox.addEventListener('change', (e) => {
             const checked = e.target.checked;
+            if (!checked) {
+                // Fully clear selection (not only currently visible rows)
+                clearRowSelection();
+                container.querySelectorAll('.row-checkbox').forEach(cb => {
+                    cb.checked = false;
+                });
+                container.querySelectorAll('tbody tr').forEach(row => {
+                    row.classList.remove('selected-row');
+                });
+                return;
+            }
             dataToDisplay.forEach(record => {
                 const elementKey = record._element_key;
                 if (elementKey) {
-                    if (checked) {
-                        selectedRows.add(elementKey);
-                    } else {
-                        selectedRows.delete(elementKey);
-                    }
+                    selectedRows.add(elementKey);
                 }
             });
             // Update individual checkboxes
             container.querySelectorAll('.row-checkbox').forEach(cb => {
-                cb.checked = checked;
+                cb.checked = true;
             });
             // Update row highlighting
             container.querySelectorAll('tbody tr').forEach(row => {
-                const checkbox = row.querySelector('.row-checkbox');
-                if (checkbox) {
-                    if (checked) {
-                        row.classList.add('selected-row');
-                    } else {
-                        row.classList.remove('selected-row');
-                    }
-                }
+                row.classList.add('selected-row');
             });
         });
     }
@@ -2487,37 +2492,35 @@ function addFilter() {
     
     // Add filter
     activeFilters.push({ column, criteria, value, include });
+    clearRowSelection();
     
     // Clear inputs
     filterValueInput.value = '';
     filterValueSelect.selectedIndex = -1;
     
     // Reset column selection and refresh UI
-    document.getElementById('filterColumn').value = '';
+    setDefaultFilterColumn();
     document.getElementById('filterCriteria').value = 'contains';
-    document.getElementById('filterInclude').checked = true;
-    updateFilterUI();
-    
+    document.getElementById('filterInclude').checked = true;    
     // Update display
     displayActiveFilters();
     saveFilters();
-    selectedRows.clear();
     displayTable();
 }
 
 function removeFilter(index) {
     activeFilters.splice(index, 1);
+    clearRowSelection();
     displayActiveFilters();
     saveFilters();
-    selectedRows.clear();
     displayTable();
 }
 
 function clearAllFilters() {
     activeFilters = [];
+    clearRowSelection();
     displayActiveFilters();
     saveFilters();
-    selectedRows.clear();
     displayTable();
 }
 
@@ -2614,6 +2617,16 @@ function populateFilterColumns() {
             select.appendChild(option);
         });
     }
+
+    setDefaultFilterColumn();
+}
+
+function setDefaultFilterColumn() {
+    const select = document.getElementById('filterColumn');
+    if (!select) return;
+    const hasName = Array.from(select.options).some(opt => opt.value === 'name');
+    select.value = hasName ? 'name' : '';
+    updateFilterUI();
 }
 
 function makeCellEditable(cell) {

@@ -20,7 +20,14 @@
     "territoryType_wolf_territories": "hsl(145, 76%, 57%)",
     "groupMarkers": "hsl(323, 68%, 55%)",
     "territoryType_domestic_animals_territories": "hsl(29, 65%, 60%)",
-    "territoryType_wild_boar_territories": "hsl(268, 75%, 54%)"
+    "territoryType_wild_boar_territories": "hsl(268, 75%, 54%)",
+    "territoryType_brownbear_territories": "hsl(15, 78%, 61%)",
+    "territoryType_domestic_territories": "hsl(98, 79%, 53%)",
+    "territoryType_north_territories": "hsl(14, 64%, 46%)",
+    "territoryType_polarbear_territories": "hsl(62, 63%, 59%)",
+    "territoryType_predator_territories": "hsl(49, 69%, 47%)",
+    "territoryType_south_territories": "hsl(224, 69%, 57%)",
+    "territoryType_tara_territories": "hsl(29, 72%, 56%)"
   },
   "territoryTypes": {
     "bear_territories": "#5E81AC",
@@ -37,7 +44,14 @@
     "wolf_territories": "#6C5B7B",
     "zombie_territories": "#355C7D",
     "domestic_animals_territories": "#F8B195",
-    "wild_boar_territories": "#99B898"
+    "wild_boar_territories": "#99B898",
+    "brownbear_territories": "#FECEAB",
+    "domestic_territories": "#FF847C",
+    "north_territories": "#2A9D8F",
+    "polarbear_territories": "#E76F51",
+    "predator_territories": "#264653",
+    "south_territories": "hsl(278, 78%, 50%)",
+    "tara_territories": "hsl(210, 79%, 54%)"
   },
   "eventSpawnTypes": {
     "ItemPlanks": "hsl(147, 64%, 58%)",
@@ -57,6 +71,9 @@
     "StaticPoliceSituation": "hsl(238, 78%, 59%)",
     "StaticSantaCrash": "hsl(151, 77%, 47%)",
     "StaticTrain": "hsl(240, 75%, 59%)",
-    "VehicleOffroad02": "hsl(255, 79%, 56%)"
+    "VehicleOffroad02": "hsl(255, 79%, 56%)",
+    "StaticLifeboat": "hsl(116, 78%, 47%)",
+    "StaticMedDrop": "hsl(260, 73%, 50%)",
+    "VehicleRubberBoats": "hsl(108, 78%, 58%)"
   }
 }
