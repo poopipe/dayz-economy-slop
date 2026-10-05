@@ -18,6 +18,14 @@ from active_project import (
     get_db_path_for_mission,
     guess_profile_dir,
 )
+from types_format import (
+    KNOWN_NAMALSK_TAGS,
+    append_namalsk_type_children,
+    derive_namalsk_tags_from_usages,
+    detect_types_format,
+    normalize_type_element_to_standard,
+    resolve_standard_export_usages,
+)
 
 app = Flask(__name__)
 
@@ -47,6 +55,152 @@ DEFAULT_MISSION_DIR = r"E:\DayZ_Servers\Nyheim20_Server\mpmissions\empty.nyheim"
 current_mission_dir = DEFAULT_MISSION_DIR
 
 
+def get_editor_settings_path(mission_dir):
+    """Path to per-mission Economy Editor settings JSON."""
+    return Path(mission_dir) / 'type-editor-db-v2' / 'editor_settings.json'
+
+
+def load_editor_settings(mission_dir):
+    """Load per-mission editor settings."""
+    path = get_editor_settings_path(mission_dir)
+    defaults = {
+        'namalsk_format': False,
+        # Keep editor-only fields (itemclass, itemtags, export) when reimporting types
+        'preserve_editor_fields': True,
+    }
+    if not path.exists():
+        return defaults
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return defaults
+        return {
+            'namalsk_format': bool(data.get('namalsk_format', False)),
+            'preserve_editor_fields': bool(data.get('preserve_editor_fields', True)),
+        }
+    except Exception:
+        return defaults
+
+
+def save_editor_settings(mission_dir, settings):
+    """Persist per-mission editor settings."""
+    path = get_editor_settings_path(mission_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = load_editor_settings(mission_dir)
+    if isinstance(settings, dict):
+        if 'namalsk_format' in settings:
+            current['namalsk_format'] = bool(settings['namalsk_format'])
+        if 'preserve_editor_fields' in settings:
+            current['preserve_editor_fields'] = bool(settings['preserve_editor_fields'])
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(current, f, indent=2)
+    return current
+
+
+def get_usage_canonical_map(cursor):
+    """Map lowercase usageflag name -> canonical DB name."""
+    cursor.execute('SELECT name FROM usageflags')
+    return {row['name'].lower(): row['name'] for row in cursor.fetchall()}
+
+
+def ensure_usageflag_id(cursor, usage_name):
+    """Resolve usageflag id with case-insensitive match; create if missing."""
+    if not usage_name:
+        return None
+    cursor.execute(
+        'SELECT id, name FROM usageflags WHERE LOWER(name) = LOWER(?)',
+        (usage_name,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return row['id']
+    cursor.execute('INSERT INTO usageflags (name) VALUES (?)', (usage_name,))
+    return cursor.lastrowid
+
+
+def ensure_valueflag_id(cursor, value_name):
+    """Resolve valueflag id; create if missing."""
+    if not value_name:
+        return None
+    cursor.execute('SELECT id FROM valueflags WHERE name = ?', (value_name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id']
+    cursor.execute('INSERT INTO valueflags (name) VALUES (?)', (value_name,))
+    return cursor.lastrowid
+
+
+def ensure_namalsk_tag_tables(cursor):
+    """Create/seed namalsk economy tag tables (safe for existing DBs)."""
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS namalsk_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS element_namalsk_tags (
+            element_key TEXT NOT NULL,
+            namalsk_tag_id INTEGER NOT NULL,
+            PRIMARY KEY (element_key, namalsk_tag_id),
+            FOREIGN KEY (element_key) REFERENCES type_elements(element_key) ON DELETE CASCADE,
+            FOREIGN KEY (namalsk_tag_id) REFERENCES namalsk_tags(id) ON DELETE CASCADE
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_namalsk_tag_name ON namalsk_tags(name)')
+    for tag_name in KNOWN_NAMALSK_TAGS:
+        cursor.execute('INSERT OR IGNORE INTO namalsk_tags (name) VALUES (?)', (tag_name,))
+
+
+def ensure_namalsk_tag_id(cursor, tag_name):
+    """Resolve namalsk tag id; create if missing. Stores lowercase name."""
+    if not tag_name:
+        return None
+    name = str(tag_name).strip().lower()
+    cursor.execute('SELECT id FROM namalsk_tags WHERE name = ?', (name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id']
+    cursor.execute('INSERT INTO namalsk_tags (name) VALUES (?)', (name,))
+    return cursor.lastrowid
+
+
+def set_element_namalsk_tags(cursor, element_key, tag_names):
+    """Replace namalsk economy tags for an element."""
+    cursor.execute('DELETE FROM element_namalsk_tags WHERE element_key = ?', (element_key,))
+    seen = set()
+    for tag_name in tag_names or []:
+        if not tag_name:
+            continue
+        key = str(tag_name).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tag_id = ensure_namalsk_tag_id(cursor, key)
+        if tag_id:
+            cursor.execute('''
+                INSERT OR REPLACE INTO element_namalsk_tags (element_key, namalsk_tag_id)
+                VALUES (?, ?)
+            ''', (element_key, tag_id))
+
+
+def clear_element_relationships(cursor, element_key, clear_namalsk_tags=False):
+    """Remove M2M links for an element before re-importing its relationships.
+
+    Namalsk economy tags are preserved by default (like itemclass) unless
+    clear_namalsk_tags=True (Namalsk XML refresh).
+    """
+    cursor.execute('DELETE FROM element_categories WHERE element_key = ?', (element_key,))
+    cursor.execute('DELETE FROM element_tags WHERE element_key = ?', (element_key,))
+    cursor.execute('DELETE FROM element_usageflags WHERE element_key = ?', (element_key,))
+    cursor.execute('DELETE FROM element_valueflags WHERE element_key = ?', (element_key,))
+    cursor.execute('DELETE FROM element_flags WHERE element_key = ?', (element_key,))
+    if clear_namalsk_tags:
+        cursor.execute('DELETE FROM element_namalsk_tags WHERE element_key = ?', (element_key,))
+
+
 def get_db_path(mission_dir):
     """Get the database file path for a given mission directory."""
     mission_path = Path(mission_dir)
@@ -69,6 +223,9 @@ def get_db_connection(mission_dir=None, db_file_path=None):
             raise FileNotFoundError(f"Database file not found: {db_file_path}")
         conn = sqlite3.connect(str(db_file))
         conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        ensure_namalsk_tag_tables(cursor)
+        conn.commit()
         return conn
     
     # Use mission directory
@@ -77,6 +234,9 @@ def get_db_connection(mission_dir=None, db_file_path=None):
     db_file = get_db_path(mission_dir)
     conn = sqlite3.connect(str(db_file))
     conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    ensure_namalsk_tag_tables(cursor)
+    conn.commit()
     return conn
 
 
@@ -298,6 +458,24 @@ def init_database_for_file(db_file_path, mission_dir=None):
             FOREIGN KEY (usageflag_id) REFERENCES usageflags(id) ON DELETE CASCADE
         )
     ''')
+
+    # Namalsk economy tags (separate from DayZ shelves/floor tags)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS namalsk_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS element_namalsk_tags (
+            element_key TEXT NOT NULL,
+            namalsk_tag_id INTEGER NOT NULL,
+            PRIMARY KEY (element_key, namalsk_tag_id),
+            FOREIGN KEY (element_key) REFERENCES type_elements(element_key) ON DELETE CASCADE,
+            FOREIGN KEY (namalsk_tag_id) REFERENCES namalsk_tags(id) ON DELETE CASCADE
+        )
+    ''')
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS element_valueflags (
@@ -359,6 +537,7 @@ def init_database_for_file(db_file_path, mission_dir=None):
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_valueflag_name ON valueflags(name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_flag_name ON flags(name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_element_flag_element ON element_flags(element_key)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_namalsk_tag_name ON namalsk_tags(name)')
     
     # Populate reference tables from cfglimitsdefinition.xml
     for cat in ref_data['categories']:
@@ -372,12 +551,16 @@ def init_database_for_file(db_file_path, mission_dir=None):
     
     for value in ref_data['valueflags']:
         cursor.execute('INSERT OR IGNORE INTO valueflags (name) VALUES (?)', (value['name'],))
+
+    for namalsk_tag in KNOWN_NAMALSK_TAGS:
+        cursor.execute('INSERT OR IGNORE INTO namalsk_tags (name) VALUES (?)', (namalsk_tag,))
     
     # Ensure count_in_hoarder flag exists
     cursor.execute('INSERT OR IGNORE INTO flags (name) VALUES (?)', ('count_in_hoarder',))
     
     # Migration: add export column to type_elements if missing (existing DBs)
     ensure_export_column(cursor)
+    ensure_namalsk_tag_tables(cursor)
     
     conn.commit()
     conn.close()
@@ -514,10 +697,16 @@ def extract_element_data(root, element_type='type'):
     return results
 
 
-def load_xml_to_database(mission_dir, element_type='type'):
+def load_xml_to_database(mission_dir, element_type='type', format_choices=None):
     """
     Load XML files from mission directory and populate normalized database.
+
+    format_choices: optional dict mapping source_identifier -> 'standard'|'namalsk'
+    for files that contain a mixed format.
     """
+    if format_choices is None:
+        format_choices = {}
+
     conn = get_db_connection(mission_dir)
     cursor = conn.cursor()
     
@@ -559,21 +748,52 @@ def load_xml_to_database(mission_dir, element_type='type'):
                         files_to_load.append((f"{source_folder}/{source_file}", source_folder, source_file, full_file_path))
         except Exception as e:
             print(f"Error parsing cfgeconomycore.xml: {e}")
-    
-    # 3. Load all identified files
+
+    # Pre-scan formats before writing anything
+    parsed_files = []
+    mixed_files = []
     for file_info in files_to_load:
         source_identifier, source_folder, source_file, full_file_path = file_info
-        
         if not full_file_path.exists():
             continue
-        
         try:
             tree = ET.parse(full_file_path)
             root = tree.getroot()
-            
+            detected = detect_types_format(root)
+            chosen = format_choices.get(source_identifier)
+            if detected == 'mixed' and chosen not in ('standard', 'namalsk'):
+                mixed_files.append(source_identifier)
+            else:
+                fmt = chosen if detected == 'mixed' else detected
+                parsed_files.append(
+                    (source_identifier, source_folder, source_file, full_file_path, root, fmt)
+                )
+        except Exception as e:
+            print(f"Error scanning {full_file_path}: {e}")
+
+    if mixed_files:
+        conn.close()
+        return {
+            'file_count': 0,
+            'element_count': 0,
+            'success': False,
+            'needs_format_choice': True,
+            'mixed_files': mixed_files,
+            'error': (
+                'Mixed standard and Namalsk types format detected in the same file. '
+                'Choose which format to trust, or cancel.'
+            ),
+        }
+
+    usage_canonical = get_usage_canonical_map(cursor)
+    
+    # 3. Load all identified files
+    for source_identifier, source_folder, source_file, full_file_path, root, fmt in parsed_files:
+        try:
             elements = extract_element_data(root, element_type)
             
             for elem in elements:
+                elem = normalize_type_element_to_standard(elem, fmt, usage_canonical)
                 # Get name for element_key
                 name_value = elem.get('name')
                 if not name_value:
@@ -593,13 +813,14 @@ def load_xml_to_database(mission_dir, element_type='type'):
                         updated_at = excluded.updated_at
                 ''', (element_key, name_value, source_file, source_folder, datetime.now().isoformat()))
                 
-                # Delete existing fields for this element
+                # Delete existing fields and relationships for this element
                 cursor.execute('DELETE FROM type_element_fields WHERE element_key = ?', (element_key,))
+                clear_element_relationships(cursor, element_key, clear_namalsk_tags=(fmt == 'namalsk'))
                 
                 # Process each field and save to type_element_fields
                 for field_name, field_value in elem.items():
-                    if field_name == 'name':
-                        continue  # Already stored in type_elements.name
+                    if field_name == 'name' or field_name.startswith('_'):
+                        continue  # name stored on type_elements; _namalsk_tags handled below
                     
                     # Handle categories
                     if field_name == 'category':
@@ -625,7 +846,7 @@ def load_xml_to_database(mission_dir, element_type='type'):
                                         ''', (element_key, cat_row['id']))
                         continue
                     
-                    # Handle tags
+                    # Handle tags (DayZ shelves/floor — not Namalsk economy tags)
                     if field_name == 'tag':
                         tag_names = []
                         if isinstance(field_value, dict) and 'name' in field_value:
@@ -652,13 +873,13 @@ def load_xml_to_database(mission_dir, element_type='type'):
                             usage_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
                         
                         for usage_name in usage_names:
-                            cursor.execute('SELECT id FROM usageflags WHERE name = ?', (usage_name,))
-                            usage_row = cursor.fetchone()
-                            if usage_row:
+                            usage_id = ensure_usageflag_id(cursor, usage_name)
+                            if usage_id:
                                 cursor.execute('''
                                     INSERT OR REPLACE INTO element_usageflags (element_key, usageflag_id)
                                     VALUES (?, ?)
-                                ''', (element_key, usage_row['id']))
+                                ''', (element_key, usage_id))
+                                usage_canonical[str(usage_name).lower()] = usage_name
                         continue
                     
                     # Handle value
@@ -670,13 +891,12 @@ def load_xml_to_database(mission_dir, element_type='type'):
                             value_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
                         
                         for value_name in value_names:
-                            cursor.execute('SELECT id FROM valueflags WHERE name = ?', (value_name,))
-                            value_row = cursor.fetchone()
-                            if value_row:
+                            value_id = ensure_valueflag_id(cursor, value_name)
+                            if value_id:
                                 cursor.execute('''
                                     INSERT OR REPLACE INTO element_valueflags (element_key, valueflag_id)
                                     VALUES (?, ?)
-                                ''', (element_key, value_row['id']))
+                                ''', (element_key, value_id))
                         continue
                     
                     # Handle flags - extract attributes as boolean flags
@@ -756,6 +976,9 @@ def load_xml_to_database(mission_dir, element_type='type'):
                             (element_key, field_name, field_value, data_type, field_order, attributes_json)
                             VALUES (?, ?, ?, ?, NULL, NULL)
                         ''', (element_key, field_name, str(field_value), data_type))
+
+                if fmt == 'namalsk':
+                    set_element_namalsk_tags(cursor, element_key, elem.get('_namalsk_tags') or [])
                 
                 element_count += 1
             
@@ -770,7 +993,8 @@ def load_xml_to_database(mission_dir, element_type='type'):
     
     return {
         'file_count': file_count,
-        'element_count': element_count
+        'element_count': element_count,
+        'success': True,
     }
 
 
@@ -852,9 +1076,21 @@ def new_project():
         init_database(mission_dir)
         created_db = True
 
-        import_result = {'file_count': 0, 'element_count': 0}
+        import_result = {'file_count': 0, 'element_count': 0, 'success': True}
         if import_xml:
-            import_result = load_xml_to_database(mission_dir, 'type')
+            format_choices = data.get('format_choices') or {}
+            import_result = load_xml_to_database(mission_dir, 'type', format_choices=format_choices)
+            if import_result.get('needs_format_choice'):
+                return jsonify({
+                    'success': False,
+                    'needs_format_choice': True,
+                    'mixed_files': import_result.get('mixed_files', []),
+                    'error': import_result.get('error'),
+                    'mission_dir': mission_dir,
+                    'db_file_path': str(db_file),
+                    'created_mission_dir': created_mission_dir,
+                    'created_db': created_db,
+                })
 
         if profile_dir is None:
             profile_dir = guess_profile_dir(mission_dir)
@@ -887,9 +1123,10 @@ def load_data():
     """Load XML data into the database."""
     global current_mission_dir
     try:
-        data = request.json
+        data = request.json or {}
         mission_dir = data.get('mission_dir', current_mission_dir)
         element_type = data.get('element_type', 'type')
+        format_choices = data.get('format_choices') or {}
         
         # Initialize database
         init_database(mission_dir)
@@ -897,7 +1134,16 @@ def load_data():
         db_file_path = str(get_db_path(mission_dir))
         
         # Load XML data
-        result = load_xml_to_database(mission_dir, element_type)
+        result = load_xml_to_database(mission_dir, element_type, format_choices=format_choices)
+        if result.get('needs_format_choice'):
+            return jsonify({
+                'success': False,
+                'needs_format_choice': True,
+                'mixed_files': result.get('mixed_files', []),
+                'error': result.get('error'),
+                'db_file_path': db_file_path,
+            })
+
         project = set_active_project(mission_dir, db_file_path=db_file_path)
         
         return jsonify({
@@ -907,6 +1153,27 @@ def load_data():
             'db_file_path': db_file_path,
             'project': project,
         })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/editor-settings', methods=['GET', 'POST'])
+def editor_settings():
+    """Get or save per-mission Economy Editor settings (e.g. namalsk_format)."""
+    try:
+        if request.method == 'GET':
+            mission_dir = (request.args.get('mission_dir') or '').strip()
+            if not mission_dir:
+                return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
+            settings = load_editor_settings(mission_dir)
+            return jsonify({'success': True, 'settings': settings})
+
+        data = request.json or {}
+        mission_dir = (data.get('mission_dir') or '').strip()
+        if not mission_dir:
+            return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
+        settings = save_editor_settings(mission_dir, data.get('settings') or data)
+        return jsonify({'success': True, 'settings': settings})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -1109,6 +1376,18 @@ def get_elements():
             usageflags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
             data['_usageflags'] = usageflags
             data['_usageflag_names'] = [u['name'] for u in usageflags]
+
+            # Get Namalsk economy tags
+            cursor.execute('''
+                SELECT nt.id, nt.name
+                FROM namalsk_tags nt
+                JOIN element_namalsk_tags ent ON nt.id = ent.namalsk_tag_id
+                WHERE ent.element_key = ?
+                ORDER BY nt.name
+            ''', (element_key,))
+            namalsk_tags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+            data['_namalsk_tags'] = namalsk_tags
+            data['_namalsk_tag_names'] = [t['name'] for t in namalsk_tags]
             
             # Get valueflags
             cursor.execute('''
@@ -1224,6 +1503,94 @@ def delete_elements():
             'success': True,
             'deleted_count': deleted_count,
             'errors': errors if errors else None
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/elements/fill-namalsk-tags', methods=['POST'])
+def fill_namalsk_tags_from_usages():
+    """Derive and store Namalsk tags from usage flags for selected elements."""
+    try:
+        data = request.json or {}
+        element_keys = data.get('element_keys', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+        only_empty = data.get('only_empty', True)
+
+        if not element_keys:
+            return jsonify({'success': False, 'error': 'No elements specified'}), 400
+
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+        ensure_namalsk_tag_tables(cursor)
+
+        updated_count = 0
+        skipped_count = 0
+        empty_usage_count = 0
+        errors = []
+
+        for element_key in element_keys:
+            try:
+                cursor.execute(
+                    'SELECT element_key FROM type_elements WHERE element_key = ?',
+                    (element_key,),
+                )
+                if not cursor.fetchone():
+                    errors.append(f"Element '{element_key}' not found")
+                    continue
+
+                if only_empty:
+                    cursor.execute(
+                        'SELECT 1 FROM element_namalsk_tags WHERE element_key = ? LIMIT 1',
+                        (element_key,),
+                    )
+                    if cursor.fetchone():
+                        skipped_count += 1
+                        continue
+
+                cursor.execute('''
+                    SELECT uf.name
+                    FROM usageflags uf
+                    JOIN element_usageflags eu ON uf.id = eu.usageflag_id
+                    WHERE eu.element_key = ?
+                    ORDER BY uf.name
+                ''', (element_key,))
+                usage_names = [row['name'] for row in cursor.fetchall()]
+                tags, _unmapped = derive_namalsk_tags_from_usages(usage_names)
+                if not tags:
+                    empty_usage_count += 1
+                set_element_namalsk_tags(cursor, element_key, tags)
+                cursor.execute(
+                    'UPDATE type_elements SET updated_at = ? WHERE element_key = ?',
+                    (datetime.now().isoformat(), element_key),
+                )
+                updated_count += 1
+            except Exception as e:
+                errors.append(f"Error updating '{element_key}': {str(e)}")
+
+        conn.commit()
+        conn.close()
+
+        if errors and updated_count == 0:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to fill Namalsk tags',
+                'errors': errors,
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'updated_count': updated_count,
+            'skipped_count': skipped_count,
+            'empty_usage_count': empty_usage_count,
+            'errors': errors if errors else None,
         })
     except Exception as e:
         import traceback
@@ -1362,6 +1729,11 @@ def import_xml():
         mission_dir = request.form.get('mission_dir', '')
         db_file_path = request.form.get('db_file_path', '')
         element_type = request.form.get('element_type', 'type')
+        types_format = (request.form.get('types_format') or '').strip().lower() or None
+        if types_format not in (None, 'standard', 'namalsk'):
+            types_format = None
+        # Default True: keep itemclass / itemtags / export on overwrite
+        preserve_editor_fields = request.form.get('preserve_editor_fields', 'true').lower() == 'true'
         
         # Get decisions from form data (overwrite_all, skip_all, or individual decisions)
         overwrite_all = request.form.get('overwrite_all', 'false').lower() == 'true'
@@ -1392,8 +1764,14 @@ def import_xml():
                     backup_file = backup_dir / f"{db_file.stem}_backup_{timestamp}{db_file.suffix}"
                     shutil.copy2(db_file, backup_file)
             
-            # Process import
-            result = import_xml_file(tmp_path, mission_dir, db_file_path, element_type, overwrite_all, skip_all, decisions)
+            # Process import (use original upload name for source_file, not temp path)
+            original_name = Path(file.filename).name if file.filename else 'imported.xml'
+            result = import_xml_file(
+                tmp_path, mission_dir, db_file_path, element_type,
+                overwrite_all, skip_all, decisions, types_format=types_format,
+                preserve_editor_fields=preserve_editor_fields,
+                source_file_name=original_name,
+            )
             return jsonify(result)
         finally:
             # Clean up temporary file
@@ -1493,10 +1871,16 @@ def check_import_duplicates():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type', overwrite_all=False, skip_all=False, decisions=None):
+def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type', overwrite_all=False, skip_all=False, decisions=None, types_format=None, preserve_editor_fields=True, source_file_name=None):
     """
     Import elements from an XML file into the database.
     Returns statistics about the import operation.
+
+    types_format: optional 'standard'|'namalsk' override when file is mixed.
+    preserve_editor_fields: when True (default), overwriting an existing type updates
+    XML fields in place and keeps itemclass, itemtags, and export. When False,
+    the row is deleted first (CASCADE clears editor-only links).
+    source_file_name: display name stored as source_file (defaults to path basename).
     """
     if decisions is None:
         decisions = {}
@@ -1513,7 +1897,22 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
         # Parse XML file
         tree = ET.parse(xml_file_path)
         root = tree.getroot()
+        detected = detect_types_format(root)
+        if detected == 'mixed' and types_format not in ('standard', 'namalsk'):
+            conn.close()
+            return {
+                'success': False,
+                'needs_format_choice': True,
+                'mixed_files': [Path(xml_file_path).name],
+                'error': (
+                    'Mixed standard and Namalsk types format detected in the same file. '
+                    'Choose which format to trust, or cancel.'
+                ),
+            }
+        fmt = types_format if detected == 'mixed' else detected
+
         elements = extract_element_data(root, element_type)
+        usage_canonical = get_usage_canonical_map(cursor)
         
         # Get existing element keys
         cursor.execute('SELECT element_key FROM type_elements')
@@ -1524,11 +1923,12 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
         skipped_count = 0
         errors = []
         
-        source_file = Path(xml_file_path).name
+        source_file = Path(source_file_name).name if source_file_name else Path(xml_file_path).name
         source_folder = 'imported'
         
         for elem in elements:
             try:
+                elem = normalize_type_element_to_standard(elem, fmt, usage_canonical)
                 name_value = elem.get('name')
                 if not name_value:
                     continue
@@ -1554,11 +1954,15 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                         skipped_count += 1
                         continue
                     elif action == 'overwrite':
-                        # Delete existing element first (CASCADE will handle related tables)
-                        cursor.execute('DELETE FROM type_elements WHERE element_key = ?', (element_key,))
+                        if not preserve_editor_fields:
+                            # Destructive: CASCADE clears itemclass / itemtags / export
+                            cursor.execute('DELETE FROM type_elements WHERE element_key = ?', (element_key,))
                         updated_count += 1
+                    else:
+                        skipped_count += 1
+                        continue
                 
-                # Insert or update element (preserve export on update - DB-only field)
+                # Insert or update element (ON CONFLICT preserves export; never touches itemclass)
                 cursor.execute('''
                     INSERT INTO type_elements 
                     (element_key, name, source_file, source_folder, export, updated_at)
@@ -1570,8 +1974,9 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                         updated_at = excluded.updated_at
                 ''', (element_key, name_value, source_file, source_folder, datetime.now().isoformat()))
                 
-                # Delete existing fields for this element
+                # Refresh XML-backed fields/links only (itemclass / itemtags left intact)
                 cursor.execute('DELETE FROM type_element_fields WHERE element_key = ?', (element_key,))
+                clear_element_relationships(cursor, element_key, clear_namalsk_tags=(fmt == 'namalsk'))
                 
                 # Process and save fields to normalized table
                 # First, handle relationships (categories, tags, usageflags, valueflags, flags)
@@ -1676,13 +2081,13 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                             usage_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
                         
                         for usage_name in usage_names:
-                            cursor.execute('SELECT id FROM usageflags WHERE name = ?', (usage_name,))
-                            usage_row = cursor.fetchone()
-                            if usage_row:
+                            usage_id = ensure_usageflag_id(cursor, usage_name)
+                            if usage_id:
                                 cursor.execute('''
                                     INSERT OR REPLACE INTO element_usageflags (element_key, usageflag_id)
                                     VALUES (?, ?)
-                                ''', (element_key, usage_row['id']))
+                                ''', (element_key, usage_id))
+                                usage_canonical[str(usage_name).lower()] = usage_name
                         continue
                     
                     # Handle value
@@ -1694,13 +2099,12 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                             value_names = [item.get('name') for item in field_value if isinstance(item, dict) and 'name' in item]
                         
                         for value_name in value_names:
-                            cursor.execute('SELECT id FROM valueflags WHERE name = ?', (value_name,))
-                            value_row = cursor.fetchone()
-                            if value_row:
+                            value_id = ensure_valueflag_id(cursor, value_name)
+                            if value_id:
                                 cursor.execute('''
                                     INSERT OR REPLACE INTO element_valueflags (element_key, valueflag_id)
                                     VALUES (?, ?)
-                                ''', (element_key, value_row['id']))
+                                ''', (element_key, value_id))
                         continue
                     
                     # Handle flags - extract attributes as boolean flags
@@ -1732,6 +2136,9 @@ def import_xml_file(xml_file_path, mission_dir, db_file_path, element_type='type
                                     VALUES (?, ?, ?)
                                 ''', (element_key, flag_id, flag_val))
                         continue
+
+                if fmt == 'namalsk':
+                    set_element_namalsk_tags(cursor, element_key, elem.get('_namalsk_tags') or [])
                 
                 if not is_duplicate:
                     added_count += 1
@@ -2275,6 +2682,9 @@ def get_reference_data():
         
         cursor.execute('SELECT id, name FROM usageflags ORDER BY name')
         usageflags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
+
+        cursor.execute('SELECT id, name FROM namalsk_tags ORDER BY name')
+        namalsk_tags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
         
         cursor.execute('SELECT id, name FROM valueflags ORDER BY name')
         valueflags = [{'id': r['id'], 'name': r['name']} for r in cursor.fetchall()]
@@ -2294,6 +2704,7 @@ def get_reference_data():
             'success': True,
             'categories': categories,
             'tags': tags,
+            'namalsk_tags': namalsk_tags,
             'usageflags': usageflags,
             'valueflags': valueflags,
             'itemclasses': itemclasses,
@@ -2327,8 +2738,15 @@ def save_cfglimitsdefinition():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def reconstruct_xml_element(data_dict, element_tag='type'):
-    """Reconstruct an XML element from normalized data."""
+def reconstruct_xml_element(data_dict, element_tag='type', format='standard', warnings=None):
+    """Reconstruct an XML element from normalized data.
+
+    format: 'standard' | 'namalsk'
+    warnings: optional list to append export warnings (e.g. non-tier values on Namalsk).
+    """
+    if warnings is None:
+        warnings = []
+
     # Set name as attribute if present
     name_value = data_dict.get('name')
     if name_value:
@@ -2389,6 +2807,28 @@ def reconstruct_xml_element(data_dict, element_tag='type'):
         for flag_name, flag_value in flags_data.items():
             flags_elem.set(flag_name, str(flag_value))
         elem.append(flags_elem)
+
+    namalsk_tag_names = data_dict.get('_namalsk_tags') or data_dict.get('namalsk_tags') or []
+    if namalsk_tag_names and isinstance(namalsk_tag_names[0], dict):
+        namalsk_tag_names = [
+            t.get('name') for t in namalsk_tag_names
+            if isinstance(t, dict) and t.get('name')
+        ]
+
+    if format == 'namalsk':
+        # Namalsk order: scalars, flags, empty usage, value user, category, economy tags
+        append_namalsk_type_children(
+            elem,
+            {
+                'name': name_value,
+                'category': categories,
+                'usage': usages,
+                'value': values,
+                '_namalsk_tags': namalsk_tag_names,
+            },
+            warnings=warnings,
+        )
+        return elem
     
     # Add category elements
     for cat in categories:
@@ -2396,9 +2836,21 @@ def reconstruct_xml_element(data_dict, element_tag='type'):
         if child is not None:
             elem.append(child)
     
-    # Add usage elements
+    # Standard usages: prefer stored; else derive from namalsk tags
+    usage_names = []
     for usage in usages:
-        child = reconstruct_child_element('usage', usage)
+        if isinstance(usage, dict) and usage.get('name') is not None:
+            usage_names.append(str(usage['name']))
+        elif isinstance(usage, str):
+            usage_names.append(usage)
+    export_usages = resolve_standard_export_usages(
+        usage_names,
+        namalsk_tag_names,
+        warnings=warnings,
+        element_name=str(name_value) if name_value else None,
+    )
+    for usage_name in export_usages:
+        child = reconstruct_child_element('usage', {'name': usage_name})
         if child is not None:
             elem.append(child)
     
@@ -2534,12 +2986,13 @@ def update_cfglimitsdefinition_xml(mission_dir, db_file_path=None):
         return {'success': False, 'error': str(e)}
 
 
-def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfolder='exported-types', db_file_path=None):
+def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfolder='exported-types', db_file_path=None, namalsk_format=False):
     """
     Export database contents back to XML files.
     Supports both normal export and export by itemclass.
     Only elements with export=1 are written to XML.
     """
+    export_format = 'namalsk' if namalsk_format else 'standard'
     if db_file_path:
         conn = get_db_connection(db_file_path=db_file_path)
     else:
@@ -2560,7 +3013,10 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         return {'success': False, 'error': f"Failed to update cfglimitsdefinition.xml: {update_result.get('error')}"}
     
     if export_by_itemclass:
-        result = export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path)
+        result = export_by_itemclass_to_xml(
+            mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path,
+            namalsk_format=namalsk_format,
+        )
         conn.close()
         return result
     
@@ -2591,11 +3047,12 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
     error_count = 0
     errors = []
     exported_files = []
+    warnings = []
     
     try:
         root = ET.Element('types')
         for elem_data in all_elements:
-            type_elem = reconstruct_xml_element(elem_data, 'type')
+            type_elem = reconstruct_xml_element(elem_data, 'type', format=export_format, warnings=warnings)
             root.append(type_elem)
         
         tree = ET.ElementTree(root)
@@ -2616,7 +3073,9 @@ def export_database_to_xml(mission_dir, export_by_itemclass=False, export_subfol
         'exported_count': exported_count,
         'error_count': error_count,
         'errors': errors,
-        'exported_files': exported_files
+        'exported_files': exported_files,
+        'warnings': warnings,
+        'format': export_format,
     }
 
 
@@ -2695,6 +3154,17 @@ def load_element_data(cursor, element_key):
     usageflags = [r['name'] for r in cursor.fetchall()]
     if usageflags:
         data['usage'] = [{'name': name} for name in usageflags]
+
+    cursor.execute('''
+        SELECT nt.name
+        FROM namalsk_tags nt
+        JOIN element_namalsk_tags ent ON nt.id = ent.namalsk_tag_id
+        WHERE ent.element_key = ?
+        ORDER BY nt.name
+    ''', (element_key,))
+    namalsk_tags = [r['name'] for r in cursor.fetchall()]
+    if namalsk_tags:
+        data['_namalsk_tags'] = namalsk_tags
     
     # Add valueflags
     cursor.execute('''
@@ -2730,8 +3200,9 @@ def load_element_data(cursor, element_key):
     return data
 
 
-def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path=None):
+def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, mission_path, db_file_path=None, namalsk_format=False):
     """Export elements grouped by itemclass."""
+    export_format = 'namalsk' if namalsk_format else 'standard'
     # Get all elements with itemclasses (only those marked for export)
     cursor.execute('''
         SELECT te.element_key, ic.name as itemclass_name
@@ -2765,6 +3236,7 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
     error_count = 0
     errors = []
     exported_files = []
+    warnings = []
     
     # Export each itemclass
     for itemclass_name, elements in itemclass_data.items():
@@ -2777,7 +3249,7 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
         try:
             root = ET.Element('types')
             for elem_data in elements:
-                type_elem = reconstruct_xml_element(elem_data, 'type')
+                type_elem = reconstruct_xml_element(elem_data, 'type', format=export_format, warnings=warnings)
                 root.append(type_elem)
             
             tree = ET.ElementTree(root)
@@ -2799,7 +3271,7 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
         try:
             root = ET.Element('types')
             for elem_data in unassigned_elements:
-                type_elem = reconstruct_xml_element(elem_data, 'type')
+                type_elem = reconstruct_xml_element(elem_data, 'type', format=export_format, warnings=warnings)
                 root.append(type_elem)
             
             tree = ET.ElementTree(root)
@@ -2824,7 +3296,9 @@ def export_by_itemclass_to_xml(mission_dir, export_subfolder, conn, cursor, miss
         'error_count': error_count,
         'errors': errors,
         'cfgeconomycore_updated': cfgeconomycore_updated,
-        'exported_files': exported_files
+        'exported_files': exported_files,
+        'warnings': warnings,
+        'format': export_format,
     }
 
 
@@ -3275,6 +3749,70 @@ def update_element_valueflags(element_key):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/elements/<element_key>/namalsk-tags', methods=['PUT'])
+def update_element_namalsk_tags(element_key):
+    """Update Namalsk economy tags for an element."""
+    try:
+        from urllib.parse import unquote
+        element_key = unquote(element_key)
+
+        if not request.json:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        data = request.json
+        namalsk_tag_ids = data.get('namalsk_tag_ids', [])
+        mission_dir = data.get('mission_dir')
+        db_file_path = data.get('db_file_path')
+
+        if not isinstance(namalsk_tag_ids, list):
+            return jsonify({'error': 'namalsk_tag_ids must be a list'}), 400
+
+        if db_file_path:
+            conn = get_db_connection(db_file_path=db_file_path)
+        else:
+            mission_dir = mission_dir or current_mission_dir
+            conn = get_db_connection(mission_dir)
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT element_key FROM type_elements WHERE element_key = ?', (element_key,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Element not found'}), 404
+
+        valid_ids = []
+        seen = set()
+        for tid in namalsk_tag_ids:
+            if tid is not None and tid not in seen:
+                try:
+                    valid_ids.append(int(tid))
+                    seen.add(tid)
+                except (ValueError, TypeError):
+                    continue
+
+        cursor.execute('DELETE FROM element_namalsk_tags WHERE element_key = ?', (element_key,))
+        for tag_id in valid_ids:
+            cursor.execute('SELECT id FROM namalsk_tags WHERE id = ?', (tag_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO element_namalsk_tags (element_key, namalsk_tag_id)
+                    VALUES (?, ?)
+                ''', (element_key, tag_id))
+
+        cursor.execute('''
+            UPDATE type_elements
+            SET updated_at = ?
+            WHERE element_key = ?
+        ''', (datetime.now().isoformat(), element_key))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/elements/<element_key>/usageflags', methods=['PUT'])
 def update_element_usageflags(element_key):
     """Update usageflags for an element."""
@@ -3560,16 +4098,20 @@ def update_field(element_key, field_name):
 def export_to_xml():
     """Export database to XML files."""
     try:
-        data = request.json
+        data = request.json or {}
         mission_dir = data.get('mission_dir')
         export_by_itemclass = data.get('export_by_itemclass', False)
         export_subfolder = data.get('export_subfolder', 'exported-types')
         db_file_path = data.get('db_file_path')
+        namalsk_format = bool(data.get('namalsk_format', False))
         
         if not mission_dir:
             return jsonify({'success': False, 'error': 'Mission directory is required'}), 400
         
-        result = export_database_to_xml(mission_dir, export_by_itemclass, export_subfolder, db_file_path)
+        result = export_database_to_xml(
+            mission_dir, export_by_itemclass, export_subfolder, db_file_path,
+            namalsk_format=namalsk_format,
+        )
         
         return jsonify(result)
     except Exception as e:

@@ -7,9 +7,20 @@ let tableColumns = [];
 let sortColumn = null;
 let sortDirection = 'asc'; // 'asc' or 'desc'
 let columnVisibility = {}; // Map of column key -> boolean (visible)
+const DEFAULT_HIDDEN_COLUMNS = new Set([
+    '_namalsk_tags', // Namalsk Tags (Full) — names column is enough by default
+]);
+
+function isColumnVisible(columnKey) {
+    if (Object.prototype.hasOwnProperty.call(columnVisibility, columnKey)) {
+        return columnVisibility[columnKey] !== false;
+    }
+    return !DEFAULT_HIDDEN_COLUMNS.has(columnKey);
+}
 let allAvailableColumns = []; // All columns that exist in the data
 let availableValueflags = []; // List of all available valueflags
 let availableUsageflags = []; // List of all available usageflags
+let availableNamalskTags = []; // Namalsk economy tags (not DayZ shelves/floor tags)
 let availableFlags = []; // List of all available flags
 let availableCategories = []; // List of all available categories
 let availableTags = []; // List of all available tags
@@ -73,7 +84,19 @@ function setupEventListeners() {
     document.getElementById('exportBtn').addEventListener('click', exportToXML);
     document.getElementById('importXmlBtn').addEventListener('click', () => document.getElementById('importXmlFile').click());
     document.getElementById('importXmlFile').addEventListener('change', handleXmlFileSelected);
+    const namalskFormatCheckbox = document.getElementById('namalskFormat');
+    if (namalskFormatCheckbox) {
+        namalskFormatCheckbox.addEventListener('change', saveNamalskFormatSetting);
+    }
+    const preserveEditorFieldsCheckbox = document.getElementById('preserveEditorFields');
+    if (preserveEditorFieldsCheckbox) {
+        preserveEditorFieldsCheckbox.addEventListener('change', savePreserveEditorFieldsSetting);
+    }
     document.getElementById('deleteBtn').addEventListener('click', deleteSelectedElements);
+    const fillNamalskTagsBtn = document.getElementById('fillNamalskTagsBtn');
+    if (fillNamalskTagsBtn) {
+        fillNamalskTagsBtn.addEventListener('click', fillNamalskTagsForSelected);
+    }
     document.getElementById('columnVisibilityBtn').addEventListener('click', openColumnVisibilityModal);
     document.getElementById('manageItemclassesBtn').addEventListener('click', openItemclassesModal);
     document.getElementById('manageItemtagsBtn').addEventListener('click', openItemtagsModal);
@@ -134,6 +157,10 @@ function setupEventListeners() {
     document.getElementById('cancelValueflagsBtn').addEventListener('click', closeValueflagsModal);
     document.getElementById('saveUsageflagsBtn').addEventListener('click', saveUsageflags);
     document.getElementById('cancelUsageflagsBtn').addEventListener('click', closeUsageflagsModal);
+    const saveNamalskTagsBtn = document.getElementById('saveNamalskTagsBtn');
+    if (saveNamalskTagsBtn) saveNamalskTagsBtn.addEventListener('click', saveNamalskTags);
+    const cancelNamalskTagsBtn = document.getElementById('cancelNamalskTagsBtn');
+    if (cancelNamalskTagsBtn) cancelNamalskTagsBtn.addEventListener('click', closeNamalskTagsModal);
     document.getElementById('addCategoryBtn').addEventListener('click', addCategory);
     document.getElementById('saveFlagsBtn').addEventListener('click', saveFlags);
     document.getElementById('cancelFlagsBtn').addEventListener('click', closeFlagsModal);
@@ -306,6 +333,18 @@ function setupEventListeners() {
         itemtagsEditorCloseBtn.addEventListener('click', closeItemtagsEditorModal);
     }
     
+    const namalskTagsCloseBtn = document.querySelector('#namalskTagsModal .close-modal');
+    if (namalskTagsCloseBtn) {
+        namalskTagsCloseBtn.addEventListener('click', closeNamalskTagsModal);
+    }
+    const namalskTagsModal = document.getElementById('namalskTagsModal');
+    if (namalskTagsModal) {
+        namalskTagsModal.addEventListener('click', (e) => {
+            if (e.target.id === 'namalskTagsModal') {
+                closeNamalskTagsModal();
+            }
+        });
+    }
     document.getElementById('usageflagsModal').addEventListener('click', (e) => {
         if (e.target.id === 'usageflagsModal') {
             closeUsageflagsModal();
@@ -422,6 +461,7 @@ function applyProjectPaths(missionDir, dbFilePath) {
         const missionDirInput = document.getElementById('missionDir');
         if (missionDirInput) missionDirInput.value = missionDir;
         localStorage.setItem('editorV2MissionDir', missionDir);
+        loadEditorSettings(missionDir);
     }
     if (dbFilePath) {
         currentDbFilePath = dbFilePath;
@@ -429,6 +469,100 @@ function applyProjectPaths(missionDir, dbFilePath) {
         if (dbFilePathInput) dbFilePathInput.value = dbFilePath;
         saveDbFilePath();
     }
+}
+
+async function loadEditorSettings(missionDir) {
+    const namalskCheckbox = document.getElementById('namalskFormat');
+    const preserveCheckbox = document.getElementById('preserveEditorFields');
+    if (!missionDir) {
+        if (namalskCheckbox) namalskCheckbox.checked = false;
+        if (preserveCheckbox) preserveCheckbox.checked = true;
+        return;
+    }
+    try {
+        const response = await fetch(`/api/editor-settings?mission_dir=${encodeURIComponent(missionDir)}`);
+        const data = await response.json();
+        if (data.success && data.settings) {
+            if (namalskCheckbox) namalskCheckbox.checked = !!data.settings.namalsk_format;
+            if (preserveCheckbox) {
+                preserveCheckbox.checked = data.settings.preserve_editor_fields !== false;
+            }
+        } else {
+            if (namalskCheckbox) namalskCheckbox.checked = false;
+            if (preserveCheckbox) preserveCheckbox.checked = true;
+        }
+    } catch (error) {
+        console.warn('Could not load editor settings:', error);
+        if (namalskCheckbox) namalskCheckbox.checked = false;
+        if (preserveCheckbox) preserveCheckbox.checked = true;
+    }
+}
+
+async function saveEditorSettingPatch(patch) {
+    const missionDir = (document.getElementById('missionDir')?.value || currentMissionDir || '').trim();
+    if (!missionDir || !patch) return;
+    try {
+        await fetch('/api/editor-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mission_dir: missionDir,
+                settings: patch
+            })
+        });
+    } catch (error) {
+        console.warn('Could not save editor settings:', error);
+    }
+}
+
+async function saveNamalskFormatSetting() {
+    const checkbox = document.getElementById('namalskFormat');
+    if (!checkbox) return;
+    await saveEditorSettingPatch({ namalsk_format: !!checkbox.checked });
+}
+
+async function savePreserveEditorFieldsSetting() {
+    const checkbox = document.getElementById('preserveEditorFields');
+    if (!checkbox) return;
+    await saveEditorSettingPatch({ preserve_editor_fields: !!checkbox.checked });
+}
+
+function showFormatChoiceDialog(mixedFiles) {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'block';
+
+        const fileList = (mixedFiles || []).map(f => `<li>${f}</li>`).join('');
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        content.style.maxWidth = '560px';
+        content.innerHTML = `
+            <h2>Mixed types format detected</h2>
+            <p>These file(s) contain both standard and Namalsk types markers:</p>
+            <ul>${fileList || '<li>(unknown file)</li>'}</ul>
+            <p>Trust which format for this import? (Cancel aborts.)</p>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-primary" data-choice="namalsk">Trust Namalsk</button>
+                <button type="button" class="btn" data-choice="standard">Trust Standard</button>
+                <button type="button" class="btn btn-danger" data-choice="cancel">Cancel</button>
+            </div>
+        `;
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        content.querySelectorAll('[data-choice]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const choice = btn.getAttribute('data-choice');
+                modal.remove();
+                if (choice === 'cancel') {
+                    resolve(null);
+                } else {
+                    resolve(choice);
+                }
+            });
+        });
+    });
 }
 
 async function restoreProjectPaths() {
@@ -440,9 +574,14 @@ async function restoreProjectPaths() {
         const data = await response.json();
         if (data.success && data.project && data.project.mission_dir) {
             applyProjectPaths(data.project.mission_dir, data.project.db_file_path);
+        } else if (currentMissionDir) {
+            await loadEditorSettings(currentMissionDir);
         }
     } catch (error) {
         console.warn('Could not load shared active project:', error);
+        if (currentMissionDir) {
+            await loadEditorSettings(currentMissionDir);
+        }
     }
 }
 
@@ -476,20 +615,39 @@ async function createNewProject() {
 
     try {
         updateStatus('Creating new project...');
-        const response = await fetch('/api/new-project', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                mission_dir: missionDir,
-                create_mission_dir: false,
-                import_xml: importXml,
-                overwrite_db: overwriteDb,
-            })
-        });
+        let formatChoices = {};
+        let data;
 
-        const data = await response.json();
-        if (!data.success) {
-            throw new Error(data.error || 'Failed to create project');
+        while (true) {
+            const response = await fetch('/api/new-project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mission_dir: missionDir,
+                    create_mission_dir: false,
+                    import_xml: importXml,
+                    overwrite_db: overwriteDb || Object.keys(formatChoices).length > 0,
+                    format_choices: formatChoices,
+                })
+            });
+
+            data = await response.json();
+            if (data.needs_format_choice) {
+                const choice = await showFormatChoiceDialog(data.mixed_files || []);
+                if (!choice) {
+                    updateStatus('Project create cancelled — mixed format');
+                    return;
+                }
+                (data.mixed_files || []).forEach(fileId => {
+                    formatChoices[fileId] = choice;
+                });
+                // DB was created; overwrite on retry so import can run again
+                continue;
+            }
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to create project');
+            }
+            break;
         }
 
         applyProjectPaths(data.mission_dir, data.db_file_path);
@@ -615,30 +773,48 @@ async function loadXMLData() {
     currentMissionDir = missionDir;
     localStorage.setItem('editorV2MissionDir', missionDir);
     updateStatus('Loading XML data into database...');
+
+    let formatChoices = {};
     
     try {
-        const response = await fetch('/api/load', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                mission_dir: missionDir,
-                element_type: 'type'
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            if (data.db_file_path) {
-                applyProjectPaths(missionDir, data.db_file_path);
+        while (true) {
+            const response = await fetch('/api/load', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    mission_dir: missionDir,
+                    element_type: 'type',
+                    format_choices: formatChoices
+                })
+            });
+            
+            const data = await response.json();
+
+            if (data.needs_format_choice) {
+                const choice = await showFormatChoiceDialog(data.mixed_files || []);
+                if (!choice) {
+                    updateStatus('Load cancelled — mixed format');
+                    return;
+                }
+                (data.mixed_files || []).forEach(fileId => {
+                    formatChoices[fileId] = choice;
+                });
+                continue;
             }
-            updateStatus(`Loaded ${data.element_count} elements from ${data.file_count} files`);
-            loadReferenceData();
-            loadElements();
-        } else {
-            throw new Error(data.error || 'Failed to load data');
+            
+            if (data.success) {
+                if (data.db_file_path) {
+                    applyProjectPaths(missionDir, data.db_file_path);
+                }
+                updateStatus(`Loaded ${data.element_count} elements from ${data.file_count} files`);
+                loadReferenceData();
+                loadElements();
+            } else {
+                throw new Error(data.error || 'Failed to load data');
+            }
+            break;
         }
     } catch (error) {
         updateStatus('Error loading XML data');
@@ -661,6 +837,7 @@ async function loadReferenceData() {
         if (data.success) {
             availableValueflags = data.valueflags || [];
             availableUsageflags = data.usageflags || [];
+            availableNamalskTags = data.namalsk_tags || [];
             availableFlags = data.flags || [];
             availableCategories = data.categories || [];
             availableTags = data.tags || [];
@@ -794,12 +971,14 @@ function getColumnLabel(key) {
         '_category_names': 'Categories',
         '_tag_names': 'Tags',
         '_usageflag_names': 'Usage Flags',
+        '_namalsk_tag_names': 'Namalsk Tags',
         '_valueflag_names': 'Value Flags',
         '_flag_names': 'Flags',
         '_flags': 'Flags (Full)',
         '_categories': 'Categories (Full)',
         '_tags': 'Tags (Full)',
         '_usageflags': 'Usage Flags (Full)',
+        '_namalsk_tags': 'Namalsk Tags (Full)',
         '_valueflags': 'Value Flags (Full)',
         '_itemclass_name': 'Itemclass',
         '_itemclass_id': 'Itemclass ID',
@@ -849,6 +1028,7 @@ function displayTable() {
         '_category_names',
         '_tag_names',
         '_usageflag_names',
+        '_namalsk_tag_names',
         '_valueflag_names',
         '_flag_names',
         'source'
@@ -878,19 +1058,9 @@ function displayTable() {
         allAvailableColumns.push({ key, label: getColumnLabel(key) });
     });
     
-    // Filter columns based on visibility settings
-    // If no visibility settings exist, show all columns by default
-    const hasVisibilitySettings = Object.keys(columnVisibility).length > 0;
-    
+    // Filter columns based on visibility settings / defaults
     allAvailableColumns.forEach(col => {
-        if (hasVisibilitySettings) {
-            // Use saved visibility setting, default to visible if not set
-            const isVisible = columnVisibility[col.key] !== false;
-            if (isVisible) {
-                displayColumns.push(col);
-            }
-        } else {
-            // No saved settings - show all columns
+        if (isColumnVisible(col.key)) {
             displayColumns.push(col);
         }
     });
@@ -921,11 +1091,12 @@ function displayTable() {
         const isExport = col.key === '_export';
         const isValueflags = col.key === '_valueflag_names' || col.key === '_valueflags';
         const isUsageflags = col.key === '_usageflag_names' || col.key === '_usageflags';
+        const isNamalskTags = col.key === '_namalsk_tag_names' || col.key === '_namalsk_tags';
         const isFlags = col.key === '_flag_names' || col.key === '_flags';
         const isCategories = col.key === '_category_names' || col.key === '_categories';
         const isItemclass = col.key === '_itemclass_name' || col.key === '_itemclass_id';
         const isItemtags = col.key === '_itemtag_names' || col.key === '_itemtags';
-        const editableClass = (isEditable || isExport || isValueflags || isUsageflags || isFlags || isCategories || isItemclass || isItemtags) ? ' editable-column-header' : '';
+        const editableClass = (isEditable || isExport || isValueflags || isUsageflags || isNamalskTags || isFlags || isCategories || isItemclass || isItemtags) ? ' editable-column-header' : '';
         
         html += `<th class="sortable${editableClass}" data-column="${col.key}">${escapeHtml(col.label)}${sortIndicator}</th>`;
     });
@@ -951,7 +1122,8 @@ function displayTable() {
                 // Check if array contains objects
                 if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
                     // Array of objects - format based on column type
-                    if (col.key === '_categories' || col.key === '_tags' || col.key === '_usageflags' || 
+                    if (col.key === '_categories' || col.key === '_tags' || col.key === '_usageflags' ||
+                        col.key === '_namalsk_tags' ||
                         col.key === '_valueflags' || col.key === '_itemtags') {
                         // For full objects, show "id: name" format
                         displayValue = value.map(v => {
@@ -1015,6 +1187,7 @@ function displayTable() {
             const isExport = col.key === '_export';
             const isValueflags = col.key === '_valueflag_names' || col.key === '_valueflags';
             const isUsageflags = col.key === '_usageflag_names' || col.key === '_usageflags';
+            const isNamalskTags = col.key === '_namalsk_tag_names' || col.key === '_namalsk_tags';
             const isFlags = col.key === '_flag_names' || col.key === '_flags';
             const isCategories = col.key === '_category_names' || col.key === '_categories';
             const isItemclass = col.key === '_itemclass_name' || col.key === '_itemclass_id';
@@ -1029,6 +1202,8 @@ function displayTable() {
                 html += `<td class="editable-cell valueflags-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="valueflags">${escapeHtml(displayValue)}</td>`;
             } else if (isUsageflags) {
                 html += `<td class="editable-cell usageflags-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="usageflags">${escapeHtml(displayValue)}</td>`;
+            } else if (isNamalskTags) {
+                html += `<td class="editable-cell namalsk-tags-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="namalsk_tags" title="Empty = auto from usages on Namalsk export">${escapeHtml(displayValue)}</td>`;
             } else if (isFlags) {
                 html += `<td class="editable-cell flags-cell" data-element-key="${escapeHtml(record._element_key || '')}" data-field-name="flags">${escapeHtml(displayValue)}</td>`;
             } else if (isCategories) {
@@ -1192,6 +1367,8 @@ function displayTable() {
                 openValueflagsEditor(cell);
             } else if (cell.classList.contains('usageflags-cell')) {
                 openUsageflagsEditor(cell);
+            } else if (cell.classList.contains('namalsk-tags-cell')) {
+                openNamalskTagsEditor(cell);
             } else if (cell.classList.contains('flags-cell')) {
                 openFlagsEditor(cell);
             } else if (cell.classList.contains('categories-cell')) {
@@ -1260,8 +1437,7 @@ function openColumnVisibilityModal() {
         checkbox.id = `col_${col.key}`;
         checkbox.value = col.key;
         // Check current visibility state, default to true if not set
-        const hasSettings = Object.keys(columnVisibility).length > 0;
-        checkbox.checked = hasSettings ? (columnVisibility[col.key] !== false) : true;
+        checkbox.checked = isColumnVisible(col.key);
         
         const label = document.createElement('label');
         label.htmlFor = `col_${col.key}`;
@@ -1575,6 +1751,128 @@ async function saveUsageflags() {
     } catch (error) {
         console.error('Error updating usageflags:', error);
         alert(`Error updating usageflags: ${error.message}`);
+    }
+}
+
+let currentNamalskTagsElementKey = null;
+
+function openNamalskTagsEditor(cell) {
+    const elementKey = cell.getAttribute('data-element-key');
+    if (!elementKey) {
+        alert('Element key not found');
+        return;
+    }
+
+    const selectedKeys = getSelectedElementKeys();
+    const isBulkEdit = selectedKeys.length > 0 && selectedKeys.includes(elementKey);
+
+    if (isBulkEdit) {
+        currentNamalskTagsElementKey = selectedKeys;
+    } else {
+        currentNamalskTagsElementKey = elementKey;
+    }
+
+    let currentIds = [];
+    if (isBulkEdit) {
+        const allIds = selectedKeys.map(key => {
+            const record = tableData.find(r => r._element_key === key);
+            return record?._namalsk_tags?.map(t => t.id) || [];
+        });
+        if (allIds.length > 0) {
+            currentIds = allIds[0];
+            for (let i = 1; i < allIds.length; i++) {
+                currentIds = currentIds.filter(id => allIds[i].includes(id));
+            }
+        }
+    } else {
+        const record = tableData.find(r => r._element_key === elementKey);
+        currentIds = record?._namalsk_tags?.map(t => t.id) || [];
+    }
+
+    const modal = document.getElementById('namalskTagsModal');
+    const checkboxesContainer = document.getElementById('namalskTagsCheckboxes');
+    const modalTitle = modal.querySelector('h2');
+    if (modalTitle) {
+        modalTitle.textContent = isBulkEdit
+            ? `Edit Namalsk Tags (${selectedKeys.length} selected)`
+            : 'Edit Namalsk Tags';
+    }
+
+    if (availableNamalskTags.length === 0) {
+        alert('No Namalsk tags available. Please load/create a project first.');
+        return;
+    }
+
+    checkboxesContainer.innerHTML = '';
+    availableNamalskTags.forEach(tag => {
+        const checkboxDiv = document.createElement('div');
+        checkboxDiv.className = 'usageflag-checkbox-item';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `namalsk_tag_${tag.id}`;
+        checkbox.value = tag.id;
+        checkbox.checked = currentIds.includes(tag.id);
+
+        const label = document.createElement('label');
+        label.htmlFor = `namalsk_tag_${tag.id}`;
+        label.textContent = tag.name;
+
+        checkboxDiv.appendChild(checkbox);
+        checkboxDiv.appendChild(label);
+        checkboxesContainer.appendChild(checkboxDiv);
+    });
+
+    modal.style.display = 'block';
+}
+
+function closeNamalskTagsModal() {
+    document.getElementById('namalskTagsModal').style.display = 'none';
+    currentNamalskTagsElementKey = null;
+}
+
+async function saveNamalskTags() {
+    if (!currentNamalskTagsElementKey) return;
+
+    const checkboxes = document.querySelectorAll('#namalskTagsCheckboxes input[type="checkbox"]:checked');
+    const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+    const isBulkEdit = Array.isArray(currentNamalskTagsElementKey);
+    const elementKeys = isBulkEdit ? currentNamalskTagsElementKey : [currentNamalskTagsElementKey];
+
+    try {
+        const promises = elementKeys.map(elementKey =>
+            fetch(`/api/elements/${encodeURIComponent(elementKey)}/namalsk-tags`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    namalsk_tag_ids: selectedIds,
+                    mission_dir: currentMissionDir || '',
+                    db_file_path: currentDbFilePath || ''
+                })
+            })
+        );
+
+        const responses = await Promise.all(promises);
+        const results = await Promise.all(responses.map(r => r.json()));
+        const failed = results.filter(r => r.error || r.success === false);
+        if (failed.length > 0) {
+            throw new Error(failed[0].error || 'Failed to update some Namalsk tags');
+        }
+
+        closeNamalskTagsModal();
+        await loadReferenceData();
+        elementKeys.forEach(key => {
+            const record = tableData.find(r => r._element_key === key);
+            if (record) {
+                record._namalsk_tags = availableNamalskTags.filter(t => selectedIds.includes(t.id));
+                record._namalsk_tag_names = record._namalsk_tags.map(t => t.name).join(', ');
+            }
+        });
+        updateCellDisplays(elementKeys, 'namalsk_tags');
+        updateStatus(`Namalsk tags updated successfully${isBulkEdit ? ` (${elementKeys.length} elements)` : ''}`);
+    } catch (error) {
+        console.error('Error updating Namalsk tags:', error);
+        alert(`Error updating Namalsk tags: ${error.message}`);
     }
 }
 
@@ -2150,6 +2448,9 @@ function getColumnType(columnKey) {
     if (columnKey === '_usageflag_names' || columnKey === '_usageflags') {
         return 'usageflags';
     }
+    if (columnKey === '_namalsk_tag_names' || columnKey === '_namalsk_tags') {
+        return 'namalsk_tags';
+    }
     if (columnKey === '_flag_names' || columnKey === '_flags') {
         return 'flags';
     }
@@ -2182,6 +2483,8 @@ function getOptionsForColumnType(columnType) {
             return availableValueflags;
         case 'usageflags':
             return availableUsageflags;
+        case 'namalsk_tags':
+            return availableNamalskTags;
         case 'flags':
             return availableFlags;
         case 'categories':
@@ -2211,7 +2514,8 @@ function applyFilters(data) {
             
             const columnType = getColumnType(filter.column);
             const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
-                                    columnType === 'valueflags' || columnType === 'usageflags' || 
+                                    columnType === 'valueflags' || columnType === 'usageflags' ||
+                                    columnType === 'namalsk_tags' ||
                                     columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
             
             if (columnType === 'boolean') {
@@ -2259,6 +2563,8 @@ function applyDefinedValueFilter(record, column, filterValueIds, criteria, colum
         recordIds = (record._valueflags || []).map(v => v.id);
     } else if (columnType === 'usageflags') {
         recordIds = (record._usageflags || []).map(u => u.id);
+    } else if (columnType === 'namalsk_tags') {
+        recordIds = (record._namalsk_tags || []).map(t => t.id);
     } else if (columnType === 'flags') {
         // Flags can be stored as an array or as a dictionary
         if (Array.isArray(record._flags)) {
@@ -2330,7 +2636,8 @@ function updateFilterUI() {
     
     const columnType = getColumnType(column);
     const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
-                            columnType === 'valueflags' || columnType === 'usageflags' || 
+                            columnType === 'valueflags' || columnType === 'usageflags' ||
+                            columnType === 'namalsk_tags' ||
                             columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
     
     if (columnType === 'boolean') {
@@ -2411,6 +2718,9 @@ function populateFilterValueDropdown(column, columnType) {
         case 'usageflags':
             options = availableUsageflags;
             break;
+        case 'namalsk_tags':
+            options = availableNamalskTags;
+            break;
         case 'flags':
             options = availableFlags;
             break;
@@ -2446,7 +2756,8 @@ function addFilter() {
     let value = null;
     const columnType = getColumnType(column);
     const hasDefinedValues = columnType === 'itemclasses' || columnType === 'itemtags' || 
-                            columnType === 'valueflags' || columnType === 'usageflags' || 
+                            columnType === 'valueflags' || columnType === 'usageflags' ||
+                            columnType === 'namalsk_tags' ||
                             columnType === 'flags' || columnType === 'categories' || columnType === 'tags';
     
     if (columnType === 'boolean') {
@@ -2560,6 +2871,9 @@ function displayActiveFilters() {
                     break;
                 case 'usageflags':
                     options = availableUsageflags;
+                    break;
+                case 'namalsk_tags':
+                    options = availableNamalskTags;
                     break;
                 case 'flags':
                     options = availableFlags;
@@ -2745,6 +3059,7 @@ function formatDisplayValue(value, fieldName) {
     // Check field types
     const isValueflags = fieldName === '_valueflag_names' || fieldName === '_valueflags';
     const isUsageflags = fieldName === '_usageflag_names' || fieldName === '_usageflags';
+    const isNamalskTags = fieldName === '_namalsk_tag_names' || fieldName === '_namalsk_tags';
     const isFlags = fieldName === '_flag_names' || fieldName === '_flags';
     const isCategories = fieldName === '_category_names' || fieldName === '_categories';
     const isTags = fieldName === '_tag_names' || fieldName === '_tags';
@@ -2756,6 +3071,7 @@ function formatDisplayValue(value, fieldName) {
         (isTags && fieldName === '_tag_names') ||
         (isValueflags && fieldName === '_valueflag_names') ||
         (isUsageflags && fieldName === '_usageflag_names') ||
+        (isNamalskTags && fieldName === '_namalsk_tag_names') ||
         (isItemtags && fieldName === '_itemtag_names')) {
         if (typeof value === 'string') {
             return value;
@@ -2764,7 +3080,7 @@ function formatDisplayValue(value, fieldName) {
     
     if (Array.isArray(value)) {
         if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
-            if (isCategories || isTags || isUsageflags || isValueflags || isItemtags) {
+            if (isCategories || isTags || isUsageflags || isNamalskTags || isValueflags || isItemtags) {
                 // For _category_names, _tag_names, etc., show just names
                 if (fieldName.endsWith('_names')) {
                     return value.map(v => v.name || (v.id ? `${v.id}: ${v.name || ''}` : '')).filter(n => n).join(', ');
@@ -2851,6 +3167,9 @@ function updateCellDisplays(elementKeys, fieldName) {
         if (fieldName.startsWith('_')) {
             if (fieldName === '_usageflag_names' || fieldName === '_usageflags') {
                 return ['usageflags', '_usageflag_names', '_usageflags'];
+            }
+            if (fieldName === '_namalsk_tag_names' || fieldName === '_namalsk_tags') {
+                return ['namalsk_tags', '_namalsk_tag_names', '_namalsk_tags'];
             } else if (fieldName === '_category_names' || fieldName === '_categories') {
                 return ['categories', '_category_names', '_categories'];
             } else if (fieldName === '_valueflag_names' || fieldName === '_valueflags') {
@@ -2869,6 +3188,9 @@ function updateCellDisplays(elementKeys, fieldName) {
             // Simplified field names
             if (fieldName === 'usageflags') {
                 return ['usageflags', '_usageflag_names', '_usageflags'];
+            }
+            if (fieldName === 'namalsk_tags') {
+                return ['namalsk_tags', '_namalsk_tag_names', '_namalsk_tags'];
             } else if (fieldName === 'categories') {
                 return ['categories', '_category_names', '_categories'];
             } else if (fieldName === 'valueflags') {
@@ -2912,6 +3234,9 @@ function updateCellDisplays(elementKeys, fieldName) {
                 // Map simplified names to actual record fields
                 if (cellFieldName === 'usageflags' || cellFieldName === '_usageflag_names' || cellFieldName === '_usageflags') {
                     recordFieldName = record._usageflag_names !== undefined ? '_usageflag_names' : '_usageflags';
+                }
+                if (cellFieldName === 'namalsk_tags' || cellFieldName === '_namalsk_tag_names' || cellFieldName === '_namalsk_tags') {
+                    recordFieldName = record._namalsk_tag_names !== undefined ? '_namalsk_tag_names' : '_namalsk_tags';
                 } else if (cellFieldName === 'categories' || cellFieldName === '_category_names' || cellFieldName === '_categories') {
                     recordFieldName = record._category_names !== undefined ? '_category_names' : '_categories';
                 } else if (cellFieldName === 'valueflags' || cellFieldName === '_valueflag_names' || cellFieldName === '_valueflags') {
@@ -2954,6 +3279,7 @@ function updateCellDisplays(elementKeys, fieldName) {
 
 async function exportToXML() {
     const exportByItemclass = document.getElementById('exportByItemclass')?.checked || false;
+    const namalskFormat = document.getElementById('namalskFormat')?.checked || false;
     const exportSubfolder = document.getElementById('exportSubfolder')?.value || 'exported-types';
     
     // Get mission_dir from the Mission Directory field
@@ -2974,6 +3300,9 @@ async function exportToXML() {
     } else {
         confirmMsg += ' Continue?';
     }
+    if (namalskFormat) {
+        confirmMsg += '\n\nNamalsk Format is enabled.';
+    }
     
     if (!confirm(confirmMsg)) {
         return;
@@ -2991,7 +3320,8 @@ async function exportToXML() {
                 mission_dir: missionDir,
                 db_file_path: currentDbFilePath || '',
                 export_by_itemclass: exportByItemclass,
-                export_subfolder: exportSubfolder
+                export_subfolder: exportSubfolder,
+                namalsk_format: namalskFormat
             })
         });
         
@@ -3026,6 +3356,16 @@ async function exportToXML() {
                 data.errors.forEach((error, index) => {
                     alertMsg += `${index + 1}. ${error.file || 'Unknown'}: ${error.error || 'Unknown error'}\n`;
                 });
+            }
+
+            if (data.warnings && data.warnings.length > 0) {
+                alertMsg += `\n\nWarnings:\n`;
+                data.warnings.slice(0, 10).forEach((warning, index) => {
+                    alertMsg += `${index + 1}. ${warning}\n`;
+                });
+                if (data.warnings.length > 10) {
+                    alertMsg += `...and ${data.warnings.length - 10} more\n`;
+                }
             }
             
             alert(alertMsg);
@@ -3875,6 +4215,56 @@ async function deleteCategory(categoryId) {
     }
 }
 
+async function fillNamalskTagsForSelected() {
+    const selectedKeys = getSelectedElementKeys();
+
+    if (selectedKeys.length === 0) {
+        alert('Please select at least one element');
+        return;
+    }
+
+    const count = selectedKeys.length;
+    updateStatus(`Filling Namalsk tags for ${count} element(s)...`);
+
+    try {
+        const response = await fetch('/api/elements/fill-namalsk-tags', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                element_keys: selectedKeys,
+                mission_dir: currentMissionDir || '',
+                db_file_path: currentDbFilePath || '',
+                only_empty: false
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || `Failed to fill Namalsk tags (HTTP ${response.status})`);
+        }
+
+        await loadReferenceData();
+        await loadElements();
+
+        const parts = [`Updated ${data.updated_count}`];
+        if (data.empty_usage_count) {
+            parts.push(`${data.empty_usage_count} had no mappable usages (cleared)`);
+        }
+        updateStatus(`Namalsk tags: ${parts.join(', ')}`);
+
+        if (data.errors && data.errors.length > 0) {
+            console.error('Fill Namalsk tags errors:', data.errors);
+            alert(`Some errors occurred:\n${data.errors.join('\n')}`);
+        }
+    } catch (error) {
+        console.error('Error filling Namalsk tags:', error);
+        alert(`Error filling Namalsk tags: ${error.message}`);
+        updateStatus('Error filling Namalsk tags');
+    }
+}
+
 async function deleteSelectedElements() {
     const selectedKeys = getSelectedElementKeys();
     
@@ -4014,44 +4404,64 @@ async function importXmlFile() {
             }
         }
         
-        // Perform import
+        // Perform import (retry if mixed-format choice needed)
         updateStatus('Importing elements...');
-        
-        const importFormData = new FormData();
-        importFormData.append('file', selectedXmlFile);
-        importFormData.append('mission_dir', currentMissionDir || '');
-        importFormData.append('db_file_path', currentDbFilePath || '');
-        importFormData.append('element_type', 'type');
-        importFormData.append('overwrite_all', overwriteAll.toString());
-        importFormData.append('skip_all', skipAll.toString());
-        importFormData.append('decisions', JSON.stringify(decisions));
-        
-        const importResponse = await fetch('/api/import-xml', {
-            method: 'POST',
-            body: importFormData
-        });
-        
-        const importData = await importResponse.json();
-        if (importData.success) {
-            // Clear file selection
-            selectedXmlFile = null;
-            document.getElementById('importXmlFile').value = '';
-            document.getElementById('importXmlFileName').textContent = '';
-            
-            // Reload elements
-            await loadElements();
-            
-            const errorMsg = importData.errors && importData.errors.length > 0 
-                ? ` (${importData.errors.length} errors)` 
-                : '';
-            updateStatus(`Import complete: ${importData.added_count} added, ${importData.updated_count} updated, ${importData.skipped_count} skipped${errorMsg}`);
-            
-            if (importData.errors && importData.errors.length > 0) {
-                console.error('Import errors:', importData.errors);
-                alert(`Some errors occurred during import:\n${importData.errors.slice(0, 5).join('\n')}${importData.errors.length > 5 ? '\n...' : ''}`);
+        let typesFormat = '';
+
+        while (true) {
+            const importFormData = new FormData();
+            importFormData.append('file', selectedXmlFile);
+            importFormData.append('mission_dir', currentMissionDir || '');
+            importFormData.append('db_file_path', currentDbFilePath || '');
+            importFormData.append('element_type', 'type');
+            importFormData.append('overwrite_all', overwriteAll.toString());
+            importFormData.append('skip_all', skipAll.toString());
+            importFormData.append('decisions', JSON.stringify(decisions));
+            const preserveEditorFields = document.getElementById('preserveEditorFields')?.checked !== false;
+            importFormData.append('preserve_editor_fields', preserveEditorFields.toString());
+            if (typesFormat) {
+                importFormData.append('types_format', typesFormat);
             }
-        } else {
-            throw new Error(importData.error || 'Failed to import XML file');
+            
+            const importResponse = await fetch('/api/import-xml', {
+                method: 'POST',
+                body: importFormData
+            });
+            
+            const importData = await importResponse.json();
+
+            if (importData.needs_format_choice) {
+                const choice = await showFormatChoiceDialog(importData.mixed_files || [selectedXmlFile.name]);
+                if (!choice) {
+                    updateStatus('Import cancelled — mixed format');
+                    return;
+                }
+                typesFormat = choice;
+                continue;
+            }
+
+            if (importData.success) {
+                // Clear file selection
+                selectedXmlFile = null;
+                document.getElementById('importXmlFile').value = '';
+                document.getElementById('importXmlFileName').textContent = '';
+                
+                // Reload elements
+                await loadElements();
+                
+                const errorMsg = importData.errors && importData.errors.length > 0 
+                    ? ` (${importData.errors.length} errors)` 
+                    : '';
+                updateStatus(`Import complete: ${importData.added_count} added, ${importData.updated_count} updated, ${importData.skipped_count} skipped${errorMsg}`);
+                
+                if (importData.errors && importData.errors.length > 0) {
+                    console.error('Import errors:', importData.errors);
+                    alert(`Some errors occurred during import:\n${importData.errors.slice(0, 5).join('\n')}${importData.errors.length > 5 ? '\n...' : ''}`);
+                }
+            } else {
+                throw new Error(importData.error || 'Failed to import XML file');
+            }
+            break;
         }
     } catch (error) {
         console.error('Error importing XML:', error);
@@ -4089,6 +4499,10 @@ function showDuplicateDialog(duplicates, newCount) {
             
             content.innerHTML = `
                 <h2>Import XML File</h2>
+                <p style="font-size: 0.9em; color: #555;">
+                    Overwrite updates types.xml fields. With <strong>Keep itemclasses</strong> enabled,
+                    itemclass / itemtags / export are preserved.
+                </p>
                 <p><strong>Found ${duplicates.length} duplicate(s) and ${newCount} new element(s)</strong></p>
                 <div class="duplicate-item">
                     <p><strong>Element "${dup.name}"</strong> already exists in the database.</p>

@@ -35,6 +35,9 @@
                 <input type="file" id="importXmlFile" accept=".xml" style="display: none;">
                 <button id="importXmlBtn" class="btn btn-primary">Choose XML File</button>
                 <span id="importXmlFileName" class="file-name-display"></span>
+                <label title="When updating existing types, keep itemclass, itemtags, and export flags">
+                    <input type="checkbox" id="preserveEditorFields" checked> Keep itemclasses
+                </label>
             </div>
             
             <div class="control-group">
@@ -42,8 +45,12 @@
                 <label>
                     <input type="checkbox" id="exportByItemclass"> Export by Itemclass
                 </label>
+                <label>
+                    <input type="checkbox" id="namalskFormat"> Namalsk Format
+                </label>
                 <input type="text" id="exportSubfolder" placeholder="Export subfolder..." value="exported-types" class="subfolder-input">
                 <button id="deleteBtn" class="btn btn-danger">Delete Selected</button>
+                <button id="fillNamalskTagsBtn" class="btn" title="Set Namalsk tags from Usage Flags for selected items (replaces existing)">Fill Namalsk Tags</button>
                 <button id="columnVisibilityBtn" class="btn">Column Visibility</button>
                 <button id="manageItemclassesBtn" class="btn">Manage Itemclasses</button>
                 <button id="manageItemtagsBtn" class="btn">Manage Itemtags</button>
@@ -157,6 +164,24 @@
             <div class="modal-actions">
                 <button id="saveUsageflagsBtn" class="btn btn-primary">Save</button>
                 <button id="cancelUsageflagsBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Namalsk Tags Editor Modal -->
+    <div id="namalskTagsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Edit Namalsk Tags</h2>
+            <p class="modal-help">Empty = auto-derive from Usage Flags on Namalsk export.</p>
+            <div class="usageflags-editor">
+                <div id="namalskTagsCheckboxes" class="usageflags-checkboxes">
+                    <!-- Checkboxes will be generated here -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="saveNamalskTagsBtn" class="btn btn-primary">Save</button>
+                <button id="cancelNamalskTagsBtn" class="btn">Cancel</button>
             </div>
         </div>
     </div>
@@ -469,7 +494,7 @@
         </div>
     </div>
     
-    <script src="{{ url_for('static', filename='js/economy_editor.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/economy_editor.js') }}?v=namalsk-fill-4"></script>
 </body>
 </html>
 
