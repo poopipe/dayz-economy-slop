@@ -1,0 +1,13 @@
+civilian
+farm
+firefighter
+fishing
+hunting
+industrial
+medical
+military
+police
+seaice
+seasonalevent
+---
+11 unique

@@ -90,6 +90,121 @@ def get_marker_color_config_path():
     return _map_viewer_data_dir() / 'marker_colors.json'
 
 
+def get_background_config_path():
+    return _map_viewer_data_dir() / 'background_images.json'
+
+
+def _normalize_mission_key(mission_dir: str) -> str:
+    """Normalize mission path so the same project always maps to one key."""
+    return str(Path(str(mission_dir).strip()))
+
+
+def load_background_config():
+    """Load mission_dir -> background image settings map."""
+    config_path = get_background_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception as e:
+        print(f"Failed to load background image config: {e}")
+        return {}
+
+
+def save_background_config(config):
+    config_path = get_background_config_path()
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def get_project_background(mission_dir: str):
+    key = _normalize_mission_key(mission_dir)
+    if not key or key == '.':
+        return None
+    entry = load_background_config().get(key)
+    return entry if isinstance(entry, dict) else None
+
+
+def set_project_background(mission_dir: str, *, image_id=None, width=None, height=None, replace_image=False):
+    """Create/update background settings for a mission project.
+
+    If replace_image is True and image_id changes, the previous image file is deleted
+    when no other project still references it.
+    """
+    key = _normalize_mission_key(mission_dir)
+    if not key or key == '.':
+        raise ValueError('mission_dir is required')
+
+    config = load_background_config()
+    entry = dict(config.get(key) or {}) if isinstance(config.get(key), dict) else {}
+    old_image_id = entry.get('image_id')
+
+    if image_id is not None:
+        entry['image_id'] = image_id
+    if width is not None:
+        entry['width'] = width
+    if height is not None:
+        entry['height'] = height
+
+    if not entry.get('image_id'):
+        raise ValueError('image_id is required')
+
+    config[key] = entry
+    save_background_config(config)
+
+    if (
+        replace_image
+        and old_image_id
+        and old_image_id != entry.get('image_id')
+    ):
+        _delete_background_file_if_unreferenced(old_image_id, config)
+
+    return entry
+
+
+def clear_project_background(mission_dir: str):
+    """Remove background settings for a mission and delete its image if unused."""
+    key = _normalize_mission_key(mission_dir)
+    if not key or key == '.':
+        raise ValueError('mission_dir is required')
+
+    config = load_background_config()
+    entry = config.pop(key, None)
+    save_background_config(config)
+
+    image_id = entry.get('image_id') if isinstance(entry, dict) else None
+    if image_id:
+        _delete_background_file_if_unreferenced(image_id, config)
+    return entry if isinstance(entry, dict) else None
+
+
+def _is_path_inside_upload_folder(file_path: Path) -> bool:
+    upload_folder_resolved = str(UPLOAD_FOLDER.resolve())
+    file_path_resolved = str(file_path.resolve())
+    return file_path_resolved.startswith(upload_folder_resolved)
+
+
+def _delete_background_file_if_unreferenced(image_id: str, config=None):
+    """Delete an uploaded background file when no project still points at it."""
+    image_id = secure_filename(image_id or '')
+    if not image_id:
+        return
+    if config is None:
+        config = load_background_config()
+    for entry in config.values():
+        if isinstance(entry, dict) and entry.get('image_id') == image_id:
+            return
+    file_path = UPLOAD_FOLDER / image_id
+    try:
+        if file_path.exists() and _is_path_inside_upload_folder(file_path):
+            file_path.unlink()
+            print(f"Background image deleted: {file_path}")
+    except Exception as e:
+        print(f"Failed to delete background image {image_id}: {e}")
+
+
 def _hash_to_color(key, salt='map-viewer'):
     raw = f'{salt}|{key}'.encode('utf-8')
     digest = hashlib.sha1(raw).hexdigest()
@@ -691,29 +806,111 @@ def save_groups_endpoint():
 
 @app.route('/api/upload-background-image', methods=['POST'])
 def upload_background_image():
-    """Upload and save background image to server."""
+    """Upload and save a background image for a mission project."""
     try:
         if 'image' not in request.files:
             return api_error('No image file provided', 400)
-        
+
+        mission_dir = (request.form.get('mission_dir') or '').strip()
+        if not mission_dir:
+            return api_error('mission_dir is required so the background can be saved per project', 400)
+
         file = request.files['image']
         if file.filename == '':
             return api_error('No file selected', 400)
-        
+
         if not allowed_file(file.filename):
             return api_error(f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}', 400)
-        
+
         # Generate unique filename
         file_ext = file.filename.rsplit('.', 1)[1].lower()
         unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
         file_path = UPLOAD_FOLDER / unique_filename
-        
+
         # Save file
         file.save(file_path)
-        
-        print(f"Background image saved: {file_path}")
-        
-        return api_ok(image_id=unique_filename, message='Image uploaded successfully')
+
+        width = request.form.get('width')
+        height = request.form.get('height')
+        try:
+            width_val = float(width) if width not in (None, '') else None
+        except (TypeError, ValueError):
+            width_val = None
+        try:
+            height_val = float(height) if height not in (None, '') else None
+        except (TypeError, ValueError):
+            height_val = None
+
+        entry = set_project_background(
+            mission_dir,
+            image_id=unique_filename,
+            width=width_val,
+            height=height_val,
+            replace_image=True,
+        )
+
+        print(f"Background image saved for project {mission_dir}: {file_path}")
+
+        return api_ok(
+            image_id=unique_filename,
+            mission_dir=_normalize_mission_key(mission_dir),
+            background=entry,
+            message='Image uploaded successfully',
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return api_error(str(e), 500)
+
+
+@app.route('/api/project-background', methods=['GET', 'PUT', 'DELETE'])
+def project_background():
+    """Get, update, or clear the background image settings for a mission project."""
+    try:
+        data = parse_json_body() if request.method in ('PUT', 'DELETE') else {}
+        mission_dir = (
+            (request.args.get('mission_dir') or '').strip()
+            or (data.get('mission_dir') or '').strip()
+        )
+        if not mission_dir:
+            return api_error('mission_dir is required', 400)
+
+        if request.method == 'GET':
+            entry = get_project_background(mission_dir)
+            return api_ok(
+                mission_dir=_normalize_mission_key(mission_dir),
+                background=entry,
+            )
+
+        if request.method == 'PUT':
+            image_id = data.get('image_id')
+            width = data.get('width')
+            height = data.get('height')
+            existing = get_project_background(mission_dir)
+            if image_id is None and not existing:
+                return api_error('No background image is set for this project', 404)
+            entry = set_project_background(
+                mission_dir,
+                image_id=image_id if image_id is not None else None,
+                width=width,
+                height=height,
+                replace_image=image_id is not None,
+            )
+            return api_ok(
+                mission_dir=_normalize_mission_key(mission_dir),
+                background=entry,
+                message='Background settings saved',
+            )
+
+        # DELETE
+        entry = clear_project_background(mission_dir)
+        return api_ok(
+            mission_dir=_normalize_mission_key(mission_dir),
+            background=entry,
+            message='Background image cleared for project',
+        )
+    except ValueError as e:
+        return api_error(str(e), 400)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -727,69 +924,52 @@ def get_background_image(image_id):
         # Sanitize filename to prevent directory traversal
         image_id = secure_filename(image_id)
         file_path = UPLOAD_FOLDER / image_id
-        
+
         if not file_path.exists():
-            return jsonify({
-                'success': False,
-                'error': 'Image not found'
-            }), 404
-        
-        # Check if file is within upload folder (security check)
-        upload_folder_resolved = str(UPLOAD_FOLDER.resolve())
-        file_path_resolved = str(file_path.resolve())
-        if not file_path_resolved.startswith(upload_folder_resolved):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid image path'
-            }), 403
-        
+            return api_error('Image not found', 404)
+
+        if not _is_path_inside_upload_folder(file_path):
+            return api_error('Invalid image path', 403)
+
         return send_file(file_path)
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/delete-background-image/<image_id>', methods=['DELETE'])
 def delete_background_image(image_id):
-    """Delete background image from server."""
+    """Delete background image from server (legacy path; prefer project-background DELETE)."""
     try:
         # Sanitize filename to prevent directory traversal
         image_id = secure_filename(image_id)
         file_path = UPLOAD_FOLDER / image_id
-        
+
         if not file_path.exists():
-            return jsonify({
-                'success': False,
-                'error': 'Image not found'
-            }), 404
-        
-        # Check if file is within upload folder (security check)
-        upload_folder_resolved = str(UPLOAD_FOLDER.resolve())
-        file_path_resolved = str(file_path.resolve())
-        if not file_path_resolved.startswith(upload_folder_resolved):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid image path'
-            }), 403
-        
+            return api_error('Image not found', 404)
+
+        if not _is_path_inside_upload_folder(file_path):
+            return api_error('Invalid image path', 403)
+
+        # Drop any project associations pointing at this image first.
+        config = load_background_config()
+        changed = False
+        for key, entry in list(config.items()):
+            if isinstance(entry, dict) and entry.get('image_id') == image_id:
+                del config[key]
+                changed = True
+        if changed:
+            save_background_config(config)
+
         file_path.unlink()
         print(f"Background image deleted: {file_path}")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Image deleted successfully'
-        })
+
+        return api_ok(message='Image deleted successfully')
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/export-map', methods=['POST'])

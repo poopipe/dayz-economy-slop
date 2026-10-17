@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Economy Editor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/map_viewer.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Map Viewer</h1>
+            <p class="status" id="status">Ready</p>
+        </header>
+        
+        <div class="main-layout">
+            <div class="sidebar">
+                <div id="sidebarSections" class="sidebar-sections">
+                    <div id="missionSection" class="sidebar-section-content" data-section-id="mission" data-section-title="Mission">
+                        <div class="control-group">
+                            <label for="missionDir">Mission Directory:</label>
+                            <input type="text" id="missionDir" placeholder="Enter mission directory path..."
+                                   class="mission-dir-input" value="">
+                            <label for="profileDir" style="margin-top: 8px;">Profile Directory:</label>
+                            <input type="text" id="profileDir" placeholder="Auto-detected from mission directory (editable)" 
+                                   class="mission-dir-input">
+                            <button id="newProjectBtn" class="btn btn-success">New Project</button>
+                            <button id="loadDataBtn" class="btn btn-primary">Load Markers</button>
+                        </div>
+                    </div>
+                    
+                    <div id="displaySection" class="sidebar-section-content" data-section-id="display" data-section-title="Display">
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="showGrid" checked> Show Grid
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showMarkers" checked> Show Markers
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showEventSpawns" checked> Show Event Spawns
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showTerritories" checked> Show Territories
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showEffectAreas" checked> Show Effect Areas
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showPlayerSpawnPoints" checked> Show Player Spawn Points
+                            </label>
+                            <label>
+                                <input type="checkbox" id="showAiPatrolMarkers" checked> Show AI Patrol Markers
+                            </label>
+                            <button id="clearSelectionBtn" class="btn">Clear Selection</button>
+                            <button id="copySelectedXmlBtn" class="btn btn-primary">Copy Selected XML</button>
+                        </div>
+
+                        <div class="control-group">
+                            <label for="minHeightFilter">Min Height (Y-coordinate):</label>
+                            <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
+                                <input type="range" id="minHeightFilter" min="0" max="1000" value="0" step="0.1" class="height-filter-slider">
+                                <span id="minHeightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">0.0</span>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="heightFilter">Max Height (Y-coordinate):</label>
+                            <div style="display: flex; align-items: center; flex: 1; gap: 10px; min-width: 300px;">
+                                <input type="range" id="heightFilter" min="0" max="1000" value="1000" step="0.1" class="height-filter-slider">
+                                <span id="heightFilterValue" style="min-width: 60px; text-align: right; font-size: 14px; color: var(--nord4);">1000.0</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="editMarkersSection" class="sidebar-section-content" data-section-id="editMarkers" data-section-title="Markers - Tools">
+                        <div class="filter-section" id="filterSection" style="display: none;">
+                            <div class="filter-builder">
+                            <div class="filter-input-group">
+                                <label for="filterType">Filter Type:</label>
+                                <select id="filterType" class="filter-select">
+                                    <option value="usage">Usage</option>
+                                    <option value="groupName">Group Name</option>
+                                </select>
+                                <label for="filterCriteria" style="display: none;">Criteria:</label>
+                                <select id="filterCriteria" class="filter-select" style="display: none;">
+                                    <option value="isOneOf">Is One Of</option>
+                                </select>
+                                <label for="filterUsageSelect" id="filterValueLabel">Usage:</label>
+                                <select id="filterUsageSelect" class="filter-select filter-value-select" multiple></select>
+                                <input type="text" id="filterGroupNameInput" class="filter-input" placeholder="Search group names..." style="display: none;">
+                                <select id="filterGroupNameSelect" class="filter-select filter-value-select" multiple style="display: none;"></select>
+                                <button id="addFilterBtn" class="btn btn-small">Add Filter</button>
+                                <button id="clearAllFiltersBtn" class="btn btn-small">Clear All</button>
+                            </div>
+                            <div id="activeFiltersList" class="active-filters-list"></div>
+                            </div>
+                        </div>
+                        <div id="editMarkersContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <div id="editEventSpawnsSection" class="sidebar-section-content" data-section-id="editEventSpawns" data-section-title="Event Spawns - Tools">
+                        <div class="filter-section" id="eventSpawnFilterSection" style="display: none;">
+                            <div class="filter-builder">
+                            <div class="filter-input-group">
+                                <label for="eventSpawnFilterCriteria">Criteria:</label>
+                                <select id="eventSpawnFilterCriteria" class="filter-select">
+                                    <option value="isOneOf">Is One Of</option>
+                                    <option value="isNotOneOf">Is Not One Of</option>
+                                </select>
+                                <label for="eventSpawnFilterTypeSelect">Event Spawn Type:</label>
+                                <select id="eventSpawnFilterTypeSelect" class="filter-select filter-value-select" multiple></select>
+                                <button id="addEventSpawnFilterBtn" class="btn btn-small">Add Filter</button>
+                                <button id="clearAllEventSpawnFiltersBtn" class="btn btn-small">Clear All</button>
+                            </div>
+                            <div id="activeEventSpawnFiltersList" class="active-filters-list"></div>
+                            </div>
+                        </div>
+                        <div id="editEventSpawnsContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <div id="editEffectAreasSection" class="sidebar-section-content" data-section-id="editEffectAreas" data-section-title="Effect Areas - Tools">
+                        <div class="filter-section" id="effectAreaFilterSection" style="display: none;">
+                            <div class="filter-builder">
+                            <div class="filter-input-group">
+                                <label for="effectAreaFilterNameSelect">Effect Area Name:</label>
+                                <select id="effectAreaFilterNameSelect" class="filter-select filter-value-select" multiple></select>
+                                <button id="addEffectAreaFilterBtn" class="btn btn-small">Add Filter</button>
+                                <button id="clearAllEffectAreaFiltersBtn" class="btn btn-small">Clear All</button>
+                            </div>
+                            <div id="activeEffectAreaFiltersList" class="active-filters-list"></div>
+                            </div>
+                        </div>
+                        <div id="editEffectAreasContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <div id="editPlayerSpawnsSection" class="sidebar-section-content" data-section-id="editPlayerSpawns" data-section-title="Player Spawns - Tools">
+                        <div id="editPlayerSpawnsContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <div id="editTerritoriesSection" class="sidebar-section-content" data-section-id="editTerritories" data-section-title="Territories - Tools">
+                        <div class="filter-section" id="territoryFilterSection" style="display: none;">
+                            <div class="filter-builder">
+                            <div class="filter-input-group">
+                                <label for="territoryFilterType">Filter Type:</label>
+                                <select id="territoryFilterType" class="filter-select">
+                                    <option value="territoryType">Territory Type</option>
+                                    <option value="territoryName">Territory Name</option>
+                                </select>
+                                <label for="territoryFilterCriteria" style="display: none;">Criteria:</label>
+                                <select id="territoryFilterCriteria" class="filter-select" style="display: none;">
+                                    <option value="isOneOf">Is One Of</option>
+                                </select>
+                                <label for="territoryFilterTypeSelect" id="territoryFilterValueLabel">Territory Type:</label>
+                                <select id="territoryFilterTypeSelect" class="filter-select filter-value-select" multiple></select>
+                                <input type="text" id="territoryFilterNameInput" class="filter-input" placeholder="Search territory names..." style="display: none;">
+                                <select id="territoryFilterNameSelect" class="filter-select filter-value-select" multiple style="display: none;"></select>
+                                <button id="addTerritoryFilterBtn" class="btn btn-small">Add Filter</button>
+                                <button id="clearAllTerritoryFiltersBtn" class="btn btn-small">Clear All</button>
+                            </div>
+                            <div id="activeTerritoryFiltersList" class="active-filters-list"></div>
+                            </div>
+                        </div>
+                        <div id="editTerritoriesContainer">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <!-- AI Patrols -->
+                    <div id="aiPatrolSection" class="sidebar-section-content" data-section-id="aiPatrols" data-section-title="AI patrols">
+                        <div class="control-group">
+                            <label for="aiPatrolTypeFilter">Filter patrol type:</label>
+                            <select id="aiPatrolTypeFilter" class="filter-select">
+                                <option value="all">All patrols</option>
+                                <option value="waypoints">Waypoint patrols</option>
+                                <option value="group">Group patrols</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="aiPatrolEditingEnabled"> Patrol editing
+                            </label>
+                        </div>
+                        <div id="aiPatrolEditToolsContainer">
+                        <div class="control-group">
+                            <label for="aiPatrolSelect">Patrol:</label>
+                            <select id="aiPatrolSelect" class="filter-select">
+                                <!-- Populated from AIPatrolSettings.json -->
+                            </select>
+                            <div id="aiPatrolTopActionsContainer" style="margin-top: 8px;"></div>
+                            <label style="display: block; margin-top: 8px;">
+                                <input type="checkbox" id="aiPatrolShowSelectedOnly"> Show only selected patrol on map
+                            </label>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolName">Name:</label>
+                            <input type="text" id="aiPatrolName" class="mission-dir-input" placeholder="Enter patrol name...">
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolFaction">Faction:</label>
+                            <select id="aiPatrolFaction" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolLoadout">Loadout:</label>
+                            <select id="aiPatrolLoadout" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolBehaviour">Behaviour:</label>
+                            <select id="aiPatrolBehaviour" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolDefaultStance">Default stance:</label>
+                            <select id="aiPatrolDefaultStance" class="filter-select">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label>Movement speed:</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolSpeed" style="display: inline-block; width: 140px;">Speed:</label>
+                                    <select id="aiPatrolSpeed" class="filter-select" style="width: calc(100% - 150px);">
+                                        <!-- Options populated from existing patrols -->
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="aiPatrolUnderThreatSpeed" style="display: inline-block; width: 140px;">Under threat speed:</label>
+                                    <select id="aiPatrolUnderThreatSpeed" class="filter-select" style="width: calc(100% - 150px);">
+                                        <!-- Options populated from existing patrols -->
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="aiPatrolLootingBehaviour">Looting behaviour:</label>
+                            <select id="aiPatrolLootingBehaviour" class="filter-select" multiple size="6">
+                                <!-- Options populated from existing patrols -->
+                            </select>
+                            <button id="aiPatrolClearLootingBehaviourBtn" class="btn btn-small" style="margin-top: 6px;">Clear looting selection</button>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                Use Ctrl/Cmd+Click to select multiple values.
+                            </p>
+                        </div>
+
+                        <div class="control-group" style="display: flex; flex-direction: column; align-items: stretch;">
+                            <label for="aiPatrolUnlimitedReload">Unlimited reload:</label>
+                            <select id="aiPatrolUnlimitedReload" class="filter-select" multiple size="6">
+                                <!-- Static options populated by JS -->
+                            </select>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                Use Ctrl/Cmd+Click to select multiple values. Off (0) and All targets (1) override other selections.
+                            </p>
+                        </div>
+
+                        <div class="control-group">
+                            <label>Spawn counts / chance:</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolNumberOfAI" style="display: inline-block; width: 140px;">NumberOfAI:</label>
+                                    <input type="text" id="aiPatrolNumberOfAI" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolNumberOfAIMax" style="display: inline-block; width: 140px;">NumberOfAIMax:</label>
+                                    <input type="text" id="aiPatrolNumberOfAIMax" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolChance" style="display: inline-block; width: 140px;">Chance:</label>
+                                    <input type="text" id="aiPatrolChance" class="mission-dir-input" style="width: calc(100% - 150px);">
+                                </div>
+                            </div>
+                        </div>
+
+                        <details class="control-group">
+                            <summary style="cursor: pointer;">Advanced overrides</summary>
+                            <p style="font-size: 0.85em; color: var(--nord4); margin: 6px 0;">
+                                Tick a checkbox to override the inferred default value.
+                            </p>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div><label><input type="checkbox" id="aiPatrolUseAccuracyMin"> AccuracyMin</label><input type="text" id="aiPatrolAccuracyMin" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseAccuracyMax"> AccuracyMax</label><input type="text" id="aiPatrolAccuracyMax" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseCanBeLooted"> CanBeLooted</label><input type="text" id="aiPatrolCanBeLooted" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseCanBeTriggeredByAI"> CanBeTriggeredByAI</label><input type="text" id="aiPatrolCanBeTriggeredByAI" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseCanSpawnInContaminatedArea"> CanSpawnInContaminatedArea</label><input type="text" id="aiPatrolCanSpawnInContaminatedArea" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDefaultLookAngle"> DefaultLookAngle</label><input type="text" id="aiPatrolDefaultLookAngle" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDespawnRadius"> DespawnRadius</label><input type="text" id="aiPatrolDespawnRadius" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDespawnTime"> DespawnTime</label><input type="text" id="aiPatrolDespawnTime" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseFormation"> Formation</label><input type="text" id="aiPatrolFormation" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseFormationLooseness"> FormationLooseness</label><input type="text" id="aiPatrolFormationLooseness" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseFormationScale"> FormationScale</label><input type="text" id="aiPatrolFormationScale" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseHeadshotResistance"> HeadshotResistance</label><input type="text" id="aiPatrolHeadshotResistance" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseLoadBalancingCategory"> LoadBalancingCategory</label><input type="text" id="aiPatrolLoadBalancingCategory" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseLootDropOnDeath"> LootDropOnDeath</label><input type="text" id="aiPatrolLootDropOnDeath" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMinDistRadius"> MinDistRadius</label><input type="text" id="aiPatrolMinDistRadius" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMaxDistRadius"> MaxDistRadius</label><input type="text" id="aiPatrolMaxDistRadius" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUsePersist"> Persist</label><input type="text" id="aiPatrolPersist" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseRespawnTime"> RespawnTime</label><input type="text" id="aiPatrolRespawnTime" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseSniperProneDistanceThreshold"> SniperProneDistanceThreshold</label><input type="text" id="aiPatrolSniperProneDistanceThreshold" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseThreatDistanceLimit"> ThreatDistanceLimit</label><input type="text" id="aiPatrolThreatDistanceLimit" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseWaypointInterpolation"> WaypointInterpolation</label><input type="text" id="aiPatrolWaypointInterpolation" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseNoiseInvestigationDistanceLimit"> NoiseInvestigationDistanceLimit</label><input type="text" id="aiPatrolNoiseInvestigationDistanceLimit" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseMaxFlankingDistance"> MaxFlankingDistance</label><input type="text" id="aiPatrolMaxFlankingDistance" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseEnableFlankingOutsideCombat"> EnableFlankingOutsideCombat</label><input type="text" id="aiPatrolEnableFlankingOutsideCombat" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseUseRandomWaypointAsStartPoint"> UseRandomWaypointAsStartPoint</label><input type="text" id="aiPatrolUseRandomWaypointAsStartPoint" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDamageMultiplier"> DamageMultiplier</label><input type="text" id="aiPatrolDamageMultiplier" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                                <div><label><input type="checkbox" id="aiPatrolUseDamageReceivedMultiplier"> DamageReceivedMultiplier</label><input type="text" id="aiPatrolDamageReceivedMultiplier" class="mission-dir-input" style="margin-left:8px; width: calc(100% - 180px);"></div>
+                            </div>
+                        </details>
+                        
+                        <div class="control-group">
+                            <label>Patrol type:</label>
+                            <label style="display: block; margin-top: 4px;">
+                                <input type="radio" name="aiPatrolType" value="waypoints" checked>
+                                Waypoint list (world coords, or relative when ObjectClassName is set)
+                            </label>
+                            <label style="display: block; margin-top: 4px;">
+                                <input type="radio" name="aiPatrolType" value="group">
+                                Object-class focus (ObjectClassName; Waypoints optional / relative)
+                            </label>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label>Spread radius (metres):</label>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div>
+                                    <label for="aiPatrolMinSpreadRadius" style="display:inline-block; width: 120px;">Min:</label>
+                                    <input type="number" id="aiPatrolMinSpreadRadius" class="dimension-input" min="0" step="1" value="0">
+                                </div>
+                                <div>
+                                    <label for="aiPatrolMaxSpreadRadius" style="display:inline-block; width: 120px;">Max:</label>
+                                    <input type="number" id="aiPatrolMaxSpreadRadius" class="dimension-input" min="0" step="1" value="0">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="control-group" id="aiPatrolWaypointsSection">
+                            <label>Waypoints:</label>
+                            <div id="aiPatrolInstructions"></div>
+                            <div id="aiPatrolWaypointActionsContainer"></div>
+                        </div>
+                        
+                        <div class="control-group" id="aiPatrolGroupSection">
+                            <label for="aiPatrolObjectClassName">ObjectClassName:</label>
+                            <input type="text" id="aiPatrolObjectClassName" class="mission-dir-input" placeholder="Enter ObjectClassName...">
+                            <p style="font-size: 0.85em; color: var(--nord4); margin-top: 4px;">
+                                Optional. When set, Waypoints are relative to each matching object (not world coordinates).
+                            </p>
+                        </div>
+                        
+                        <div class="control-group" id="aiPatrolFooterActionsContainer"></div>
+                        </div>
+                    </div>
+                    
+                    <div id="locationSection" class="sidebar-section-content" data-section-id="location" data-section-title="Location">
+                        <div class="control-group">
+                            <label for="locationField">Location (right-click to copy):</label>
+                            <input type="text" id="locationField" readonly class="mission-dir-input" placeholder="Right-click on map or marker to copy location">
+                        </div>
+                    </div>
+                    
+                    <div id="backgroundSection" class="sidebar-section-content" data-section-id="backgroundImage" data-section-title="Background image">
+                        <div class="control-group">
+                            <label for="backgroundImage">Background Image:</label>
+                            <input type="file" id="backgroundImage" accept="image/*" style="display: none;">
+                            <button id="loadImageBtn" class="btn">Load Image</button>
+                            <button id="clearImageBtn" class="btn">Clear Image</button>
+                            <label>
+                                <input type="checkbox" id="showBackgroundImage" checked> Show Background Image
+                            </label>
+                        </div>
+                        
+                        <div class="control-group" id="imageOpacityGroup" style="display: none;">
+                            <label for="backgroundImageOpacity">Opacity:</label>
+                            <input type="range" id="backgroundImageOpacity" min="0" max="100" value="100" class="opacity-slider">
+                            <span id="backgroundImageOpacityValue">100%</span>
+                        </div>
+                        
+                        <div class="control-group" id="imageDimensionsGroup" style="display: none;">
+                            <label for="imageWidth">Image Width (metres):</label>
+                            <input type="number" id="imageWidth" value="1000" min="1" class="dimension-input">
+                            <label for="imageHeight">Height (metres):</label>
+                            <input type="number" id="imageHeight" value="1000" min="1" class="dimension-input">
+                            <button id="applyDimensionsBtn" class="btn">Apply Dimensions</button>
+                        </div>
+                    </div>
+                
+                <div id="exportMapSection" class="sidebar-section-content" data-section-id="exportMap" data-section-title="Export map">
+                    <div class="control-group">
+                        <label>
+                            <input type="checkbox" id="exportIncludeBackground" checked> Include background image
+                        </label>
+                    </div>
+                    <div class="control-group">
+                        <label for="exportPath">Save path:</label>
+                        <input type="text" id="exportPath" class="mission-dir-input" placeholder="Mission folder (default)">
+                    </div>
+                    <div class="control-group">
+                        <button id="exportMapBtn" class="btn btn-primary">Export to PNG</button>
+                    </div>
+                </div>
+                
+                <div class="info-panel sidebar-section-content" id="infoPanel" data-section-id="info" data-section-title="Information">
+                    <div id="infoContent">
+                        <p>Load markers to begin</p>
+                        <p id="selectedCount">Selected: 0</p>
+                        <p style="font-size: 11px; color: var(--nord4); margin-top: 8px; line-height: 1.4;"><strong>Map:</strong> Middle mouse drag to pan · Mouse wheel to zoom · <strong>Multi-select:</strong> Shift+Click or Alt+Click a marker (Shift/Alt + marquee drag adds to selection)</p>
+                    </div>
+                </div>
+                </div>
+            </div>
+            
+            <div class="canvas-container" style="position: relative;">
+                <canvas id="backgroundCanvas" style="position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; width: 100%; height: 100%;"></canvas>
+                <canvas id="markerCanvas" style="position: absolute; top: 0; left: 0; z-index: 2; pointer-events: auto; width: 100%; height: 100%;"></canvas>
+                <canvas id="overlayCanvas" style="position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; width: 100%; height: 100%;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="newProjectModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeNewProjectModal">&times;</span>
+            <h2>New Project</h2>
+            <p class="modal-help">Point at an existing mission folder on the new server. This becomes the shared active project for Map Viewer and Economy Editor. Use Economy Editor → New Project to create the database and import types XML.</p>
+            <div class="control-group" style="flex-direction: column; align-items: stretch;">
+                <label for="newProjectMissionDir">Mission Directory:</label>
+                <input type="text" id="newProjectMissionDir" class="mission-dir-input" placeholder="e.g. E:\DayZ_Servers\MyServer\mpmissions\dayzOffline.chernarusplus">
+            </div>
+            <div class="modal-actions">
+                <button id="createNewProjectBtn" class="btn btn-success">Use Mission</button>
+                <button id="cancelNewProjectBtn" class="btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/map_viewer_registry.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/map_viewer.js') }}"></script>
+</body>
+</html>
+

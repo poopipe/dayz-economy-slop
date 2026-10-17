@@ -42,6 +42,8 @@ let visibleEffectAreas = new Set(); // For filtering effect areas
 let playerSpawnPoints = []; // Player spawn points from cfgplayerspawnpoints.xml
 let showPlayerSpawnPoints = true;
 let backgroundImage = null;
+let currentBackgroundImageId = null; // Server image id for the active project's background
+let backgroundImageMissionDir = ''; // Mission dir the current background belongs to
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
 let showGrid = true;
@@ -8584,6 +8586,7 @@ async function createNewProject() {
         localStorage.setItem('map_viewer_missionDir', missionDir);
         localStorage.setItem('map_viewer_profileDir', profileDir || '');
         closeNewProjectModal();
+        await restoreBackgroundForProject(missionDir);
 
         updateStatus(`Active project set: ${missionDir}`);
         alert(
@@ -8617,6 +8620,7 @@ async function loadGroups() {
     // Save to localStorage
     localStorage.setItem('map_viewer_missionDir', missionDir);
     localStorage.setItem('map_viewer_profileDir', profileDir);
+    await restoreBackgroundForProject(missionDir);
     
     updateStatus('Loading markers...');
     
@@ -9495,8 +9499,92 @@ function clearAiPatrolForm() {
     requestDraw();
 }
 
+function getMissionDirForBackground() {
+    return (missionDir || document.getElementById('missionDir')?.value || '').trim();
+}
+
+function clearLegacyBackgroundLocalStorage() {
+    localStorage.removeItem('map_viewer_backgroundImage');
+    localStorage.removeItem('map_viewer_backgroundImageId');
+    localStorage.removeItem('map_viewer_backgroundImageFileName');
+    localStorage.removeItem('map_viewer_imageWidth');
+    localStorage.removeItem('map_viewer_imageHeight');
+}
+
+function resetBackgroundImageUi(options = {}) {
+    const { redraw = true } = options;
+    backgroundImage = null;
+    currentBackgroundImageId = null;
+    backgroundImageMissionDir = '';
+    backgroundCacheValid = false;
+    const input = document.getElementById('backgroundImage');
+    if (input) input.value = '';
+    const dimsGroup = document.getElementById('imageDimensionsGroup');
+    if (dimsGroup) dimsGroup.style.display = 'none';
+    const opacityGroup = document.getElementById('imageOpacityGroup');
+    if (opacityGroup) opacityGroup.style.display = 'none';
+    if (redraw) draw();
+}
+
+async function fetchProjectBackgroundSettings(projectMissionDir) {
+    const response = await fetch(
+        `/api/project-background?mission_dir=${encodeURIComponent(projectMissionDir)}`
+    );
+    const data = await response.json();
+    if (!data.success) {
+        throw new Error(data.error || 'Failed to load project background settings');
+    }
+    return data.background || null;
+}
+
+async function saveProjectBackgroundSettings(projectMissionDir, payload) {
+    const response = await fetch('/api/project-background', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            mission_dir: projectMissionDir,
+            ...payload,
+        }),
+    });
+    const data = await response.json();
+    if (!data.success) {
+        throw new Error(data.error || 'Failed to save project background settings');
+    }
+    return data.background || null;
+}
+
+async function migrateLegacyBackgroundToProject(projectMissionDir) {
+    const legacyImageId = localStorage.getItem('map_viewer_backgroundImageId');
+    if (!legacyImageId) {
+        clearLegacyBackgroundLocalStorage();
+        return null;
+    }
+    try {
+        const widthRaw = localStorage.getItem('map_viewer_imageWidth');
+        const heightRaw = localStorage.getItem('map_viewer_imageHeight');
+        const payload = { image_id: legacyImageId };
+        if (widthRaw) payload.width = parseFloat(widthRaw);
+        if (heightRaw) payload.height = parseFloat(heightRaw);
+        const background = await saveProjectBackgroundSettings(projectMissionDir, payload);
+        clearLegacyBackgroundLocalStorage();
+        return background;
+    } catch (error) {
+        console.warn('Could not migrate legacy background image to project:', error);
+        return {
+            image_id: legacyImageId,
+            width: parseFloat(localStorage.getItem('map_viewer_imageWidth') || '') || null,
+            height: parseFloat(localStorage.getItem('map_viewer_imageHeight') || '') || null,
+        };
+    }
+}
+
 // Load background image
 function loadBackgroundImage() {
+    const projectMissionDir = getMissionDirForBackground();
+    if (!projectMissionDir) {
+        updateStatus('Set a mission directory (project) before loading a background image', true);
+        return;
+    }
     const input = document.getElementById('backgroundImage');
     if (!input) {
         console.error('Background image input element not found');
@@ -9510,37 +9598,43 @@ function setupBackgroundImageHandler() {
     document.getElementById('backgroundImage').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
+
+        const projectMissionDir = getMissionDirForBackground();
+        if (!projectMissionDir) {
+            updateStatus('Set a mission directory (project) before loading a background image', true);
+            e.target.value = '';
+            return;
+        }
+
         updateStatus('Uploading image to server...');
-        
+
         try {
-            // Upload image to server
             const formData = new FormData();
             formData.append('image', file);
-            
+            formData.append('mission_dir', projectMissionDir);
+
             const response = await fetch('/api/upload-background-image', {
                 method: 'POST',
                 body: formData
             });
-            
+
             const data = await response.json();
-            
+
             if (!data.success) {
                 updateStatus(`Error uploading image: ${data.error}`, true);
                 return;
             }
-            
+
+            clearLegacyBackgroundLocalStorage();
             const imageId = data.image_id;
-            
-            // Store image ID in localStorage (not the image data)
-            localStorage.setItem('map_viewer_backgroundImageId', imageId);
-            // Clear old localStorage image data if it exists
-            localStorage.removeItem('map_viewer_backgroundImage');
-            localStorage.removeItem('map_viewer_backgroundImageFileName');
-            
-            // Load image from server
-            await loadBackgroundImageFromServer(imageId);
-            
+            const saved = data.background || {};
+            await loadBackgroundImageFromServer(imageId, {
+                missionDir: projectMissionDir,
+                width: saved.width,
+                height: saved.height,
+                persistDefaults: true,
+            });
+
             updateStatus('Image uploaded and loaded successfully');
         } catch (error) {
             updateStatus(`Error uploading image: ${error.message}`, true);
@@ -9550,103 +9644,148 @@ function setupBackgroundImageHandler() {
 }
 
 // Load background image from server
-async function loadBackgroundImageFromServer(imageId) {
+async function loadBackgroundImageFromServer(imageId, options = {}) {
+    const {
+        missionDir: projectMissionDir = getMissionDirForBackground(),
+        width = null,
+        height = null,
+        persistDefaults = false,
+    } = options;
+
     try {
         const img = new Image();
-        
-        img.onload = () => {
-            backgroundImage = img;
-            
-            // Check for saved dimensions first, otherwise use image size as default (1 pixel per metre)
-            const savedWidth = localStorage.getItem('map_viewer_imageWidth');
-            const savedHeight = localStorage.getItem('map_viewer_imageHeight');
-            
-            if (savedWidth && savedHeight) {
-                // Restore saved dimensions
-                imageWidth = parseFloat(savedWidth);
-                imageHeight = parseFloat(savedHeight);
-            } else {
-                // Use image size as default
-                imageWidth = img.width;
-                imageHeight = img.height;
-                // Save default dimensions to localStorage
-                localStorage.setItem('map_viewer_imageWidth', imageWidth.toString());
-                localStorage.setItem('map_viewer_imageHeight', imageHeight.toString());
+
+        await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error(`Failed to load image from server: ${imageId}`));
+            img.src = `/api/background-image/${imageId}`;
+        });
+
+        backgroundImage = img;
+        currentBackgroundImageId = imageId;
+        backgroundImageMissionDir = projectMissionDir || '';
+
+        const hasSavedWidth = width !== null && width !== undefined && !Number.isNaN(Number(width));
+        const hasSavedHeight = height !== null && height !== undefined && !Number.isNaN(Number(height));
+
+        if (hasSavedWidth && hasSavedHeight) {
+            imageWidth = parseFloat(width);
+            imageHeight = parseFloat(height);
+        } else {
+            imageWidth = img.width;
+            imageHeight = img.height;
+            if (persistDefaults && projectMissionDir) {
+                try {
+                    await saveProjectBackgroundSettings(projectMissionDir, {
+                        width: imageWidth,
+                        height: imageHeight,
+                    });
+                } catch (error) {
+                    console.warn('Could not persist default background dimensions:', error);
+                }
             }
-            
-            document.getElementById('imageWidth').value = imageWidth;
-            document.getElementById('imageHeight').value = imageHeight;
-            
-            // Upload to WebGL texture if using WebGL
-            if (useWebGL && gl) {
-                uploadBackgroundToWebGL();
-            }
-            
-            document.getElementById('imageDimensionsGroup').style.display = 'flex';
-            const opacityGroup = document.getElementById('imageOpacityGroup');
-            if (opacityGroup) {
-                opacityGroup.style.display = 'flex';
-            }
-            initBackgroundCache();
-            draw();
-        };
-        
-        img.onerror = () => {
-            updateStatus('Failed to load image from server', true);
-            console.error('Failed to load image from server:', imageId);
-        };
-        
-        // Load image from server endpoint
-        img.src = `/api/background-image/${imageId}`;
+        }
+
+        document.getElementById('imageWidth').value = imageWidth;
+        document.getElementById('imageHeight').value = imageHeight;
+
+        if (useWebGL && gl) {
+            uploadBackgroundToWebGL();
+        }
+
+        document.getElementById('imageDimensionsGroup').style.display = 'flex';
+        const opacityGroup = document.getElementById('imageOpacityGroup');
+        if (opacityGroup) {
+            opacityGroup.style.display = 'flex';
+        }
+        initBackgroundCache();
+        draw();
     } catch (error) {
         updateStatus(`Error loading image: ${error.message}`, true);
         console.error('Error loading image from server:', error);
     }
 }
 
+async function restoreBackgroundForProject(projectMissionDir) {
+    const dir = (projectMissionDir || '').trim();
+    if (!dir) {
+        resetBackgroundImageUi();
+        return;
+    }
+
+    if (backgroundImageMissionDir === dir && backgroundImage && currentBackgroundImageId) {
+        return;
+    }
+
+    try {
+        let background = await fetchProjectBackgroundSettings(dir);
+        if (!background || !background.image_id) {
+            background = await migrateLegacyBackgroundToProject(dir);
+        } else {
+            clearLegacyBackgroundLocalStorage();
+        }
+
+        if (!background || !background.image_id) {
+            resetBackgroundImageUi();
+            return;
+        }
+
+        await loadBackgroundImageFromServer(background.image_id, {
+            missionDir: dir,
+            width: background.width,
+            height: background.height,
+        });
+    } catch (error) {
+        console.error('Error restoring project background:', error);
+        resetBackgroundImageUi();
+    }
+}
+
 // Apply image dimensions
-function applyImageDimensions() {
+async function applyImageDimensions() {
     imageWidth = parseFloat(document.getElementById('imageWidth').value) || 1000;
     imageHeight = parseFloat(document.getElementById('imageHeight').value) || 1000;
-    
-    // Save to localStorage
-    localStorage.setItem('map_viewer_imageWidth', imageWidth.toString());
-    localStorage.setItem('map_viewer_imageHeight', imageHeight.toString());
-    
+
+    const projectMissionDir = getMissionDirForBackground();
+    if (projectMissionDir && currentBackgroundImageId) {
+        try {
+            await saveProjectBackgroundSettings(projectMissionDir, {
+                width: imageWidth,
+                height: imageHeight,
+            });
+        } catch (error) {
+            console.warn('Could not save background dimensions for project:', error);
+        }
+    }
+
     draw();
 }
 
-// Clear background image
+// Clear background image for the active project
 async function clearBackgroundImage() {
-    // Delete image from server if we have an image ID
-    const imageId = localStorage.getItem('map_viewer_backgroundImageId');
-    if (imageId) {
+    const projectMissionDir = getMissionDirForBackground();
+    if (projectMissionDir) {
         try {
-            await fetch(`/api/delete-background-image/${imageId}`, {
+            await fetch('/api/project-background', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mission_dir: projectMissionDir }),
+            });
+        } catch (error) {
+            // Silently fail - association/image may already be gone
+        }
+    } else if (currentBackgroundImageId) {
+        try {
+            await fetch(`/api/delete-background-image/${currentBackgroundImageId}`, {
                 method: 'DELETE'
             });
         } catch (error) {
             // Silently fail - image may already be deleted
         }
     }
-    
-    backgroundImage = null;
-    backgroundCacheValid = false;
-    document.getElementById('backgroundImage').value = '';
-    document.getElementById('imageDimensionsGroup').style.display = 'none';
-    const opacityGroup = document.getElementById('imageOpacityGroup');
-    if (opacityGroup) {
-        opacityGroup.style.display = 'none';
-    }
-    
-    // Remove from localStorage
-    localStorage.removeItem('map_viewer_backgroundImage');
-    localStorage.removeItem('map_viewer_backgroundImageId');
-    localStorage.removeItem('map_viewer_backgroundImageFileName');
-    localStorage.removeItem('map_viewer_imageWidth');
-    localStorage.removeItem('map_viewer_imageHeight');
-    
-    draw();
+
+    clearLegacyBackgroundLocalStorage();
+    resetBackgroundImageUi();
 }
 
 // Get all unique usage names from markers
@@ -10882,64 +11021,11 @@ async function restoreSavedState() {
         }
     }
     
-    // Restore background image - try server first, then fallback to localStorage
-    const savedImageId = localStorage.getItem('map_viewer_backgroundImageId');
-    const savedImageDataUrl = localStorage.getItem('map_viewer_backgroundImage');
-    
-    if (savedImageId) {
-        // Try to load from server
-        await loadBackgroundImageFromServer(savedImageId);
-        
-        // Restore dimensions if available
-        const savedWidth = localStorage.getItem('map_viewer_imageWidth');
-        const savedHeight = localStorage.getItem('map_viewer_imageHeight');
-        
-        if (savedWidth && savedHeight) {
-            imageWidth = parseFloat(savedWidth);
-            imageHeight = parseFloat(savedHeight);
-            document.getElementById('imageWidth').value = imageWidth;
-            document.getElementById('imageHeight').value = imageHeight;
-        }
-    } else if (savedImageDataUrl) {
-        // Fallback: old localStorage cached image (for backward compatibility)
-        const img = new Image();
-        img.onload = () => {
-            backgroundImage = img;
-            
-            // Upload to WebGL texture if using WebGL
-            if (useWebGL && gl) {
-                uploadBackgroundToWebGL();
-            }
-            
-            // Restore dimensions
-            const savedWidth = localStorage.getItem('map_viewer_imageWidth');
-            const savedHeight = localStorage.getItem('map_viewer_imageHeight');
-            
-            if (savedWidth) {
-                imageWidth = parseFloat(savedWidth);
-                document.getElementById('imageWidth').value = imageWidth;
-            } else {
-                imageWidth = img.width;
-                document.getElementById('imageWidth').value = imageWidth;
-            }
-            
-            if (savedHeight) {
-                imageHeight = parseFloat(savedHeight);
-                document.getElementById('imageHeight').value = imageHeight;
-            } else {
-                imageHeight = img.height;
-                document.getElementById('imageHeight').value = imageHeight;
-            }
-            
-            document.getElementById('imageDimensionsGroup').style.display = 'flex';
-            initBackgroundCache();
-            draw();
-        };
-        img.onerror = () => {
-            console.error('Failed to load cached background image');
-            updateStatus('Failed to load cached background image', true);
-        };
-        img.src = savedImageDataUrl;
+    // Restore background image for the active project (migrates legacy global localStorage once)
+    if (savedMissionDir) {
+        await restoreBackgroundForProject(savedMissionDir);
+    } else {
+        resetBackgroundImageUi({ redraw: false });
     }
     
     // Auto-load markers if mission directory is saved

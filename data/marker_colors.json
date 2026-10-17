@@ -27,7 +27,12 @@
     "territoryType_polarbear_territories": "hsl(62, 63%, 59%)",
     "territoryType_predator_territories": "hsl(49, 69%, 47%)",
     "territoryType_south_territories": "hsl(224, 69%, 57%)",
-    "territoryType_tara_territories": "hsl(29, 72%, 56%)"
+    "territoryType_tara_territories": "hsl(29, 72%, 56%)",
+    "territoryType_dobermann_shepherd_territories": "hsl(287, 66%, 50%)",
+    "territoryType_goat_territories": "hsl(7, 63%, 51%)",
+    "territoryType_monitor_territories": "hsl(161, 70%, 58%)",
+    "territoryType_mouflon_territories": "hsl(200, 77%, 58%)",
+    "territoryType_sheep_territories": "hsl(292, 71%, 58%)"
   },
   "territoryTypes": {
     "bear_territories": "#5E81AC",
@@ -51,7 +56,12 @@
     "polarbear_territories": "#E76F51",
     "predator_territories": "#264653",
     "south_territories": "hsl(278, 78%, 50%)",
-    "tara_territories": "hsl(210, 79%, 54%)"
+    "tara_territories": "hsl(210, 79%, 54%)",
+    "dobermann_shepherd_territories": "hsl(356, 73%, 60%)",
+    "goat_territories": "hsl(18, 66%, 58%)",
+    "monitor_territories": "hsl(356, 75%, 54%)",
+    "mouflon_territories": "hsl(19, 71%, 47%)",
+    "sheep_territories": "hsl(284, 76%, 46%)"
   },
   "eventSpawnTypes": {
     "ItemPlanks": "hsl(147, 64%, 58%)",
@@ -74,6 +84,11 @@
     "VehicleOffroad02": "hsl(255, 79%, 56%)",
     "StaticLifeboat": "hsl(116, 78%, 47%)",
     "StaticMedDrop": "hsl(260, 73%, 50%)",
-    "VehicleRubberBoats": "hsl(108, 78%, 58%)"
+    "VehicleRubberBoats": "hsl(108, 78%, 58%)",
+    "ItemBricks": "hsl(14, 65%, 59%)",
+    "StaticContainerLocked": "hsl(114, 70%, 52%)",
+    "StaticHeliCrashBig": "hsl(264, 76%, 47%)",
+    "StaticWaterTruck": "hsl(109, 63%, 57%)",
+    "VehicleMotorbike": "hsl(226, 68%, 47%)"
   }
 }

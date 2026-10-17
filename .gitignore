@@ -49,3 +49,6 @@ build/
 
 # Per-machine active project (shared across apps)
 data/active_project.json
+
+# Per-project map background image associations (local machine)
+data/background_images.json
