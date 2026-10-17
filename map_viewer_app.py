@@ -127,7 +127,16 @@ def get_project_background(mission_dir: str):
     return entry if isinstance(entry, dict) else None
 
 
-def set_project_background(mission_dir: str, *, image_id=None, width=None, height=None, replace_image=False):
+def set_project_background(
+    mission_dir: str,
+    *,
+    image_id=None,
+    width=None,
+    height=None,
+    offset_x=None,
+    offset_z=None,
+    replace_image=False,
+):
     """Create/update background settings for a mission project.
 
     If replace_image is True and image_id changes, the previous image file is deleted
@@ -143,10 +152,24 @@ def set_project_background(mission_dir: str, *, image_id=None, width=None, heigh
 
     if image_id is not None:
         entry['image_id'] = image_id
+        # New image file: drop previous geometry unless the caller supplies replacements.
+        if replace_image:
+            if width is None:
+                entry.pop('width', None)
+            if height is None:
+                entry.pop('height', None)
+            if offset_x is None:
+                entry.pop('offset_x', None)
+            if offset_z is None:
+                entry.pop('offset_z', None)
     if width is not None:
         entry['width'] = width
     if height is not None:
         entry['height'] = height
+    if offset_x is not None:
+        entry['offset_x'] = offset_x
+    if offset_z is not None:
+        entry['offset_z'] = offset_z
 
     if not entry.get('image_id'):
         raise ValueError('image_id is required')
@@ -886,6 +909,8 @@ def project_background():
             image_id = data.get('image_id')
             width = data.get('width')
             height = data.get('height')
+            offset_x = data.get('offset_x')
+            offset_z = data.get('offset_z')
             existing = get_project_background(mission_dir)
             if image_id is None and not existing:
                 return api_error('No background image is set for this project', 404)
@@ -894,6 +919,8 @@ def project_background():
                 image_id=image_id if image_id is not None else None,
                 width=width,
                 height=height,
+                offset_x=offset_x,
+                offset_z=offset_z,
                 replace_image=image_id is not None,
             )
             return api_ok(

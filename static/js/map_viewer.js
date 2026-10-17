@@ -44,8 +44,11 @@ let showPlayerSpawnPoints = true;
 let backgroundImage = null;
 let currentBackgroundImageId = null; // Server image id for the active project's background
 let backgroundImageMissionDir = ''; // Mission dir the current background belongs to
+let backgroundWebGLTextureValid = false; // False when texture upload failed / image too large for GPU
 let imageWidth = 1000; // metres
 let imageHeight = 1000; // metres
+let imageOffsetX = 0; // metres — world X of image min corner
+let imageOffsetZ = 0; // metres — world Z of image min corner
 let showGrid = true;
 let showMarkers = true;
 let allowMoveSavedGroupMarkers = false;
@@ -3303,10 +3306,25 @@ function resizeCanvas() {
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
     
-    // Resize background canvas if it exists
+    // Resize background canvas if it exists. Changing width/height resets WebGL state,
+    // so only update when the size actually changes, then re-init GL if needed.
     if (backgroundCanvas) {
-        backgroundCanvas.width = canvasWidth;
-        backgroundCanvas.height = canvasHeight;
+        const sizeChanged =
+            backgroundCanvas.width !== canvasWidth ||
+            backgroundCanvas.height !== canvasHeight;
+        if (sizeChanged) {
+            backgroundCanvas.width = canvasWidth;
+            backgroundCanvas.height = canvasHeight;
+            if (useWebGL) {
+                backgroundWebGLTextureValid = false;
+                ensureWebGLContext({ forceReinit: true });
+                if (backgroundImage) {
+                    uploadBackgroundToWebGL();
+                }
+            } else if (!backgroundCtx) {
+                backgroundCtx = backgroundCanvas.getContext('2d');
+            }
+        }
     }
     
     // Resize overlay canvas if it exists
@@ -3316,9 +3334,50 @@ function resizeCanvas() {
     }
     
     // Update WebGL viewport if using WebGL
-    if (gl && useWebGL) {
+    if (gl && useWebGL && !gl.isContextLost()) {
         gl.viewport(0, 0, canvasWidth, canvasHeight);
     }
+}
+
+function ensureWebGLContext(options = {}) {
+    const { forceReinit = false } = options;
+    if (!backgroundCanvas) return false;
+
+    const lost = !gl || (typeof gl.isContextLost === 'function' && gl.isContextLost());
+    if (!forceReinit && gl && !lost && glProgram && backgroundTexture) {
+        return true;
+    }
+
+    // A lost GPU context cannot be revived on the same canvas — replace the element.
+    if (lost && backgroundCanvas.parentElement) {
+        const replacement = backgroundCanvas.cloneNode(false);
+        replacement.width = canvasWidth || backgroundCanvas.width;
+        replacement.height = canvasHeight || backgroundCanvas.height;
+        backgroundCanvas.parentElement.replaceChild(replacement, backgroundCanvas);
+        backgroundCanvas = replacement;
+        backgroundCtx = null;
+        gl = null;
+        glProgram = null;
+        backgroundTexture = null;
+    }
+
+    gl = backgroundCanvas.getContext('webgl') || backgroundCanvas.getContext('experimental-webgl');
+    if (!gl || (typeof gl.isContextLost === 'function' && gl.isContextLost())) {
+        useWebGL = false;
+        backgroundWebGLTextureValid = false;
+        gl = null;
+        if (!backgroundCtx) {
+            backgroundCtx = backgroundCanvas.getContext('2d');
+        }
+        return false;
+    }
+
+    useWebGL = true;
+    initWebGL();
+    if (gl && !gl.isContextLost()) {
+        gl.viewport(0, 0, canvasWidth, canvasHeight);
+    }
+    return !!(glProgram && backgroundTexture && !gl.isContextLost());
 }
 
 // Initialize WebGL for background rendering
@@ -3397,21 +3456,94 @@ function compileShader(type, source) {
     return shader;
 }
 
+function downscaleImageForWebGL(img, maxSize) {
+    let srcW = img.naturalWidth || img.width || 0;
+    let srcH = img.naturalHeight || img.height || 0;
+    if (!srcW || !srcH || (srcW <= maxSize && srcH <= maxSize)) {
+        return img;
+    }
+
+    // Halve repeatedly so we never allocate a giant intermediate canvas.
+    let source = img;
+    while (srcW > maxSize || srcH > maxSize) {
+        const scale = Math.min(0.5, maxSize / srcW, maxSize / srcH);
+        const w = Math.max(1, Math.floor(srcW * scale));
+        const h = Math.max(1, Math.floor(srcH * scale));
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        const tctx = tmp.getContext('2d');
+        if (!tctx) {
+            console.warn('Could not create downscale canvas for background WebGL upload');
+            return source;
+        }
+        tctx.drawImage(source, 0, 0, w, h);
+        source = tmp;
+        srcW = w;
+        srcH = h;
+    }
+    return source;
+}
+
 // Upload background image to WebGL texture
 function uploadBackgroundToWebGL() {
-    if (!gl || !backgroundImage || !backgroundTexture) {
+    backgroundWebGLTextureValid = false;
+    if (!backgroundImage) {
         return;
     }
-    
+    if (!ensureWebGLContext()) {
+        return;
+    }
+    if (!gl || !backgroundTexture) {
+        return;
+    }
+
+    // Drain any stale GL errors before we check our upload.
+    while (gl.getError() !== gl.NO_ERROR) { /* clear */ }
+
+    // Use the GPU's reported limit (often 8192 or 16384). Only downscale when over it.
+    const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
+    const srcW = backgroundImage.naturalWidth || backgroundImage.width || 0;
+    const srcH = backgroundImage.naturalHeight || backgroundImage.height || 0;
+    const uploadSource = downscaleImageForWebGL(backgroundImage, maxSize);
+
+    if (uploadSource !== backgroundImage) {
+        const tw = uploadSource.width || uploadSource.naturalWidth;
+        const th = uploadSource.height || uploadSource.naturalHeight;
+        console.warn(
+            `Background image ${srcW}x${srcH} exceeds safe WebGL texture size ${maxSize}; ` +
+            `uploading at ${tw}x${th}`
+        );
+    }
+
     gl.bindTexture(gl.TEXTURE_2D, backgroundTexture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, backgroundImage);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.bindTexture(gl.TEXTURE_2D, null);
-    
+
+    if (gl.isContextLost()) {
+        console.warn('WebGL context lost during background texture upload; retrying once');
+        if (ensureWebGLContext({ forceReinit: true }) && !uploadBackgroundToWebGL._retrying) {
+            uploadBackgroundToWebGL._retrying = true;
+            try {
+                uploadBackgroundToWebGL();
+            } finally {
+                uploadBackgroundToWebGL._retrying = false;
+            }
+        }
+        return;
+    }
+
+    const err = gl.getError();
+    backgroundWebGLTextureValid = err === gl.NO_ERROR;
+    if (!backgroundWebGLTextureValid) {
+        console.warn('WebGL background texture upload failed with error', err);
+    }
+
     // Force a redraw after texture upload
     requestDraw();
 }
@@ -3431,19 +3563,25 @@ function drawBackgroundImageWebGL() {
     const visibleMinZ = Math.min(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
     const visibleMaxZ = Math.max(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
     
+    // Image covers [offset, offset+size] in world metres
+    const imageMinX = imageOffsetX;
+    const imageMaxX = imageOffsetX + imageWidth;
+    const imageMinZ = imageOffsetZ;
+    const imageMaxZ = imageOffsetZ + imageHeight;
+
     // Clamp to image bounds
-    const drawMinX = Math.max(visibleMinX, 0);
-    const drawMaxX = Math.min(visibleMaxX, imageWidth);
-    const drawMinZ = Math.max(visibleMinZ, 0);
-    const drawMaxZ = Math.min(visibleMaxZ, imageHeight);
+    const drawMinX = Math.max(visibleMinX, imageMinX);
+    const drawMaxX = Math.min(visibleMaxX, imageMaxX);
+    const drawMinZ = Math.max(visibleMinZ, imageMinZ);
+    const drawMaxZ = Math.min(visibleMaxZ, imageMaxZ);
     
     if (drawMinX >= drawMaxX || drawMinZ >= drawMaxZ) return;
     
     // Calculate texture coordinates
-    const texMinX = drawMinX / imageWidth;
-    const texMaxX = drawMaxX / imageWidth;
-    const texMinY = 1.0 - (drawMaxZ / imageHeight); // Flip Y
-    const texMaxY = 1.0 - (drawMinZ / imageHeight);
+    const texMinX = (drawMinX - imageMinX) / imageWidth;
+    const texMaxX = (drawMaxX - imageMinX) / imageWidth;
+    const texMinY = 1.0 - ((drawMaxZ - imageMinZ) / imageHeight); // Flip Y
+    const texMaxY = 1.0 - ((drawMinZ - imageMinZ) / imageHeight);
     
     // Calculate screen coordinates
     const destTopLeft = worldToScreen(drawMinX, drawMaxZ);
@@ -3676,7 +3814,7 @@ function drawBackgroundImage() {
     if (!backgroundImage) return;
     
     // Use WebGL if available (much faster)
-    if (useWebGL && gl && backgroundTexture) {
+    if (useWebGL && gl && backgroundTexture && backgroundWebGLTextureValid) {
         drawBackgroundImageWebGL();
         return;
     }
@@ -3695,10 +3833,10 @@ function drawBackgroundImage() {
     const visibleMaxZ = Math.max(topLeft.z, topRight.z, bottomLeft.z, bottomRight.z);
     
     // Calculate the intersection of visible area with image bounds
-    const imageMinX = 0;
-    const imageMaxX = imageWidth;
-    const imageMinZ = 0;
-    const imageMaxZ = imageHeight;
+    const imageMinX = imageOffsetX;
+    const imageMaxX = imageOffsetX + imageWidth;
+    const imageMinZ = imageOffsetZ;
+    const imageMaxZ = imageOffsetZ + imageHeight;
     
     // Clamp to image bounds
     const drawMinX = Math.max(visibleMinX, imageMinX);
@@ -4957,7 +5095,7 @@ function drawOverlayLayer() {
 
 const DRAW_ORDER = [
     { stage: 'background', type: 'background', condition: () => showBackgroundImage, draw: () => {
-        if (useWebGL && gl && backgroundCanvas && backgroundImage) {
+        if (useWebGL && gl && backgroundCanvas && backgroundImage && backgroundWebGLTextureValid) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, canvasWidth, canvasHeight);
             gl.clearColor(0.18, 0.20, 0.25, 1.0);
@@ -4971,6 +5109,12 @@ const DRAW_ORDER = [
             ctx = backgroundCtx;
             drawBackgroundImage();
             ctx = oldCtx;
+        } else if (useWebGL && gl && backgroundCanvas) {
+            // Texture not ready/valid yet — still clear so we don't leave a stale frame.
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(0.18, 0.20, 0.25, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
         }
     }},
     { stage: 'background', type: 'background-clear', condition: () => !showBackgroundImage, draw: () => {
@@ -5062,15 +5206,21 @@ function exportMapToImage(includeBackground) {
     ctx = exportCtx;
 
     if (includeBackground) {
+        exportCtx.fillStyle = '#2E3440';
+        exportCtx.fillRect(0, 0, exportW, exportH);
         if (backgroundImage && backgroundImage.complete && backgroundImage.naturalWidth > 0) {
+            // Export space: world (0,0) bottom-left, +Z up the canvas. Place image at offset.
+            const destX = imageOffsetX;
+            const destY = exportH - imageOffsetZ - imageHeight;
             exportCtx.save();
             exportCtx.imageSmoothingEnabled = true;
             exportCtx.globalAlpha = backgroundImageOpacity;
-            exportCtx.drawImage(backgroundImage, 0, 0, backgroundImage.width, backgroundImage.height, 0, 0, exportW, exportH);
+            exportCtx.drawImage(
+                backgroundImage,
+                0, 0, backgroundImage.width, backgroundImage.height,
+                destX, destY, imageWidth, imageHeight
+            );
             exportCtx.restore();
-        } else {
-            exportCtx.fillStyle = '#2E3440';
-            exportCtx.fillRect(0, 0, exportW, exportH);
         }
         drawGrid();
     } else {
@@ -7671,6 +7821,21 @@ function updateVisibilityCheckboxes() {
     if (showPlayerSpawnPointsCheckbox) {
         showPlayerSpawnPointsCheckbox.checked = showPlayerSpawnPoints;
     }
+
+    const showAiPatrolMarkersCheckbox = document.getElementById('showAiPatrolMarkers');
+    if (showAiPatrolMarkersCheckbox) {
+        showAiPatrolMarkersCheckbox.checked = showAiPatrolMarkers;
+    }
+
+    const showBackgroundImageCheckbox = document.getElementById('showBackgroundImage');
+    if (showBackgroundImageCheckbox) {
+        showBackgroundImageCheckbox.checked = showBackgroundImage;
+    }
+
+    const showGridCheckbox = document.getElementById('showGrid');
+    if (showGridCheckbox) {
+        showGridCheckbox.checked = showGrid;
+    }
 }
 
 // Update selected count display
@@ -9511,12 +9676,27 @@ function clearLegacyBackgroundLocalStorage() {
     localStorage.removeItem('map_viewer_imageHeight');
 }
 
+function syncBackgroundDimensionInputs() {
+    const widthEl = document.getElementById('imageWidth');
+    const heightEl = document.getElementById('imageHeight');
+    const offsetXEl = document.getElementById('imageOffsetX');
+    const offsetZEl = document.getElementById('imageOffsetZ');
+    if (widthEl) widthEl.value = imageWidth;
+    if (heightEl) heightEl.value = imageHeight;
+    if (offsetXEl) offsetXEl.value = imageOffsetX;
+    if (offsetZEl) offsetZEl.value = imageOffsetZ;
+}
+
 function resetBackgroundImageUi(options = {}) {
     const { redraw = true } = options;
     backgroundImage = null;
     currentBackgroundImageId = null;
     backgroundImageMissionDir = '';
+    backgroundWebGLTextureValid = false;
     backgroundCacheValid = false;
+    imageOffsetX = 0;
+    imageOffsetZ = 0;
+    syncBackgroundDimensionInputs();
     const input = document.getElementById('backgroundImage');
     if (input) input.value = '';
     const dimsGroup = document.getElementById('imageDimensionsGroup');
@@ -9628,10 +9808,17 @@ function setupBackgroundImageHandler() {
             clearLegacyBackgroundLocalStorage();
             const imageId = data.image_id;
             const saved = data.background || {};
+            // Fresh upload: use saved geometry only when the server still has it.
+            // Otherwise default to the new image's pixel size and zero offsets.
+            const hasSavedSize =
+                saved.width != null && saved.height != null &&
+                !Number.isNaN(Number(saved.width)) && !Number.isNaN(Number(saved.height));
             await loadBackgroundImageFromServer(imageId, {
                 missionDir: projectMissionDir,
-                width: saved.width,
-                height: saved.height,
+                width: hasSavedSize ? saved.width : null,
+                height: hasSavedSize ? saved.height : null,
+                offsetX: hasSavedSize && saved.offset_x != null ? saved.offset_x : 0,
+                offsetZ: hasSavedSize && saved.offset_z != null ? saved.offset_z : 0,
                 persistDefaults: true,
             });
 
@@ -9649,6 +9836,8 @@ async function loadBackgroundImageFromServer(imageId, options = {}) {
         missionDir: projectMissionDir = getMissionDirForBackground(),
         width = null,
         height = null,
+        offsetX = null,
+        offsetZ = null,
         persistDefaults = false,
     } = options;
 
@@ -9679,6 +9868,8 @@ async function loadBackgroundImageFromServer(imageId, options = {}) {
                     await saveProjectBackgroundSettings(projectMissionDir, {
                         width: imageWidth,
                         height: imageHeight,
+                        offset_x: imageOffsetX,
+                        offset_z: imageOffsetZ,
                     });
                 } catch (error) {
                     console.warn('Could not persist default background dimensions:', error);
@@ -9686,8 +9877,12 @@ async function loadBackgroundImageFromServer(imageId, options = {}) {
             }
         }
 
-        document.getElementById('imageWidth').value = imageWidth;
-        document.getElementById('imageHeight').value = imageHeight;
+        const hasOffsetX = offsetX !== null && offsetX !== undefined && !Number.isNaN(Number(offsetX));
+        const hasOffsetZ = offsetZ !== null && offsetZ !== undefined && !Number.isNaN(Number(offsetZ));
+        imageOffsetX = hasOffsetX ? parseFloat(offsetX) : 0;
+        imageOffsetZ = hasOffsetZ ? parseFloat(offsetZ) : 0;
+
+        syncBackgroundDimensionInputs();
 
         if (useWebGL && gl) {
             uploadBackgroundToWebGL();
@@ -9734,6 +9929,8 @@ async function restoreBackgroundForProject(projectMissionDir) {
             missionDir: dir,
             width: background.width,
             height: background.height,
+            offsetX: background.offset_x,
+            offsetZ: background.offset_z,
         });
     } catch (error) {
         console.error('Error restoring project background:', error);
@@ -9741,10 +9938,14 @@ async function restoreBackgroundForProject(projectMissionDir) {
     }
 }
 
-// Apply image dimensions
+// Apply image dimensions and offsets
 async function applyImageDimensions() {
     imageWidth = parseFloat(document.getElementById('imageWidth').value) || 1000;
     imageHeight = parseFloat(document.getElementById('imageHeight').value) || 1000;
+    const offsetXRaw = parseFloat(document.getElementById('imageOffsetX')?.value);
+    const offsetZRaw = parseFloat(document.getElementById('imageOffsetZ')?.value);
+    imageOffsetX = Number.isNaN(offsetXRaw) ? 0 : offsetXRaw;
+    imageOffsetZ = Number.isNaN(offsetZRaw) ? 0 : offsetZRaw;
 
     const projectMissionDir = getMissionDirForBackground();
     if (projectMissionDir && currentBackgroundImageId) {
@@ -9752,6 +9953,8 @@ async function applyImageDimensions() {
             await saveProjectBackgroundSettings(projectMissionDir, {
                 width: imageWidth,
                 height: imageHeight,
+                offset_x: imageOffsetX,
+                offset_z: imageOffsetZ,
             });
         } catch (error) {
             console.warn('Could not save background dimensions for project:', error);
@@ -10651,25 +10854,39 @@ function updateFilterUI() {
 
 // Save all filter and display settings to localStorage
 function saveFilterAndDisplaySettings() {
-    // Save display toggles
+    // While "filter to single type" is active, show* flags are temporarily forced.
+    // Persist the pre-filter visibility so a reload doesn't forget the user's real choices.
+    const visibility = (isFilteredToSingleType && previousVisibilityState)
+        ? previousVisibilityState
+        : {
+            showMarkers,
+            showEventSpawns,
+            showTerritories,
+            showEffectAreas,
+            showPlayerSpawnPoints,
+            activeTerritoryFilters,
+        };
+
     localStorage.setItem('map_viewer_showGrid', showGrid.toString());
-    localStorage.setItem('map_viewer_showMarkers', showMarkers.toString());
-    localStorage.setItem('map_viewer_showEventSpawns', showEventSpawns.toString());
-    localStorage.setItem('map_viewer_showTerritories', showTerritories.toString());
-    localStorage.setItem('map_viewer_showEffectAreas', showEffectAreas.toString());
-    localStorage.setItem('map_viewer_showPlayerSpawnPoints', showPlayerSpawnPoints.toString());
+    localStorage.setItem('map_viewer_showMarkers', (!!visibility.showMarkers).toString());
+    localStorage.setItem('map_viewer_showEventSpawns', (!!visibility.showEventSpawns).toString());
+    localStorage.setItem('map_viewer_showTerritories', (!!visibility.showTerritories).toString());
+    localStorage.setItem('map_viewer_showEffectAreas', (!!visibility.showEffectAreas).toString());
+    localStorage.setItem('map_viewer_showPlayerSpawnPoints', (!!visibility.showPlayerSpawnPoints).toString());
     localStorage.setItem('map_viewer_showAiPatrolMarkers', showAiPatrolMarkers.toString());
     localStorage.setItem('map_viewer_showSelectedAiPatrolOnly', showSelectedAiPatrolOnly.toString());
     localStorage.setItem('map_viewer_aiPatrolTypeFilter', aiPatrolTypeFilter);
     localStorage.setItem('map_viewer_aiPatrolEditingEnabled', aiPatrolEditingEnabled.toString());
     localStorage.setItem('map_viewer_showBackgroundImage', showBackgroundImage.toString());
     localStorage.setItem('map_viewer_backgroundImageOpacity', backgroundImageOpacity.toString());
-    
-    // Save filters
+
     localStorage.setItem('map_viewer_activeFilters', JSON.stringify(activeFilters));
     localStorage.setItem('map_viewer_activeEventSpawnFilters', JSON.stringify(activeEventSpawnFilters));
     localStorage.setItem('map_viewer_activeEffectAreaFilters', JSON.stringify(activeEffectAreaFilters));
-    localStorage.setItem('map_viewer_activeTerritoryFilters', JSON.stringify(activeTerritoryFilters));
+    const territoryFiltersToSave = visibility.activeTerritoryFilters != null
+        ? visibility.activeTerritoryFilters
+        : activeTerritoryFilters;
+    localStorage.setItem('map_viewer_activeTerritoryFilters', JSON.stringify(territoryFiltersToSave));
 }
 
 // Sidebar sections (collapsible left panel)
@@ -10934,8 +11151,6 @@ async function restoreSavedState() {
     const savedShowBackgroundImage = localStorage.getItem('map_viewer_showBackgroundImage');
     if (savedShowBackgroundImage !== null) {
         showBackgroundImage = savedShowBackgroundImage === 'true';
-        const checkbox = document.getElementById('showBackgroundImage');
-        if (checkbox) checkbox.checked = showBackgroundImage;
     }
     
     const savedBackgroundImageOpacity = localStorage.getItem('map_viewer_backgroundImageOpacity');
@@ -10950,6 +11165,8 @@ async function restoreSavedState() {
             }
         }
     }
+
+    updateVisibilityCheckboxes();
     
     const savedExportPath = localStorage.getItem('map_viewer_exportPath');
     if (savedExportPath !== null) {
@@ -11525,21 +11742,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         showGrid = e.target.checked;
         invalidateStaticMarkerCache();
         requestDraw();
+        saveFilterAndDisplaySettings();
     });
     document.getElementById('showMarkers').addEventListener('change', (e) => {
         showMarkers = e.target.checked;
+        if (isFilteredToSingleType && previousVisibilityState) {
+            previousVisibilityState.showMarkers = showMarkers;
+        }
         invalidateStaticMarkerCache();
         requestDraw();
+        saveFilterAndDisplaySettings();
     });
     
     document.getElementById('showEventSpawns').addEventListener('change', (e) => {
         showEventSpawns = e.target.checked;
+        if (isFilteredToSingleType && previousVisibilityState) {
+            previousVisibilityState.showEventSpawns = showEventSpawns;
+        }
         invalidateStaticMarkerCache();
         requestDraw();
+        saveFilterAndDisplaySettings();
     });
     
     document.getElementById('showEffectAreas').addEventListener('change', (e) => {
         showEffectAreas = e.target.checked;
+        if (isFilteredToSingleType && previousVisibilityState) {
+            previousVisibilityState.showEffectAreas = showEffectAreas;
+        }
         invalidateStaticMarkerCache();
         requestDraw();
         saveFilterAndDisplaySettings();
@@ -11547,6 +11776,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     document.getElementById('showPlayerSpawnPoints').addEventListener('change', (e) => {
         showPlayerSpawnPoints = e.target.checked;
+        if (isFilteredToSingleType && previousVisibilityState) {
+            previousVisibilityState.showPlayerSpawnPoints = showPlayerSpawnPoints;
+        }
         invalidateStaticMarkerCache();
         requestDraw();
         saveFilterAndDisplaySettings();
@@ -11568,14 +11800,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (showTerritoriesCheckbox) {
         showTerritoriesCheckbox.addEventListener('change', (e) => {
             showTerritories = e.target.checked;
+            if (isFilteredToSingleType && previousVisibilityState) {
+                previousVisibilityState.showTerritories = showTerritories;
+            }
             invalidateStaticMarkerCache();
             requestDraw();
+            saveFilterAndDisplaySettings();
         });
     }
     
     document.getElementById('showBackgroundImage').addEventListener('change', (e) => {
         showBackgroundImage = e.target.checked;
         draw();
+        saveFilterAndDisplaySettings();
     });
     
     // Height filter slider
