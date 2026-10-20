@@ -42,7 +42,7 @@ cd dayz-economy-slop
 
 Or, on the GitHub page, use **Code → Download ZIP**, extract the archive, and open a command prompt in `dayz-economy-slop-main`.
 
-A distribution ZIP from `DISTRIBUTION.md` works the same way: extract it and open a command prompt in that folder. `setup.bat` uses relative paths, so run it from the project folder.
+`setup.bat` uses relative paths, so run it from the project folder.
 
 ### Quick Setup (Windows)
 
@@ -604,9 +604,3 @@ Press `Ctrl+C` in each terminal window to stop the applications, or simply close
 ## License
 
 See `LICENSE` file for details.
-
-## Support
-
-For detailed setup instructions, see `SETUP_INSTRUCTIONS.md`.
-
-For distribution instructions, see `DISTRIBUTION.md`.

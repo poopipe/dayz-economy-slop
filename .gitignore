@@ -41,12 +41,6 @@ uploads/background_images/*.webp
 Thumbs.db
 desktop.ini
 
-# Distribution
-*.zip
-*.tar.gz
-dist/
-build/
-
 # Per-machine active project (shared across apps)
 data/active_project.json
 
