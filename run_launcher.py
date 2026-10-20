@@ -5,7 +5,7 @@ from launcher_app import app
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("XML Data Viewer Launcher")
+    print("DayZ Local Economy Editor")
     print("=" * 60)
     print("Launcher: http://localhost:5000")
     print("Economy Editor: http://localhost:5004")

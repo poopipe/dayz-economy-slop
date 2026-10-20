@@ -1,9 +1,9 @@
 @echo off
 echo ============================================================
-echo XML Data Viewer - Setup Script
+echo DayZ Local Economy Editor - Setup Script
 echo ============================================================
 echo.
-echo This script will set up the XML Data Viewer applications
+echo This script will set up DayZ Local Economy Editor
 echo on your computer.
 echo.
 echo Prerequisites:

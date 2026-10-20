@@ -1,6 +1,6 @@
 @echo off
 echo ============================================================
-echo Starting XML Data Viewer Applications
+echo Starting DayZ Local Economy Editor
 echo ============================================================
 echo.
 echo Launcher: http://localhost:5000

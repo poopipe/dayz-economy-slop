@@ -1,6 +1,6 @@
 # Distribution Guide
 
-This guide explains how to distribute the XML Data Viewer applications to other users for local installation.
+This guide explains how to distribute the DayZ Local Economy Editor applications to other users for local installation.
 
 ## Quick Start (Automated)
 
@@ -21,7 +21,7 @@ This will:
 - Create a ZIP archive in the `dist/` folder
 - Generate a distribution info file
 
-The ZIP file will be named `xml-data-viewer-{version}.zip` and can be distributed directly to users.
+The ZIP file will be named `dayz-local-economy-editor-{version}.zip` and can be distributed directly to users.
 
 ## Manual Distribution
 
@@ -67,7 +67,7 @@ When distributing the applications, include the following files and folders:
 ### Option 1: ZIP Archive (Recommended)
 1. Create a clean copy of the project
 2. Remove the excluded files/folders listed above
-3. Create a ZIP archive named something like `xml-data-viewer-v1.0.zip`
+3. Create a ZIP archive named something like `dayz-local-economy-editor-v1.0.zip`
 4. Include the setup instructions
 
 ### Option 2: Git Repository
@@ -84,7 +84,7 @@ If distributing via Git:
 
 ### Installation Steps (for Recipient):
 
-1. **Extract the ZIP file** to a location of their choice (e.g., `C:\Users\Username\Documents\xml-data-viewer`)
+1. **Extract the ZIP file** to a location of their choice (e.g., `C:\Users\Username\Documents\dayz-local-economy-editor`)
 
 2. **Open Command Prompt** in the extracted folder
 

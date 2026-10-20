@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Configuration
-PROJECT_NAME = "xml-data-viewer"
+PROJECT_NAME = "dayz-local-economy-editor"
 VERSION = "1.0.0"  # Update this for each release
 
 # Files and folders to include

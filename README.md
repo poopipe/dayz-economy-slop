@@ -1,38 +1,68 @@
-# XML Data Viewer
+# DayZ Local Economy Editor
 
-A comprehensive web-based toolkit for managing and visualizing DayZ server mission file data. Features a database-backed XML editor and an interactive 2D map viewer with advanced filtering and editing capabilities.
+Toolkit for managing loot, AI patrols, spawns, events and so on for a Local DayZ Server
 
-This application was written by an LLM in Cursor, an AI-powered code editor. The codebase was developed through iterative conversation and refinement, with the AI assistant handling implementation, debugging, and feature additions based on user requirements.
+Set up a local server, point the tools at your mission folder and tell it to load the data. After that you can make edits, save them out to your server, test them and then upload to your real server. 
+
+I got a robot to implement this because I wanted to see if a robot could generate something useful, turns out it could and because that meant I didn't have to write any javascript I'm happy.
+I did it to make editing types and setting up AI patrols safer and easier. It 'should' be compatible with basically any mods and it does support Namalsk's weird loot setup
+
+Some of it is a bit weird and unrefined but that's life  - I fix things when they annoy me.
+
+
+## Current Known Issues that I care about:
+
+Event Spawn editing is kind of not there. you can add new events but cannot edit them and im honestly not sure whether they all work or not.
+
+No fruit editing yet
+
+The system is only aware of things that are present on your server. eg. if there are no bear territories you will not be able to make a bear territory
+
 
 ## Installation
+
+There is no installer. Dependencies are the packages listed in `requirements.txt` (Flask 3.0.0 and watchdog 3.0.0). The apps run from this folder.
 
 ### Prerequisites
 
 - **Python 3.13 or higher** - Download from [python.org](https://www.python.org/downloads/)
   - During installation, ensure "Add Python to PATH" is checked
-- **Windows 10/11** (for batch scripts) or any OS with Python support
-- **Internet connection** (for initial package installation)
+- **Windows 10/11** for `setup.bat` and `start_all_apps.bat`. On Linux or macOS, use the manual steps below.
+- **Internet connection** for the first `pip install`
+- **Git**, if cloning instead of downloading a ZIP
+
+### Get the source
+
+Clone the repository and open a command prompt in the new folder:
+
+```cmd
+git clone https://github.com/poopipe/dayz-economy-slop.git
+cd dayz-economy-slop
+```
+
+Or, on the GitHub page, use **Code → Download ZIP**, extract the archive, and open a command prompt in `dayz-economy-slop-main`.
+
+A distribution ZIP from `DISTRIBUTION.md` works the same way: extract it and open a command prompt in that folder. `setup.bat` uses relative paths, so run it from the project folder.
 
 ### Quick Setup (Windows)
 
-1. **Extract the application** to your desired location
-
-2. **Run the setup script:**
+1. **Run the setup script:**
    ```cmd
    setup.bat
-   ```
+```
    This will:
-   - Check Python installation
-   - Create a virtual environment
-   - Install all required dependencies
+   - Check that Python is installed
+   - Create a `venv` virtual environment
+   - Upgrade pip
+   - Install the packages in `requirements.txt`
 
-3. **Start all applications:**
+2. **Start all applications:**
    ```cmd
    start_all_apps.bat
    ```
-   This will launch all three applications in separate windows/tabs.
+   This launches all three applications in Windows Terminal tabs, or in separate windows if Windows Terminal is not installed. It uses `venv\Scripts\python.exe`, so the virtual environment does not need to be activated first.
 
-4. **Open your browser** to:
+3. **Open your browser** to:
    ```
    http://localhost:5000
    ```
@@ -48,7 +78,7 @@ This application was written by an LLM in Cursor, an AI-powered code editor. The
    ```cmd
    venv\Scripts\activate
    ```
-   (On Linux/Mac: `source venv/bin/activate`)
+   On Linux or macOS: `source venv/bin/activate`
 
 3. **Install dependencies:**
    ```cmd
@@ -56,23 +86,27 @@ This application was written by an LLM in Cursor, an AI-powered code editor. The
    ```
 
 4. **Start applications:**
-   
-   **Option A: Use startup script**
+
+   **Option A: Use startup script (Windows)**
    ```cmd
    start_all_apps.bat
    ```
-   
+
    **Option B: Run manually (3 separate terminals)**
+
+   Activate the virtual environment in each terminal, then:
    ```cmd
    # Terminal 1 - Economy Editor
    python run_economy_editor.py
-   
+
    # Terminal 2 - Map Viewer
    python run_map_viewer.py
-   
-   # Terminal 3 - Launcher (optional)
+
+   # Terminal 3 - Launcher (needed for http://localhost:5000)
    python run_launcher.py
    ```
+
+No database setup is required at install time. The Economy Editor creates `[mission_directory]/type-editor-db-v2/editor_data_v2.db` when a mission directory is loaded.
 
 ## Running the Application
 
@@ -102,7 +136,7 @@ To change ports, edit the `run_*.py` files and modify the `port` parameter in `a
 
 ## Overview
 
-XML Data Viewer consists of three integrated applications:
+DayZ Local Economy Editor consists of three integrated applications:
 
 - **Economy Editor** - Database-backed XML element editor for managing economy configuration files
 - **Map Viewer** - Interactive 2D map visualization and editing tool for viewing and modifying spawn points, territories, and markers

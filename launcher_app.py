@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Launcher application for XML Data Viewer tools.
+Launcher application for DayZ Local Economy Editor.
 Provides a unified entry point to access both Economy Editor and Map Viewer.
 """
 
@@ -23,7 +23,7 @@ def index():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("XML Data Viewer Launcher")
+    print("DayZ Local Economy Editor")
     print("=" * 60)
     print(f"Launcher: http://localhost:5000")
     print(f"Economy Editor: {ECONOMY_EDITOR_URL}")

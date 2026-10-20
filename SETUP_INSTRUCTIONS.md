@@ -1,6 +1,6 @@
 # Setup Instructions
 
-Welcome! This guide will help you set up the XML Data Viewer applications on your computer.
+Welcome! This guide will help you set up the DayZ Local Economy Editor applications on your computer.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ Before you begin, make sure you have:
 ### Step 1: Extract the Files
 Extract the ZIP file to a location of your choice, for example:
 ```
-C:\Users\YourName\Documents\xml-data-viewer
+C:\Users\YourName\Documents\dayz-local-economy-editor
 ```
 
 ### Step 2: Open Command Prompt
